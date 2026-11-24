@@ -1,0 +1,6375 @@
+{
+  "schema": 1,
+  "size": 1024,
+  "colour_policy": "Preserve the original UYA atlas and fitted replacement; never infer metalness or cavity AO from colour brightness.",
+  "channel_contract": {
+    "normal": "Linear tangent XYZ; A retains the original explicit fur mask (zero elsewhere)",
+    "orm": "Linear R=AO G=roughness B=metalness A=explicit lens catchlight mask",
+    "colour": "sRGB with original alpha convention"
+  },
+  "material_profiles": {
+    "review_painted_metal": {
+      "metalness": 0,
+      "roughness": {
+        "mode": "source_variation",
+        "base": 0.48,
+        "strength": 0.18,
+        "range": [
+          0.4,
+          0.6
+        ],
+        "source": "C:/riftapart-export/metal/steel_painted_panels_002_g.png",
+        "channel": 0,
+        "crop": [
+          256,
+          1088,
+          640,
+          1472
+        ],
+        "encoding_evidence": "Inspected tiling-library _g: R gloss, G reflectance, B zero, A opaque; plain panel crop only."
+      },
+      "finish": "enamel"
+    },
+    "review_ty_skin": {
+      "metalness": 0,
+      "roughness": {
+        "mode": "normal_slope",
+        "base": 0.73,
+        "strength": 0.15,
+        "range": [
+          0.7,
+          0.82
+        ]
+      },
+      "finish": "alien_skin"
+    },
+    "review_lens": {
+      "metalness": 0,
+      "roughness": {
+        "mode": "constant",
+        "value": 0.15
+      }
+    },
+    "review_satin_alloy": {
+      "metalness": 1,
+      "roughness": {
+        "mode": "inverse_channel",
+        "channel": 2,
+        "range": [
+          0.22,
+          0.42
+        ]
+      },
+      "finish": "brushed_steel"
+    },
+    "review_dark_alloy": {
+      "metalness": 1,
+      "roughness": {
+        "mode": "inverse_channel",
+        "channel": 2,
+        "range": [
+          0.42,
+          0.74
+        ]
+      },
+      "finish": "cast_alloy"
+    },
+    "review_soft_leather": {
+      "metalness": 0,
+      "roughness": {
+        "mode": "normal_slope",
+        "base": 0.68,
+        "strength": 0.12,
+        "range": [
+          0.65,
+          0.78
+        ]
+      },
+      "finish": "leather"
+    },
+    "plastic_004": {
+      "metalness": 0,
+      "roughness": {
+        "mode": "constant",
+        "value": 0.2
+      }
+    },
+    "skin_micro_details": {
+      "metalness": 0,
+      "normal_strength": 0.35,
+      "roughness": {
+        "mode": "inverse_channel",
+        "channel": 2,
+        "range": [
+          0.6599999999999999,
+          0.78
+        ]
+      },
+      "finish": "soft_skin"
+    },
+    "detail_leather_02": {
+      "metalness": 0,
+      "normal_strength": 0.45,
+      "roughness": {
+        "mode": "inverse_channel",
+        "channel": 2,
+        "range": [
+          0.5800000000000001,
+          0.7
+        ]
+      },
+      "finish": "leather"
+    },
+    "denim_001": {
+      "metalness": 0,
+      "normal_strength": 0.35,
+      "roughness": {
+        "mode": "inverse_channel",
+        "channel": 2,
+        "range": [
+          0.8,
+          0.9199999999999999
+        ]
+      },
+      "finish": "woven_cloth"
+    },
+    "review_wasp_cuticle": {
+      "metalness": 0,
+      "normal_strength": 0.2,
+      "roughness": {
+        "mode": "inverse_channel",
+        "channel": 2,
+        "range": [
+          0.37,
+          0.49
+        ]
+      },
+      "finish": "chitin"
+    },
+    "review_wasp_membrane": {
+      "metalness": 0,
+      "normal_strength": 0,
+      "roughness": {
+        "mode": "constant",
+        "value": 0.48
+      }
+    }
+  },
+  "targets": [
+    {
+      "stem": "efa796ee9a43f16c-23492c0e19b3712f-00001dd3",
+      "model": "ranger",
+      "state": "Fitted depth revision; native visual comparison required; full all-moby pass remains incomplete",
+      "overrides": [
+        {
+          "polygons": [
+            [
+              [
+                0,
+                0
+              ],
+              [
+                40,
+                0
+              ],
+              [
+                40,
+                58
+              ],
+              [
+                0,
+                58
+              ]
+            ]
+          ],
+          "scope": "unassigned",
+          "roughness": 0.15
+        }
+      ],
+      "profile_overrides": {
+        "review_painted_metal": {
+          "metalness": 0,
+          "roughness": {
+            "mode": "source_variation",
+            "base": 0.34,
+            "strength": 0.1,
+            "range": [
+              0.29,
+              0.41
+            ],
+            "source": "C:/riftapart-export/metal/steel_painted_panels_002_g.png",
+            "channel": 0,
+            "crop": [
+              256,
+              1088,
+              640,
+              1472
+            ],
+            "encoding_evidence": "Inspected tiling-library _g: R gloss, G reflectance, B zero, A opaque; plain panel crop only."
+          },
+          "normal_strength": 0.3,
+          "finish": "enamel",
+          "finish_overrides": {
+            "normal_gain": 0.16,
+            "normal_highpass": 0.005,
+            "repeats": 6,
+            "roughness": 0.39,
+            "variation": 0.06,
+            "roughness_range": [
+              0.34,
+              0.44
+            ]
+          }
+        },
+        "review_dark_alloy": {
+          "metalness": 1,
+          "roughness": {
+            "mode": "inverse_channel",
+            "channel": 2,
+            "range": [
+              0.27,
+              0.43
+            ]
+          },
+          "finish": "cast_alloy",
+          "finish_overrides": {
+            "normal_gain": 0.18,
+            "normal_highpass": 0.006,
+            "repeats": 6,
+            "roughness": 0.45,
+            "variation": 0.07,
+            "roughness_range": [
+              0.38,
+              0.52
+            ]
+          }
+        }
+      },
+      "surface_layers": [
+        {
+          "label": "V4 top protective strip",
+          "shape": "rect",
+          "bounds": [
+            47,
+            3,
+            109,
+            18
+          ],
+          "finish": "powder_coat",
+          "finish_overrides": {
+            "normal_gain": 0.24,
+            "normal_highpass": 0.005,
+            "repeats": 7,
+            "roughness": 0.53,
+            "variation": 0.08,
+            "roughness_range": [
+              0.46,
+              0.6
+            ]
+          },
+          "metalness": 0,
+          "bevel": 0.25,
+          "height": 1.4024999999999999,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7,
+          "pre_depth_height": 0.85
+        },
+        {
+          "label": "V4 upper shell protective rim",
+          "shape": "polygon",
+          "points": [
+            [
+              130,
+              44
+            ],
+            [
+              162,
+              33
+            ],
+            [
+              194,
+              26
+            ],
+            [
+              195,
+              3
+            ],
+            [
+              202,
+              3
+            ],
+            [
+              202,
+              24
+            ],
+            [
+              220,
+              35
+            ],
+            [
+              211,
+              45
+            ],
+            [
+              219,
+              52
+            ],
+            [
+              225,
+              48
+            ],
+            [
+              234,
+              51
+            ],
+            [
+              221,
+              61
+            ],
+            [
+              216,
+              79
+            ],
+            [
+              204,
+              72
+            ],
+            [
+              196,
+              62
+            ],
+            [
+              186,
+              57
+            ],
+            [
+              172,
+              56
+            ],
+            [
+              159,
+              59
+            ],
+            [
+              144,
+              65
+            ],
+            [
+              133,
+              72
+            ],
+            [
+              130,
+              68
+            ]
+          ],
+          "finish": "powder_coat",
+          "finish_overrides": {
+            "normal_gain": 0.24,
+            "normal_highpass": 0.005,
+            "repeats": 7,
+            "roughness": 0.53,
+            "variation": 0.08,
+            "roughness_range": [
+              0.46,
+              0.6
+            ]
+          },
+          "metalness": 0,
+          "bevel": 0.25,
+          "height": 1.4024999999999999,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7,
+          "pre_depth_height": 0.85
+        },
+        {
+          "label": "V4 left vent cover",
+          "shape": "polygon",
+          "points": [
+            [
+              29,
+              97
+            ],
+            [
+              78,
+              97
+            ],
+            [
+              78,
+              105
+            ],
+            [
+              77,
+              112
+            ],
+            [
+              76,
+              129
+            ],
+            [
+              75,
+              138
+            ],
+            [
+              29,
+              138
+            ]
+          ],
+          "finish": "powder_coat",
+          "finish_overrides": {
+            "normal_gain": 0.24,
+            "normal_highpass": 0.005,
+            "repeats": 7,
+            "roughness": 0.53,
+            "variation": 0.08,
+            "roughness_range": [
+              0.46,
+              0.6
+            ]
+          },
+          "metalness": 0,
+          "bevel": 0.25,
+          "height": 1.4024999999999999,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7,
+          "pre_depth_height": 0.85
+        },
+        {
+          "label": "V4 waist protective band",
+          "shape": "rect",
+          "bounds": [
+            79,
+            147,
+            109,
+            154
+          ],
+          "finish": "powder_coat",
+          "finish_overrides": {
+            "normal_gain": 0.24,
+            "normal_highpass": 0.005,
+            "repeats": 7,
+            "roughness": 0.53,
+            "variation": 0.08,
+            "roughness_range": [
+              0.46,
+              0.6
+            ]
+          },
+          "metalness": 0,
+          "bevel": 0.25,
+          "height": 1.4024999999999999,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7,
+          "pre_depth_height": 0.85
+        },
+        {
+          "label": "Shoulder inset surrounding the mechanical socket",
+          "shape": "ellipse",
+          "bounds": [
+            132,
+            65,
+            214,
+            140
+          ],
+          "height": -1.4,
+          "bevel": 0.65,
+          "cavity": 0.55,
+          "metalness": 0,
+          "finish": "rubber",
+          "finish_overrides": {
+            "normal_gain": 0.22,
+            "normal_highpass": 0.006,
+            "repeats": 5,
+            "roughness": 0.78,
+            "variation": 0.07,
+            "roughness_range": [
+              0.73,
+              0.84
+            ]
+          },
+          "pre_depth_height": -0.7,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Fitted green socket insert",
+          "shape": "polygon",
+          "points": [
+            [
+              171,
+              63
+            ],
+            [
+              182,
+              70
+            ],
+            [
+              183,
+              81
+            ],
+            [
+              194,
+              84
+            ],
+            [
+              202,
+              93
+            ],
+            [
+              205,
+              103
+            ],
+            [
+              201,
+              115
+            ],
+            [
+              189,
+              122
+            ],
+            [
+              171,
+              124
+            ]
+          ],
+          "height": 0.9899999999999999,
+          "bevel": 0.7,
+          "metalness": 0,
+          "finish": "enamel",
+          "finish_overrides": {
+            "normal_gain": 0.16,
+            "normal_highpass": 0.005,
+            "repeats": 6,
+            "roughness": 0.39,
+            "variation": 0.06,
+            "roughness_range": [
+              0.34,
+              0.44
+            ]
+          },
+          "pre_depth_height": 0.6,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Socket centre opening",
+          "shape": "ellipse",
+          "bounds": [
+            183,
+            93,
+            198,
+            109
+          ],
+          "height": -1.4,
+          "bevel": 0.55,
+          "metalness": 0,
+          "cavity": 0.55,
+          "finish": "rubber",
+          "finish_overrides": {
+            "normal_gain": 0.22,
+            "normal_highpass": 0.006,
+            "repeats": 5,
+            "roughness": 0.78,
+            "variation": 0.07,
+            "roughness_range": [
+              0.73,
+              0.84
+            ]
+          },
+          "pre_depth_height": -0.7,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Upper shell port 0",
+          "shape": "ellipse",
+          "bounds": [
+            157,
+            43,
+            167,
+            53
+          ],
+          "height": -0.9,
+          "bevel": 0.45,
+          "roughness": 0.65,
+          "metalness": 0,
+          "cavity": 0.55,
+          "pre_depth_height": -0.45,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Upper shell port 1",
+          "shape": "ellipse",
+          "bounds": [
+            169,
+            37,
+            183,
+            51
+          ],
+          "height": -0.9,
+          "bevel": 0.45,
+          "roughness": 0.65,
+          "metalness": 0,
+          "cavity": 0.55,
+          "pre_depth_height": -0.45,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Upper shell port 2",
+          "shape": "ellipse",
+          "bounds": [
+            189,
+            32,
+            207,
+            50
+          ],
+          "height": -0.9,
+          "bevel": 0.45,
+          "roughness": 0.65,
+          "metalness": 0,
+          "cavity": 0.55,
+          "pre_depth_height": -0.45,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Rear exhaust slot 0",
+          "shape": "line",
+          "points": [
+            [
+              227,
+              65
+            ],
+            [
+              251,
+              58
+            ]
+          ],
+          "width": 4,
+          "height": -1.4,
+          "bevel": 0.45,
+          "roughness": 0.7,
+          "metalness": 0,
+          "cavity": 0.55,
+          "pre_depth_height": -0.7,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Rear exhaust slot 1",
+          "shape": "line",
+          "points": [
+            [
+              227,
+              76
+            ],
+            [
+              251,
+              69
+            ]
+          ],
+          "width": 4,
+          "height": -1.4,
+          "bevel": 0.45,
+          "roughness": 0.7,
+          "metalness": 0,
+          "cavity": 0.55,
+          "pre_depth_height": -0.7,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Rear exhaust slot 2",
+          "shape": "line",
+          "points": [
+            [
+              228,
+              87
+            ],
+            [
+              251,
+              81
+            ]
+          ],
+          "width": 4,
+          "height": -1.4,
+          "bevel": 0.45,
+          "roughness": 0.7,
+          "metalness": 0,
+          "cavity": 0.55,
+          "pre_depth_height": -0.7,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Ventilation slot 0",
+          "shape": "rect",
+          "bounds": [
+            55,
+            105,
+            78,
+            109
+          ],
+          "height": -1.1,
+          "bevel": 0.45,
+          "roughness": 0.68,
+          "metalness": 0,
+          "cavity": 0.55,
+          "pre_depth_height": -0.55,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Ventilation slot 1",
+          "shape": "rect",
+          "bounds": [
+            55,
+            115,
+            78,
+            120
+          ],
+          "height": -1.1,
+          "bevel": 0.45,
+          "roughness": 0.68,
+          "metalness": 0,
+          "cavity": 0.55,
+          "pre_depth_height": -0.55,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Ventilation slot 2",
+          "shape": "rect",
+          "bounds": [
+            55,
+            125,
+            76,
+            130
+          ],
+          "height": -1.1,
+          "bevel": 0.45,
+          "roughness": 0.68,
+          "metalness": 0,
+          "cavity": 0.55,
+          "pre_depth_height": -0.55,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Ventilation slot 3",
+          "shape": "rect",
+          "bounds": [
+            100,
+            122,
+            109,
+            125
+          ],
+          "height": -1.1,
+          "bevel": 0.45,
+          "roughness": 0.68,
+          "metalness": 0,
+          "cavity": 0.55,
+          "pre_depth_height": -0.55,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Ventilation slot 4",
+          "shape": "rect",
+          "bounds": [
+            100,
+            126,
+            109,
+            129
+          ],
+          "height": -1.1,
+          "bevel": 0.45,
+          "roughness": 0.68,
+          "metalness": 0,
+          "cavity": 0.55,
+          "pre_depth_height": -0.55,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Ventilation slot 5",
+          "shape": "rect",
+          "bounds": [
+            100,
+            130,
+            109,
+            133
+          ],
+          "height": -1.1,
+          "bevel": 0.45,
+          "roughness": 0.68,
+          "metalness": 0,
+          "cavity": 0.55,
+          "pre_depth_height": -0.55,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Upper exposed machined plate",
+          "shape": "polygon",
+          "points": [
+            [
+              41,
+              29
+            ],
+            [
+              70,
+              29
+            ],
+            [
+              70,
+              75
+            ],
+            [
+              87,
+              75
+            ],
+            [
+              87,
+              84
+            ],
+            [
+              41,
+              84
+            ]
+          ],
+          "height": 0.7424999999999999,
+          "bevel": 0.65,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.12,
+            "normal_highpass": 0.006,
+            "repeats": 4,
+            "tool_marks": 0.008,
+            "grooves": 280,
+            "roughness": 0.34,
+            "variation": 0.065,
+            "roughness_range": [
+              0.28,
+              0.4
+            ]
+          },
+          "pre_depth_height": 0.45,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Upper rectangular exposed plate",
+          "shape": "rect",
+          "bounds": [
+            78,
+            29,
+            110,
+            68
+          ],
+          "height": 0.7424999999999999,
+          "bevel": 0.65,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.12,
+            "normal_highpass": 0.006,
+            "repeats": 4,
+            "tool_marks": 0.008,
+            "grooves": 280,
+            "roughness": 0.34,
+            "variation": 0.065,
+            "roughness_range": [
+              0.28,
+              0.4
+            ]
+          },
+          "pre_depth_height": 0.45,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Cannon exposed front band",
+          "shape": "rect",
+          "bounds": [
+            141,
+            164,
+            163,
+            201
+          ],
+          "height": 0.33,
+          "bevel": 0.5,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.12,
+            "normal_highpass": 0.006,
+            "repeats": 4,
+            "tool_marks": 0.008,
+            "grooves": 280,
+            "roughness": 0.34,
+            "variation": 0.065,
+            "roughness_range": [
+              0.28,
+              0.4
+            ]
+          },
+          "pre_depth_height": 0.2,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Cannon casing",
+          "shape": "polygon",
+          "points": [
+            [
+              164,
+              164
+            ],
+            [
+              200,
+              151
+            ],
+            [
+              240,
+              151
+            ],
+            [
+              249,
+              159
+            ],
+            [
+              249,
+              203
+            ],
+            [
+              164,
+              203
+            ]
+          ],
+          "height": 0.363,
+          "bevel": 0.65,
+          "metalness": 1,
+          "finish": "cast_alloy",
+          "finish_overrides": {
+            "normal_gain": 0.18,
+            "normal_highpass": 0.006,
+            "repeats": 6,
+            "roughness": 0.45,
+            "variation": 0.07,
+            "roughness_range": [
+              0.38,
+              0.52
+            ]
+          },
+          "pre_depth_height": 0.22,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Shin plate left",
+          "shape": "polygon",
+          "points": [
+            [
+              28,
+              165
+            ],
+            [
+              51,
+              165
+            ],
+            [
+              51,
+              202
+            ],
+            [
+              40,
+              207
+            ],
+            [
+              25,
+              188
+            ]
+          ],
+          "height": 0.7424999999999999,
+          "bevel": 0.7,
+          "metalness": 0,
+          "finish": "powder_coat",
+          "finish_overrides": {
+            "normal_gain": 0.24,
+            "normal_highpass": 0.005,
+            "repeats": 7,
+            "roughness": 0.53,
+            "variation": 0.08,
+            "roughness_range": [
+              0.46,
+              0.6
+            ]
+          },
+          "pre_depth_height": 0.45,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Shin plate right",
+          "shape": "polygon",
+          "points": [
+            [
+              54,
+              165
+            ],
+            [
+              82,
+              165
+            ],
+            [
+              99,
+              205
+            ],
+            [
+              73,
+              210
+            ],
+            [
+              54,
+              202
+            ]
+          ],
+          "height": 0.7424999999999999,
+          "bevel": 0.7,
+          "metalness": 0,
+          "finish": "powder_coat",
+          "finish_overrides": {
+            "normal_gain": 0.24,
+            "normal_highpass": 0.005,
+            "repeats": 7,
+            "roughness": 0.53,
+            "variation": 0.08,
+            "roughness_range": [
+              0.46,
+              0.6
+            ]
+          },
+          "pre_depth_height": 0.45,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Machined fastener 0",
+          "shape": "ellipse",
+          "bounds": [
+            41.9,
+            29.9,
+            44.1,
+            32.1
+          ],
+          "height": 0.297,
+          "bevel": 0.2,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.12,
+            "normal_highpass": 0.006,
+            "repeats": 4,
+            "tool_marks": 0.008,
+            "grooves": 280,
+            "roughness": 0.34,
+            "variation": 0.065,
+            "roughness_range": [
+              0.28,
+              0.4
+            ]
+          },
+          "pre_depth_height": 0.18,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Machined fastener 1",
+          "shape": "ellipse",
+          "bounds": [
+            66.9,
+            29.9,
+            69.1,
+            32.1
+          ],
+          "height": 0.297,
+          "bevel": 0.2,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.12,
+            "normal_highpass": 0.006,
+            "repeats": 4,
+            "tool_marks": 0.008,
+            "grooves": 280,
+            "roughness": 0.34,
+            "variation": 0.065,
+            "roughness_range": [
+              0.28,
+              0.4
+            ]
+          },
+          "pre_depth_height": 0.18,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Machined fastener 2",
+          "shape": "ellipse",
+          "bounds": [
+            41.9,
+            79.9,
+            44.1,
+            82.1
+          ],
+          "height": 0.297,
+          "bevel": 0.2,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.12,
+            "normal_highpass": 0.006,
+            "repeats": 4,
+            "tool_marks": 0.008,
+            "grooves": 280,
+            "roughness": 0.34,
+            "variation": 0.065,
+            "roughness_range": [
+              0.28,
+              0.4
+            ]
+          },
+          "pre_depth_height": 0.18,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Machined fastener 3",
+          "shape": "ellipse",
+          "bounds": [
+            82.9,
+            79.9,
+            85.1,
+            82.1
+          ],
+          "height": 0.297,
+          "bevel": 0.2,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.12,
+            "normal_highpass": 0.006,
+            "repeats": 4,
+            "tool_marks": 0.008,
+            "grooves": 280,
+            "roughness": 0.34,
+            "variation": 0.065,
+            "roughness_range": [
+              0.28,
+              0.4
+            ]
+          },
+          "pre_depth_height": 0.18,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Machined fastener 4",
+          "shape": "ellipse",
+          "bounds": [
+            79.9,
+            29.9,
+            82.1,
+            32.1
+          ],
+          "height": 0.297,
+          "bevel": 0.2,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.12,
+            "normal_highpass": 0.006,
+            "repeats": 4,
+            "tool_marks": 0.008,
+            "grooves": 280,
+            "roughness": 0.34,
+            "variation": 0.065,
+            "roughness_range": [
+              0.28,
+              0.4
+            ]
+          },
+          "pre_depth_height": 0.18,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Machined fastener 5",
+          "shape": "ellipse",
+          "bounds": [
+            106.9,
+            29.9,
+            109.1,
+            32.1
+          ],
+          "height": 0.297,
+          "bevel": 0.2,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.12,
+            "normal_highpass": 0.006,
+            "repeats": 4,
+            "tool_marks": 0.008,
+            "grooves": 280,
+            "roughness": 0.34,
+            "variation": 0.065,
+            "roughness_range": [
+              0.28,
+              0.4
+            ]
+          },
+          "pre_depth_height": 0.18,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Machined fastener 6",
+          "shape": "ellipse",
+          "bounds": [
+            79.9,
+            64.9,
+            82.1,
+            67.1
+          ],
+          "height": 0.297,
+          "bevel": 0.2,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.12,
+            "normal_highpass": 0.006,
+            "repeats": 4,
+            "tool_marks": 0.008,
+            "grooves": 280,
+            "roughness": 0.34,
+            "variation": 0.065,
+            "roughness_range": [
+              0.28,
+              0.4
+            ]
+          },
+          "pre_depth_height": 0.18,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Machined fastener 7",
+          "shape": "ellipse",
+          "bounds": [
+            106.9,
+            64.9,
+            109.1,
+            67.1
+          ],
+          "height": 0.297,
+          "bevel": 0.2,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.12,
+            "normal_highpass": 0.006,
+            "repeats": 4,
+            "tool_marks": 0.008,
+            "grooves": 280,
+            "roughness": 0.34,
+            "variation": 0.065,
+            "roughness_range": [
+              0.28,
+              0.4
+            ]
+          },
+          "pre_depth_height": 0.18,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Machined fastener 8",
+          "shape": "ellipse",
+          "bounds": [
+            239.9,
+            153.9,
+            242.1,
+            156.1
+          ],
+          "height": 0.297,
+          "bevel": 0.2,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.12,
+            "normal_highpass": 0.006,
+            "repeats": 4,
+            "tool_marks": 0.008,
+            "grooves": 280,
+            "roughness": 0.34,
+            "variation": 0.065,
+            "roughness_range": [
+              0.28,
+              0.4
+            ]
+          },
+          "pre_depth_height": 0.18,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Machined fastener 9",
+          "shape": "ellipse",
+          "bounds": [
+            164.9,
+            196.9,
+            167.1,
+            199.1
+          ],
+          "height": 0.297,
+          "bevel": 0.2,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.12,
+            "normal_highpass": 0.006,
+            "repeats": 4,
+            "tool_marks": 0.008,
+            "grooves": 280,
+            "roughness": 0.34,
+            "variation": 0.065,
+            "roughness_range": [
+              0.28,
+              0.4
+            ]
+          },
+          "pre_depth_height": 0.18,
+          "edge_ao": 0.75,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Finish pass: inset casing seam 66",
+          "shape": "line",
+          "points": [
+            [
+              44,
+              66
+            ],
+            [
+              67,
+              66
+            ]
+          ],
+          "width": 0.55,
+          "height": -0.4,
+          "bevel": 0.35,
+          "cavity": 0.74,
+          "metalness": 0,
+          "finish": "rubber",
+          "finish_overrides": {
+            "normal_gain": 0.22,
+            "normal_highpass": 0.006,
+            "repeats": 5,
+            "roughness": 0.78,
+            "variation": 0.07,
+            "roughness_range": [
+              0.73,
+              0.84
+            ]
+          },
+          "pre_depth_height": -0.2,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Finish pass: inset casing seam 72",
+          "shape": "line",
+          "points": [
+            [
+              44,
+              72
+            ],
+            [
+              67,
+              72
+            ]
+          ],
+          "width": 0.55,
+          "height": -0.4,
+          "bevel": 0.35,
+          "cavity": 0.74,
+          "metalness": 0,
+          "finish": "rubber",
+          "finish_overrides": {
+            "normal_gain": 0.22,
+            "normal_highpass": 0.006,
+            "repeats": 5,
+            "roughness": 0.78,
+            "variation": 0.07,
+            "roughness_range": [
+              0.73,
+              0.84
+            ]
+          },
+          "pre_depth_height": -0.2,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Finish pass: inset casing seam 78",
+          "shape": "line",
+          "points": [
+            [
+              44,
+              78
+            ],
+            [
+              67,
+              78
+            ]
+          ],
+          "width": 0.55,
+          "height": -0.4,
+          "bevel": 0.35,
+          "cavity": 0.74,
+          "metalness": 0,
+          "finish": "rubber",
+          "finish_overrides": {
+            "normal_gain": 0.22,
+            "normal_highpass": 0.006,
+            "repeats": 5,
+            "roughness": 0.78,
+            "variation": 0.07,
+            "roughness_range": [
+              0.73,
+              0.84
+            ]
+          },
+          "pre_depth_height": -0.2,
+          "edge_ao": 0.64,
+          "edge_width": 0.9,
+          "edge_wear": 0.7
+        },
+        {
+          "label": "Depth: machined plate perimeter",
+          "shape": "line",
+          "points": [
+            [
+              43,
+              33
+            ],
+            [
+              43,
+              63
+            ],
+            [
+              65,
+              63
+            ],
+            [
+              65,
+              33
+            ],
+            [
+              43,
+              33
+            ]
+          ],
+          "width": 0.55,
+          "height": -0.45,
+          "bevel": 0.25,
+          "cavity": 0.68,
+          "roughness": 0.64
+        },
+        {
+          "label": "Depth: machined plate perimeter",
+          "shape": "line",
+          "points": [
+            [
+              81,
+              33
+            ],
+            [
+              81,
+              63
+            ],
+            [
+              103,
+              63
+            ],
+            [
+              103,
+              33
+            ],
+            [
+              81,
+              33
+            ]
+          ],
+          "width": 0.55,
+          "height": -0.45,
+          "bevel": 0.25,
+          "cavity": 0.68,
+          "roughness": 0.64
+        },
+        {
+          "label": "Depth: cannon service cover joint",
+          "shape": "line",
+          "points": [
+            [
+              173,
+              165
+            ],
+            [
+              194,
+              157
+            ],
+            [
+              237,
+              157
+            ],
+            [
+              243,
+              162
+            ],
+            [
+              243,
+              195
+            ],
+            [
+              174,
+              195
+            ]
+          ],
+          "width": 0.8,
+          "height": -1.0,
+          "bevel": 0.4,
+          "cavity": 0.54,
+          "roughness": 0.72
+        },
+        {
+          "label": "Depth: cannon machined index groove",
+          "shape": "line",
+          "points": [
+            [
+              193,
+              190
+            ],
+            [
+              199,
+              180
+            ]
+          ],
+          "width": 0.65,
+          "height": -0.7,
+          "bevel": 0.3,
+          "cavity": 0.62
+        },
+        {
+          "label": "Depth: cannon parallel index groove",
+          "shape": "line",
+          "points": [
+            [
+              196,
+              190
+            ],
+            [
+              202,
+              180
+            ]
+          ],
+          "width": 0.65,
+          "height": -0.7,
+          "bevel": 0.3,
+          "cavity": 0.62
+        },
+        {
+          "label": "Depth: left greave raised face",
+          "shape": "polygon",
+          "points": [
+            [
+              30,
+              168
+            ],
+            [
+              48,
+              168
+            ],
+            [
+              48,
+              198
+            ],
+            [
+              41,
+              201
+            ],
+            [
+              29,
+              187
+            ]
+          ],
+          "height": 1.0,
+          "bevel": 0.9,
+          "edge_ao": 0.68,
+          "edge_wear": 0.65
+        },
+        {
+          "label": "Depth: right greave raised face",
+          "shape": "polygon",
+          "points": [
+            [
+              58,
+              168
+            ],
+            [
+              79,
+              168
+            ],
+            [
+              93,
+              201
+            ],
+            [
+              74,
+              205
+            ],
+            [
+              58,
+              199
+            ]
+          ],
+          "height": 1.0,
+          "bevel": 0.9,
+          "edge_ao": 0.68,
+          "edge_wear": 0.65
+        },
+        {
+          "label": "Depth: bottom rail channel",
+          "shape": "line",
+          "points": [
+            [
+              100,
+              239
+            ],
+            [
+              242,
+              239
+            ]
+          ],
+          "width": 2.0,
+          "height": -1.1,
+          "bevel": 0.5,
+          "cavity": 0.46,
+          "roughness": 0.76
+        },
+        {
+          "label": "Depth: edge abrasion 0",
+          "shape": "line",
+          "points": [
+            [
+              148,
+              184
+            ],
+            [
+              151,
+              181
+            ]
+          ],
+          "width": 0.35,
+          "height": -0.18,
+          "bevel": 0.18,
+          "roughness": 0.3
+        },
+        {
+          "label": "Depth: edge abrasion 1",
+          "shape": "line",
+          "points": [
+            [
+              151,
+              189
+            ],
+            [
+              156,
+              183
+            ]
+          ],
+          "width": 0.35,
+          "height": -0.18,
+          "bevel": 0.18,
+          "roughness": 0.3
+        },
+        {
+          "label": "Depth: edge abrasion 2",
+          "shape": "line",
+          "points": [
+            [
+              175,
+              199
+            ],
+            [
+              179,
+              198
+            ]
+          ],
+          "width": 0.35,
+          "height": -0.18,
+          "bevel": 0.18,
+          "roughness": 0.3
+        },
+        {
+          "label": "Depth: edge abrasion 3",
+          "shape": "line",
+          "points": [
+            [
+              225,
+              160
+            ],
+            [
+              230,
+              161
+            ]
+          ],
+          "width": 0.35,
+          "height": -0.18,
+          "bevel": 0.18,
+          "roughness": 0.3
+        },
+        {
+          "label": "Depth: edge abrasion 4",
+          "shape": "line",
+          "points": [
+            [
+              73,
+              199
+            ],
+            [
+              77,
+              198
+            ]
+          ],
+          "width": 0.35,
+          "height": -0.18,
+          "bevel": 0.18,
+          "roughness": 0.3
+        },
+        {
+          "label": "Depth: edge abrasion 5",
+          "shape": "line",
+          "points": [
+            [
+              33,
+              182
+            ],
+            [
+              36,
+              185
+            ]
+          ],
+          "width": 0.35,
+          "height": -0.18,
+          "bevel": 0.18,
+          "roughness": 0.3
+        }
+      ],
+      "emissive_regions": [
+        {
+          "label": "Amber optic and shared cannon lens",
+          "shape": "ellipse",
+          "bounds": [
+            3,
+            3,
+            39,
+            42
+          ],
+          "bevel": 0.3,
+          "strength": 1.7,
+          "glow": 0.72
+        },
+        {
+          "label": "Illuminated forehead panel",
+          "shape": "rect",
+          "bounds": [
+            1,
+            43,
+            29,
+            64
+          ],
+          "bevel": 0.25,
+          "strength": 1.35,
+          "glow": 0.55
+        },
+        {
+          "label": "Shared orange light swatch; antenna excluded by source-face policy",
+          "shape": "rect",
+          "bounds": [
+            142,
+            20,
+            156,
+            34
+          ],
+          "bevel": 0.15,
+          "strength": 1.4,
+          "glow": 0.6
+        },
+        {
+          "label": "Waist indicator",
+          "shape": "polygon",
+          "points": [
+            [
+              119,
+              166
+            ],
+            [
+              141,
+              166
+            ],
+            [
+              141,
+              178
+            ],
+            [
+              129,
+              178
+            ],
+            [
+              119,
+              169
+            ]
+          ],
+          "bevel": 0.2,
+          "strength": 1.5,
+          "glow": 0.65
+        }
+      ],
+      "imagegen_height": {
+        "source": "captures/rift-texture-review/authored/ranger-height-source.png",
+        "strength": [
+          4,
+          1.2,
+          0,
+          0
+        ],
+        "highpass": 8,
+        "edge_threshold": 0.018
+      }
+    },
+    {
+      "stem": "1327fb77a992df53-b06bf3e209ed3cf2-00001dd3",
+      "model": "small_ty_near",
+      "state": "Current finish maps inspected in native captured level lighting; full asset art pass remains incomplete",
+      "overrides": [],
+      "surface_layers": [
+        {
+          "label": "Chest skin fold 0",
+          "shape": "line",
+          "points": [
+            [
+              11,
+              133
+            ],
+            [
+              31,
+              140
+            ],
+            [
+              58,
+              154
+            ],
+            [
+              82,
+              168
+            ]
+          ],
+          "width": 1.3,
+          "height": -0.12,
+          "bevel": 0.9,
+          "roughness": 0.72
+        },
+        {
+          "label": "Chest skin fold 1",
+          "shape": "line",
+          "points": [
+            [
+              9,
+              142
+            ],
+            [
+              27,
+              147
+            ],
+            [
+              53,
+              160
+            ],
+            [
+              77,
+              174
+            ]
+          ],
+          "width": 1.3,
+          "height": -0.12,
+          "bevel": 0.9,
+          "roughness": 0.72
+        },
+        {
+          "label": "Chest skin fold 2",
+          "shape": "line",
+          "points": [
+            [
+              7,
+              151
+            ],
+            [
+              28,
+              157
+            ],
+            [
+              48,
+              167
+            ],
+            [
+              67,
+              180
+            ]
+          ],
+          "width": 1.3,
+          "height": -0.12,
+          "bevel": 0.9,
+          "roughness": 0.72
+        }
+      ],
+      "profile_overrides": {
+        "review_ty_skin": {
+          "metalness": 0,
+          "roughness": {
+            "mode": "normal_slope",
+            "base": 0.7,
+            "strength": 0.15,
+            "range": [
+              0.62,
+              0.78
+            ]
+          },
+          "normal_strength": 0.35,
+          "finish": "alien_skin"
+        }
+      },
+      "imagegen_height": {
+        "source": "captures/rift-texture-review/authored/small-ty-height-source.png",
+        "strength": [
+          2.5,
+          2.5,
+          0,
+          0
+        ],
+        "highpass": 8,
+        "protect": [
+          {
+            "shape": "rect",
+            "bounds": [
+              0,
+              0,
+              74,
+              49
+            ]
+          },
+          {
+            "shape": "rect",
+            "bounds": [
+              125,
+              0,
+              164,
+              34
+            ]
+          }
+        ]
+      },
+      "imagegen_colour": {
+        "source": "captures/rift-texture-review/authored/small-ty-colour-source.png",
+        "baseline": "captures/rift-texture-review/profile/texture_replacements/reddyxd-uya/1327fb77a992df53-b06bf3e209ed3cf2-00005dd3.png",
+        "opacity_source": "C:/Users/<you>/Games/Ratchet and Clank 3/texture_dumps/1327fb77a992df53-b06bf3e209ed3cf2-00001dd3.png",
+        "channels": [
+          0,
+          1
+        ],
+        "blend": 0.78,
+        "protect": [
+          {
+            "shape": "rect",
+            "bounds": [
+              0,
+              0,
+              74,
+              49
+            ]
+          },
+          {
+            "shape": "rect",
+            "bounds": [
+              125,
+              0,
+              164,
+              34
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "stem": "4d392437d864304a-a819fda65d3c4e1c-00001dd3",
+      "model": "ratchet",
+      "state": "Fitted depth revision; native visual comparison required; full all-moby pass remains incomplete",
+      "overrides": [],
+      "surface_layers": [
+        {
+          "label": "Harness buckle frame",
+          "shape": "rect",
+          "bounds": [
+            132,
+            35,
+            199,
+            94
+          ],
+          "height": 1.32,
+          "bevel": 1.3,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "pre_depth_height": 0.8,
+          "edge_ao": 0.7,
+          "edge_width": 0.9,
+          "edge_wear": 0.6
+        },
+        {
+          "label": "Harness buckle opening",
+          "shape": "rect",
+          "bounds": [
+            140,
+            43,
+            191,
+            86
+          ],
+          "height": -1.4849999999999999,
+          "bevel": 1.1,
+          "metalness": 0,
+          "cavity": 0.78,
+          "finish": "leather",
+          "pre_depth_height": -0.9,
+          "edge_ao": 0.7,
+          "edge_width": 0.9,
+          "edge_wear": 0.6
+        },
+        {
+          "label": "Buckle crosspiece 0",
+          "shape": "line",
+          "points": [
+            [
+              155,
+              44
+            ],
+            [
+              155,
+              86
+            ]
+          ],
+          "width": 4,
+          "height": 1.4849999999999999,
+          "bevel": 0.7,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "pre_depth_height": 0.9,
+          "edge_ao": 0.7,
+          "edge_width": 0.9,
+          "edge_wear": 0.6
+        },
+        {
+          "label": "Buckle crosspiece 1",
+          "shape": "line",
+          "points": [
+            [
+              177,
+              44
+            ],
+            [
+              177,
+              86
+            ]
+          ],
+          "width": 4,
+          "height": 1.4849999999999999,
+          "bevel": 0.7,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "pre_depth_height": 0.9,
+          "edge_ao": 0.7,
+          "edge_width": 0.9,
+          "edge_wear": 0.6
+        },
+        {
+          "label": "Harness rivet 0",
+          "shape": "ellipse",
+          "bounds": [
+            145,
+            108,
+            149,
+            112
+          ],
+          "height": 0.66,
+          "bevel": 0.5,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "pre_depth_height": 0.4,
+          "edge_ao": 0.7,
+          "edge_width": 0.9,
+          "edge_wear": 0.6
+        },
+        {
+          "label": "Harness rivet 1",
+          "shape": "ellipse",
+          "bounds": [
+            177,
+            108,
+            181,
+            112
+          ],
+          "height": 0.66,
+          "bevel": 0.5,
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "pre_depth_height": 0.4,
+          "edge_ao": 0.7,
+          "edge_width": 0.9,
+          "edge_wear": 0.6
+        }
+      ],
+      "profile_overrides": {
+        "review_soft_leather": {
+          "metalness": 0,
+          "roughness": {
+            "mode": "normal_slope",
+            "base": 0.605,
+            "strength": 0.12,
+            "range": [
+              0.52,
+              0.69
+            ]
+          },
+          "normal_strength": 0.55,
+          "finish": "leather"
+        },
+        "review_satin_alloy": {
+          "metalness": 1,
+          "roughness": {
+            "mode": "inverse_channel",
+            "channel": 2,
+            "range": [
+              0.25,
+              0.4
+            ]
+          },
+          "normal_strength": 0.65,
+          "finish": "brushed_steel"
+        }
+      }
+    },
+    {
+      "stem": "f76fd4297c61a9d7-1ec039ea90e96601-00001ddb",
+      "model": "ratchet",
+      "state": "Fitted depth revision; native visual comparison required; full all-moby pass remains incomplete",
+      "overrides": [],
+      "surface_layers": [
+        {
+          "label": "Helmet ear-cap recess",
+          "shape": "ellipse",
+          "bounds": [
+            69,
+            101,
+            113,
+            143
+          ],
+          "height": -0.462,
+          "bevel": 1,
+          "roughness": 0.48,
+          "cavity": 0.87,
+          "pre_depth_height": -0.28,
+          "edge_ao": 0.7,
+          "edge_width": 0.9,
+          "edge_wear": 0.6
+        },
+        {
+          "label": "Helmet lower ear-cap recess",
+          "shape": "ellipse",
+          "bounds": [
+            66,
+            143,
+            105,
+            182
+          ],
+          "height": -0.462,
+          "bevel": 1,
+          "roughness": 0.48,
+          "cavity": 0.87,
+          "pre_depth_height": -0.28,
+          "edge_ao": 0.7,
+          "edge_width": 0.9,
+          "edge_wear": 0.6
+        }
+      ],
+      "profile_overrides": {
+        "review_satin_alloy": {
+          "metalness": 1,
+          "roughness": {
+            "mode": "inverse_channel",
+            "channel": 2,
+            "range": [
+              0.31,
+              0.44
+            ]
+          },
+          "normal_strength": 0.45,
+          "finish": "brushed_steel"
+        }
+      }
+    },
+    {
+      "stem": "e7a10620a3d903e5-8bf51b54876cd82e-00001dd3",
+      "model": "tyhrranoid",
+      "state": "Current finish maps inspected in native captured level lighting; full asset art pass remains incomplete",
+      "overrides": [],
+      "surface_layers": [
+        {
+          "label": "Armour pivot housing",
+          "shape": "ellipse",
+          "bounds": [
+            114,
+            59,
+            157,
+            101
+          ],
+          "height": 0.45,
+          "bevel": 0.8,
+          "metalness": 1,
+          "finish": "cast_alloy"
+        },
+        {
+          "label": "Pivot recessed centre",
+          "shape": "ellipse",
+          "bounds": [
+            129,
+            74,
+            143,
+            88
+          ],
+          "height": -0.8,
+          "bevel": 0.65,
+          "metalness": 1,
+          "roughness": 0.4,
+          "cavity": 0.72
+        },
+        {
+          "label": "Machined circular cap",
+          "shape": "ellipse",
+          "bounds": [
+            164,
+            35,
+            207,
+            77
+          ],
+          "height": 0.4,
+          "bevel": 0.8,
+          "metalness": 1,
+          "finish": "cast_alloy"
+        },
+        {
+          "label": "Cap screw groove",
+          "shape": "line",
+          "points": [
+            [
+              173,
+              65
+            ],
+            [
+              196,
+              46
+            ]
+          ],
+          "width": 2,
+          "height": -0.4,
+          "bevel": 0.4,
+          "roughness": 0.5,
+          "cavity": 0.7
+        },
+        {
+          "label": "Armour ventilation housing",
+          "shape": "polygon",
+          "points": [
+            [
+              137,
+              139
+            ],
+            [
+              153,
+              139
+            ],
+            [
+              158,
+              170
+            ],
+            [
+              130,
+              170
+            ]
+          ],
+          "height": -0.35,
+          "bevel": 0.6,
+          "metalness": 0,
+          "roughness": 0.6,
+          "cavity": 0.8
+        },
+        {
+          "label": "Armour vent rib 0",
+          "shape": "line",
+          "points": [
+            [
+              136,
+              146
+            ],
+            [
+              153,
+              146
+            ]
+          ],
+          "width": 1.7,
+          "height": 0.55,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Armour vent rib 1",
+          "shape": "line",
+          "points": [
+            [
+              136,
+              153
+            ],
+            [
+              153,
+              153
+            ]
+          ],
+          "width": 1.7,
+          "height": 0.55,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Armour vent rib 2",
+          "shape": "line",
+          "points": [
+            [
+              136,
+              160
+            ],
+            [
+              153,
+              160
+            ]
+          ],
+          "width": 1.7,
+          "height": 0.55,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Lower mechanical cap",
+          "shape": "ellipse",
+          "bounds": [
+            112,
+            202,
+            137,
+            228
+          ],
+          "height": 0.35,
+          "bevel": 0.7,
+          "metalness": 1,
+          "roughness": 0.35
+        }
+      ],
+      "profile_overrides": {
+        "review_painted_metal": {
+          "metalness": 0,
+          "roughness": {
+            "mode": "source_variation",
+            "base": 0.41500000000000004,
+            "strength": 0.18,
+            "range": [
+              0.34,
+              0.49
+            ],
+            "source": "C:/riftapart-export/metal/steel_painted_panels_002_g.png",
+            "channel": 0,
+            "crop": [
+              256,
+              1088,
+              640,
+              1472
+            ],
+            "encoding_evidence": "Inspected tiling-library _g: R gloss, G reflectance, B zero, A opaque; plain panel crop only."
+          },
+          "normal_strength": 0.35,
+          "finish": "enamel"
+        },
+        "review_dark_alloy": {
+          "metalness": 1,
+          "roughness": {
+            "mode": "inverse_channel",
+            "channel": 2,
+            "range": [
+              0.31,
+              0.48
+            ]
+          },
+          "normal_strength": 0.65,
+          "finish": "cast_alloy"
+        },
+        "review_ty_skin": {
+          "metalness": 0,
+          "roughness": {
+            "mode": "normal_slope",
+            "base": 0.69,
+            "strength": 0.15,
+            "range": [
+              0.62,
+              0.76
+            ]
+          },
+          "normal_strength": 0.45,
+          "finish": "alien_skin"
+        }
+      }
+    },
+    {
+      "stem": "407dd834b00a78e5-ead08c0b13f84a33-00002213",
+      "model": "clank",
+      "state": "Current finish maps inspected in native captured level lighting; full asset art pass remains incomplete",
+      "overrides": [
+        {
+          "polygons": [
+            [
+              [
+                46,
+                201
+              ],
+              [
+                89,
+                201
+              ],
+              [
+                89,
+                247
+              ],
+              [
+                45,
+                247
+              ]
+            ],
+            [
+              [
+                210,
+                0
+              ],
+              [
+                237,
+                0
+              ],
+              [
+                237,
+                49
+              ],
+              [
+                210,
+                49
+              ]
+            ],
+            [
+              [
+                222,
+                78
+              ],
+              [
+                249,
+                78
+              ],
+              [
+                250,
+                121
+              ],
+              [
+                222,
+                121
+              ]
+            ],
+            [
+              [
+                130,
+                126
+              ],
+              [
+                158,
+                126
+              ],
+              [
+                158,
+                184
+              ],
+              [
+                130,
+                184
+              ]
+            ]
+          ],
+          "metalness": 0,
+          "roughness": 0.8,
+          "normal_strength": 0
+        },
+        {
+          "label": "Red dielectric antenna indicator; exact original atlas UV island",
+          "polygons": [
+            [
+              [
+                154,
+                33
+              ],
+              [
+                167,
+                33
+              ],
+              [
+                167,
+                47
+              ],
+              [
+                154,
+                47
+              ]
+            ]
+          ],
+          "metalness": 0,
+          "roughness": 0.22,
+          "normal_strength": 0
+        }
+      ],
+      "surface_layers": [
+        {
+          "label": "Head vent 0",
+          "shape": "rect",
+          "bounds": [
+            113,
+            10,
+            119,
+            12
+          ],
+          "height": -0.4,
+          "bevel": 0.45,
+          "roughness": 0.58,
+          "metalness": 0,
+          "cavity": 0.7
+        },
+        {
+          "label": "Head vent 1",
+          "shape": "rect",
+          "bounds": [
+            113,
+            13,
+            119,
+            15
+          ],
+          "height": -0.4,
+          "bevel": 0.45,
+          "roughness": 0.58,
+          "metalness": 0,
+          "cavity": 0.7
+        },
+        {
+          "label": "Head vent 2",
+          "shape": "rect",
+          "bounds": [
+            113,
+            16,
+            119,
+            18
+          ],
+          "height": -0.4,
+          "bevel": 0.45,
+          "roughness": 0.58,
+          "metalness": 0,
+          "cavity": 0.7
+        },
+        {
+          "label": "Upper rear recessed access panel",
+          "shape": "rect",
+          "bounds": [
+            130,
+            21,
+            168,
+            65
+          ],
+          "height": -0.5,
+          "bevel": 0.8,
+          "roughness": 0.4,
+          "cavity": 0.88
+        },
+        {
+          "label": "Backpack front frame",
+          "shape": "polygon",
+          "points": [
+            [
+              58,
+              197
+            ],
+            [
+              85,
+              197
+            ],
+            [
+              91,
+              246
+            ],
+            [
+              50,
+              246
+            ]
+          ],
+          "height": 0.5,
+          "bevel": 0.7,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Backpack front inset",
+          "shape": "polygon",
+          "points": [
+            [
+              62,
+              201
+            ],
+            [
+              81,
+              201
+            ],
+            [
+              87,
+              242
+            ],
+            [
+              55,
+              242
+            ]
+          ],
+          "height": -0.85,
+          "bevel": 0.7,
+          "metalness": 0,
+          "cavity": 0.68,
+          "finish": "rubber"
+        },
+        {
+          "label": "Cooling louvre 0",
+          "shape": "rect",
+          "bounds": [
+            224,
+            80,
+            235,
+            84
+          ],
+          "height": 0.4,
+          "bevel": 0.45,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Cooling louvre 1",
+          "shape": "rect",
+          "bounds": [
+            222,
+            87,
+            237,
+            91
+          ],
+          "height": 0.4,
+          "bevel": 0.45,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Cooling louvre 2",
+          "shape": "rect",
+          "bounds": [
+            222,
+            102,
+            237,
+            106
+          ],
+          "height": 0.4,
+          "bevel": 0.45,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Cooling louvre 3",
+          "shape": "rect",
+          "bounds": [
+            224,
+            111,
+            235,
+            115
+          ],
+          "height": 0.4,
+          "bevel": 0.45,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Existing small fastener 0",
+          "shape": "ellipse",
+          "bounds": [
+            57.1,
+            63.1,
+            58.9,
+            64.9
+          ],
+          "height": 0.32,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Existing small fastener 1",
+          "shape": "ellipse",
+          "bounds": [
+            72.1,
+            67.1,
+            73.9,
+            68.9
+          ],
+          "height": 0.32,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Existing small fastener 2",
+          "shape": "ellipse",
+          "bounds": [
+            61.1,
+            78.1,
+            62.9,
+            79.9
+          ],
+          "height": 0.32,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Existing small fastener 3",
+          "shape": "ellipse",
+          "bounds": [
+            69.1,
+            77.1,
+            70.9,
+            78.9
+          ],
+          "height": 0.32,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Existing small fastener 4",
+          "shape": "ellipse",
+          "bounds": [
+            44.1,
+            122.1,
+            45.9,
+            123.9
+          ],
+          "height": 0.32,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Existing small fastener 5",
+          "shape": "ellipse",
+          "bounds": [
+            48.1,
+            122.1,
+            49.9,
+            123.9
+          ],
+          "height": 0.32,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Existing small fastener 6",
+          "shape": "ellipse",
+          "bounds": [
+            117.1,
+            126.1,
+            118.9,
+            127.9
+          ],
+          "height": 0.32,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Existing small fastener 7",
+          "shape": "ellipse",
+          "bounds": [
+            117.1,
+            142.1,
+            118.9,
+            143.9
+          ],
+          "height": 0.32,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Existing small fastener 8",
+          "shape": "ellipse",
+          "bounds": [
+            15.1,
+            178.1,
+            16.9,
+            179.9
+          ],
+          "height": 0.32,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Existing small fastener 9",
+          "shape": "ellipse",
+          "bounds": [
+            22.1,
+            178.1,
+            23.9,
+            179.9
+          ],
+          "height": 0.32,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Existing small fastener 10",
+          "shape": "ellipse",
+          "bounds": [
+            29.1,
+            178.1,
+            30.9,
+            179.9
+          ],
+          "height": 0.32,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Existing small fastener 11",
+          "shape": "ellipse",
+          "bounds": [
+            35.1,
+            178.1,
+            36.9,
+            179.9
+          ],
+          "height": 0.32,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        }
+      ],
+      "profile_overrides": {
+        "review_satin_alloy": {
+          "metalness": 1,
+          "roughness": {
+            "mode": "inverse_channel",
+            "channel": 2,
+            "range": [
+              0.25,
+              0.39
+            ]
+          },
+          "normal_strength": 0.65,
+          "finish": "polished_alloy"
+        }
+      },
+      "emissive_regions": [
+        {
+          "label": "Clank green eyes: original shared eye island",
+          "shape": "polygon",
+          "points": [
+            [
+              0,
+              211
+            ],
+            [
+              8,
+              207
+            ],
+            [
+              24,
+              207
+            ],
+            [
+              31,
+              213
+            ],
+            [
+              35,
+              228
+            ],
+            [
+              28,
+              253
+            ],
+            [
+              5,
+              255
+            ],
+            [
+              0,
+              247
+            ]
+          ],
+          "bevel": 0.3,
+          "strength": 1.8,
+          "glow": 0.65,
+          "tint": [
+            0.65,
+            1,
+            0.2
+          ]
+        },
+        {
+          "label": "Clank red antenna indicator",
+          "shape": "ellipse",
+          "bounds": [
+            154,
+            33,
+            167,
+            47
+          ],
+          "bevel": 0.2,
+          "strength": 2.1,
+          "glow": 0.65
+        }
+      ]
+    },
+    {
+      "stem": "ce5bc261d8d3de2f-4f641886d7d1126b-00002213",
+      "model": "phoenix_crew",
+      "state": "Current finish maps inspected in native captured level lighting; full asset art pass remains incomplete",
+      "overrides": [],
+      "surface_layers": [
+        {
+          "label": "Torn green shirt is fine stretch fabric",
+          "shape": "polygon",
+          "points": [
+            [
+              1,
+              129
+            ],
+            [
+              30,
+              130
+            ],
+            [
+              61,
+              147
+            ],
+            [
+              82,
+              162
+            ],
+            [
+              120,
+              200
+            ],
+            [
+              103,
+              219
+            ],
+            [
+              85,
+              255
+            ],
+            [
+              42,
+              255
+            ],
+            [
+              27,
+              218
+            ],
+            [
+              4,
+              208
+            ]
+          ],
+          "scope_channel": 1,
+          "finish": "woven_cloth",
+          "finish_overrides": {
+            "normal_gain": 0.14,
+            "repeats": 64
+          },
+          "roughness": 0.79
+        }
+      ],
+      "profile_overrides": {
+        "skin_micro_details": {
+          "metalness": 0,
+          "normal_strength": 0.2,
+          "roughness": {
+            "mode": "inverse_channel",
+            "channel": 2,
+            "range": [
+              0.59,
+              0.74
+            ]
+          },
+          "finish": "soft_skin"
+        },
+        "detail_leather_02": {
+          "metalness": 0,
+          "normal_strength": 0.35,
+          "roughness": {
+            "mode": "inverse_channel",
+            "channel": 2,
+            "range": [
+              0.49,
+              0.65
+            ]
+          },
+          "finish": "leather",
+          "finish_overrides": {
+            "normal_gain": 0.18,
+            "repeats": 32,
+            "normal_highpass": 0.006
+          }
+        },
+        "denim_001": {
+          "metalness": 0,
+          "normal_strength": 0.3,
+          "roughness": {
+            "mode": "inverse_channel",
+            "channel": 2,
+            "range": [
+              0.78,
+              0.9
+            ]
+          },
+          "finish": "woven_cloth",
+          "finish_overrides": {
+            "normal_gain": 0.16,
+            "repeats": 64
+          }
+        }
+      },
+      "imagegen_colour": {
+        "source": "captures/rift-texture-review/authored/jungle-colour-source.png",
+        "baseline": "captures/rift-texture-review/profile/texture_replacements/reddyxd-uya/ce5bc261d8d3de2f-4f641886d7d1126b-00006213.png",
+        "opacity_source": "C:/Users/<you>/Games/Ratchet and Clank 3/texture_dumps/ce5bc261d8d3de2f-4f641886d7d1126b-00002213.png",
+        "channels": [
+          0,
+          1,
+          2
+        ],
+        "blend": 0.78,
+        "protect": [
+          {
+            "shape": "rect",
+            "bounds": [
+              193,
+              0,
+              210,
+              29
+            ]
+          },
+          {
+            "shape": "rect",
+            "bounds": [
+              85,
+              0,
+              119,
+              26
+            ]
+          }
+        ],
+        "coverage": "atlas"
+      },
+      "imagegen_height": {
+        "source": "captures/rift-texture-review/authored/jungle-height-source.png",
+        "strength": [
+          0.8,
+          1.5,
+          1.5,
+          0
+        ],
+        "highpass": 8,
+        "protect": [
+          {
+            "shape": "rect",
+            "bounds": [
+              193,
+              0,
+              210,
+              29
+            ]
+          },
+          {
+            "shape": "rect",
+            "bounds": [
+              85,
+              0,
+              119,
+              26
+            ]
+          },
+          {
+            "shape": "rect",
+            "bounds": [
+              57,
+              154,
+              83,
+              194
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "stem": "98c818d4eb5600c7-d76917361e393945-00001dd3",
+      "model": "florana_creature",
+      "state": "Imagegen retry succeeded with rendered insect context; native fit review in progress",
+      "material_overrides": {
+        "detail_skinreptile_02": "review_wasp_cuticle"
+      },
+      "overrides": [
+        {
+          "label": "Wing membrane",
+          "polygons": [
+            [
+              [
+                0,
+                0
+              ],
+              [
+                110,
+                26
+              ],
+              [
+                0,
+                127
+              ]
+            ]
+          ],
+          "metalness": 0,
+          "roughness": 0.55,
+          "normal_strength": 0.1
+        },
+        {
+          "label": "Compound eye",
+          "polygons": [
+            [
+              [
+                204,
+                165
+              ],
+              [
+                255,
+                165
+              ],
+              [
+                255,
+                255
+              ],
+              [
+                200,
+                255
+              ]
+            ]
+          ],
+          "metalness": 0,
+          "roughness": 0.2,
+          "normal_strength": 0
+        }
+      ],
+      "surface_layers": [
+        {
+          "label": "Chitin plate joint left",
+          "shape": "line",
+          "points": [
+            [
+              121,
+              54
+            ],
+            [
+              143,
+              63
+            ],
+            [
+              158,
+              91
+            ],
+            [
+              176,
+              101
+            ]
+          ],
+          "width": 1.5,
+          "height": -0.18,
+          "bevel": 0.9,
+          "roughness": 0.4
+        },
+        {
+          "label": "Chitin plate joint right",
+          "shape": "line",
+          "points": [
+            [
+              176,
+              101
+            ],
+            [
+              199,
+              103
+            ],
+            [
+              216,
+              89
+            ],
+            [
+              233,
+              60
+            ]
+          ],
+          "width": 1.5,
+          "height": -0.18,
+          "bevel": 0.9,
+          "roughness": 0.4
+        }
+      ],
+      "profile_overrides": {
+        "review_wasp_cuticle": {
+          "metalness": 0,
+          "normal_strength": 0.16,
+          "roughness": {
+            "mode": "inverse_channel",
+            "channel": 2,
+            "range": [
+              0.29,
+              0.43
+            ]
+          },
+          "finish": "chitin"
+        }
+      },
+      "imagegen_colour": {
+        "source": "captures/rift-texture-review/authored/wasp-colour-source.png",
+        "baseline": "captures/rift-texture-review/profile/texture_replacements/reddyxd-uya/98c818d4eb5600c7-d76917361e393945-00005dd3.png",
+        "opacity_source": "C:/Users/<you>/Games/Ratchet and Clank 3/texture_dumps/98c818d4eb5600c7-d76917361e393945-00001dd3.png",
+        "channels": [
+          0,
+          1
+        ],
+        "blend": [
+          0.75,
+          1,
+          0,
+          0
+        ],
+        "opacity_edges": [
+          {
+            "shape": "polygon",
+            "points": [
+              [
+                0,
+                0
+              ],
+              [
+                110,
+                26
+              ],
+              [
+                0,
+                127
+              ]
+            ],
+            "limit": 0.25098039215686274,
+            "power": 2.5
+          }
+        ]
+      },
+      "imagegen_height": {
+        "source": "captures/rift-texture-review/authored/wasp-height-source.png",
+        "strength": [
+          2,
+          4,
+          0,
+          0
+        ],
+        "highpass": 8
+      }
+    },
+    {
+      "stem": "9a6d927dedfae75e-284e78b48088f99a-00002213",
+      "model": "ratchet",
+      "overrides": [
+        {
+          "label": "Eye white",
+          "metalness": 0,
+          "roughness": 0.38,
+          "polygons": [[[81,206],[85,201],[99,200],[105,202],[107,211],[104,218],[99,221],[88,221],[82,217]]]
+        },
+        {
+          "label": "Teeth",
+          "metalness": 0,
+          "roughness": 0.42,
+          "polygons": [
+            [[133,223],[194,223],[196,241],[191,245],[136,245]],
+            [[239,151],[253,145],[255,137],[255,194],[241,194]]
+          ]
+        },
+        {
+          "label": "Inner mouth",
+          "metalness": 0,
+          "roughness": 0.48,
+          "polygons": [[[196,221],[255,221],[255,235],[248,243],[237,247],[208,243],[198,237]]]
+        }
+      ],
+      "surface_layers": [
+        {
+          "label": "Depth: glove 0 flex crease 0",
+          "shape": "line",
+          "points": [
+            [
+              124,
+              13
+            ],
+            [
+              132,
+              12
+            ],
+            [
+              144,
+              14
+            ],
+            [
+              149,
+              13
+            ]
+          ],
+          "width": 0.7,
+          "height": -0.55,
+          "bevel": 0.6,
+          "cavity": 0.72,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 0 fold crest 0",
+          "shape": "line",
+          "points": [
+            [
+              124,
+              14.1
+            ],
+            [
+              132,
+              13.1
+            ],
+            [
+              144,
+              15.1
+            ],
+            [
+              149,
+              14.1
+            ]
+          ],
+          "width": 1.6,
+          "height": 0.4,
+          "bevel": 1.0,
+          "edge_wear": 0.3,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 0 flex crease 1",
+          "shape": "line",
+          "points": [
+            [
+              124,
+              21
+            ],
+            [
+              132,
+              20
+            ],
+            [
+              148,
+              22
+            ],
+            [
+              153,
+              21
+            ]
+          ],
+          "width": 0.7,
+          "height": -0.55,
+          "bevel": 0.6,
+          "cavity": 0.72,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 0 fold crest 1",
+          "shape": "line",
+          "points": [
+            [
+              124,
+              22.1
+            ],
+            [
+              132,
+              21.1
+            ],
+            [
+              148,
+              23.1
+            ],
+            [
+              153,
+              22.1
+            ]
+          ],
+          "width": 1.6,
+          "height": 0.4,
+          "bevel": 1.0,
+          "edge_wear": 0.3,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 0 flex crease 2",
+          "shape": "line",
+          "points": [
+            [
+              124,
+              29
+            ],
+            [
+              132,
+              28
+            ],
+            [
+              142,
+              30
+            ],
+            [
+              147,
+              29
+            ]
+          ],
+          "width": 0.7,
+          "height": -0.55,
+          "bevel": 0.6,
+          "cavity": 0.72,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 0 fold crest 2",
+          "shape": "line",
+          "points": [
+            [
+              124,
+              30.1
+            ],
+            [
+              132,
+              29.1
+            ],
+            [
+              142,
+              31.1
+            ],
+            [
+              147,
+              30.1
+            ]
+          ],
+          "width": 1.6,
+          "height": 0.4,
+          "bevel": 1.0,
+          "edge_wear": 0.3,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 0 flex crease 3",
+          "shape": "line",
+          "points": [
+            [
+              124,
+              37
+            ],
+            [
+              132,
+              36
+            ],
+            [
+              140,
+              38
+            ],
+            [
+              145,
+              37
+            ]
+          ],
+          "width": 0.7,
+          "height": -0.55,
+          "bevel": 0.6,
+          "cavity": 0.72,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 0 fold crest 3",
+          "shape": "line",
+          "points": [
+            [
+              124,
+              38.1
+            ],
+            [
+              132,
+              37.1
+            ],
+            [
+              140,
+              39.1
+            ],
+            [
+              145,
+              38.1
+            ]
+          ],
+          "width": 1.6,
+          "height": 0.4,
+          "bevel": 1.0,
+          "edge_wear": 0.3,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 0 cuff welt",
+          "shape": "line",
+          "points": [
+            [
+              121,
+              8
+            ],
+            [
+              146,
+              8
+            ],
+            [
+              160,
+              9
+            ]
+          ],
+          "width": 1.0,
+          "height": 0.7,
+          "bevel": 0.5,
+          "edge_ao": 0.68,
+          "edge_width": 0.7,
+          "roughness": 0.5,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 1 flex crease 0",
+          "shape": "line",
+          "points": [
+            [
+              114,
+              123
+            ],
+            [
+              122,
+              122
+            ],
+            [
+              134,
+              124
+            ],
+            [
+              139,
+              123
+            ]
+          ],
+          "width": 0.7,
+          "height": -0.55,
+          "bevel": 0.6,
+          "cavity": 0.72,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 1 fold crest 0",
+          "shape": "line",
+          "points": [
+            [
+              114,
+              124.1
+            ],
+            [
+              122,
+              123.1
+            ],
+            [
+              134,
+              125.1
+            ],
+            [
+              139,
+              124.1
+            ]
+          ],
+          "width": 1.6,
+          "height": 0.4,
+          "bevel": 1.0,
+          "edge_wear": 0.3,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 1 flex crease 1",
+          "shape": "line",
+          "points": [
+            [
+              114,
+              131
+            ],
+            [
+              122,
+              130
+            ],
+            [
+              138,
+              132
+            ],
+            [
+              143,
+              131
+            ]
+          ],
+          "width": 0.7,
+          "height": -0.55,
+          "bevel": 0.6,
+          "cavity": 0.72,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 1 fold crest 1",
+          "shape": "line",
+          "points": [
+            [
+              114,
+              132.1
+            ],
+            [
+              122,
+              131.1
+            ],
+            [
+              138,
+              133.1
+            ],
+            [
+              143,
+              132.1
+            ]
+          ],
+          "width": 1.6,
+          "height": 0.4,
+          "bevel": 1.0,
+          "edge_wear": 0.3,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 1 flex crease 2",
+          "shape": "line",
+          "points": [
+            [
+              114,
+              139
+            ],
+            [
+              122,
+              138
+            ],
+            [
+              132,
+              140
+            ],
+            [
+              137,
+              139
+            ]
+          ],
+          "width": 0.7,
+          "height": -0.55,
+          "bevel": 0.6,
+          "cavity": 0.72,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 1 fold crest 2",
+          "shape": "line",
+          "points": [
+            [
+              114,
+              140.1
+            ],
+            [
+              122,
+              139.1
+            ],
+            [
+              132,
+              141.1
+            ],
+            [
+              137,
+              140.1
+            ]
+          ],
+          "width": 1.6,
+          "height": 0.4,
+          "bevel": 1.0,
+          "edge_wear": 0.3,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 1 flex crease 3",
+          "shape": "line",
+          "points": [
+            [
+              114,
+              147
+            ],
+            [
+              122,
+              146
+            ],
+            [
+              130,
+              148
+            ],
+            [
+              135,
+              147
+            ]
+          ],
+          "width": 0.7,
+          "height": -0.55,
+          "bevel": 0.6,
+          "cavity": 0.72,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 1 fold crest 3",
+          "shape": "line",
+          "points": [
+            [
+              114,
+              148.1
+            ],
+            [
+              122,
+              147.1
+            ],
+            [
+              130,
+              149.1
+            ],
+            [
+              135,
+              148.1
+            ]
+          ],
+          "width": 1.6,
+          "height": 0.4,
+          "bevel": 1.0,
+          "edge_wear": 0.3,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: glove 1 cuff welt",
+          "shape": "line",
+          "points": [
+            [
+              111,
+              118
+            ],
+            [
+              136,
+              118
+            ],
+            [
+              150,
+              119
+            ]
+          ],
+          "width": 1.0,
+          "height": 0.7,
+          "bevel": 0.5,
+          "edge_ao": 0.68,
+          "edge_width": 0.7,
+          "roughness": 0.5,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: finger separation",
+          "shape": "line",
+          "points": [
+            [
+              128,
+              63
+            ],
+            [
+              127,
+              82.0
+            ],
+            [
+              128,
+              101
+            ]
+          ],
+          "width": 0.7,
+          "height": -0.58,
+          "bevel": 0.6,
+          "cavity": 0.7,
+          "roughness": 0.68,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: finger separation",
+          "shape": "line",
+          "points": [
+            [
+              143,
+              63
+            ],
+            [
+              142,
+              85.0
+            ],
+            [
+              143,
+              107
+            ]
+          ],
+          "width": 0.7,
+          "height": -0.58,
+          "bevel": 0.6,
+          "cavity": 0.7,
+          "roughness": 0.68,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: finger separation",
+          "shape": "line",
+          "points": [
+            [
+              157,
+              62
+            ],
+            [
+              156,
+              82.5
+            ],
+            [
+              157,
+              103
+            ]
+          ],
+          "width": 0.7,
+          "height": -0.58,
+          "bevel": 0.6,
+          "cavity": 0.7,
+          "roughness": 0.68,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: finger separation",
+          "shape": "line",
+          "points": [
+            [
+              118,
+              173
+            ],
+            [
+              117,
+              192.0
+            ],
+            [
+              118,
+              211
+            ]
+          ],
+          "width": 0.7,
+          "height": -0.58,
+          "bevel": 0.6,
+          "cavity": 0.7,
+          "roughness": 0.68,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: finger separation",
+          "shape": "line",
+          "points": [
+            [
+              131,
+              176
+            ],
+            [
+              130,
+              197.0
+            ],
+            [
+              131,
+              218
+            ]
+          ],
+          "width": 0.7,
+          "height": -0.58,
+          "bevel": 0.6,
+          "cavity": 0.7,
+          "roughness": 0.68,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: finger separation",
+          "shape": "line",
+          "points": [
+            [
+              144,
+              176
+            ],
+            [
+              143,
+              197.5
+            ],
+            [
+              144,
+              219
+            ]
+          ],
+          "width": 0.7,
+          "height": -0.58,
+          "bevel": 0.6,
+          "cavity": 0.7,
+          "roughness": 0.68,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: finger separation",
+          "shape": "line",
+          "points": [
+            [
+              158,
+              173
+            ],
+            [
+              157,
+              193.5
+            ],
+            [
+              158,
+              214
+            ]
+          ],
+          "width": 0.7,
+          "height": -0.58,
+          "bevel": 0.6,
+          "cavity": 0.7,
+          "roughness": 0.68,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: knuckle flexion seam",
+          "shape": "line",
+          "points": [
+            [
+              113,
+              185
+            ],
+            [
+              117,
+              186
+            ],
+            [
+              122,
+              185
+            ]
+          ],
+          "width": 0.55,
+          "height": -0.4,
+          "bevel": 0.45,
+          "cavity": 0.77,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: knuckle flexion seam",
+          "shape": "line",
+          "points": [
+            [
+              113,
+              200
+            ],
+            [
+              117,
+              201
+            ],
+            [
+              122,
+              200
+            ]
+          ],
+          "width": 0.55,
+          "height": -0.4,
+          "bevel": 0.45,
+          "cavity": 0.77,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: knuckle flexion seam",
+          "shape": "line",
+          "points": [
+            [
+              126,
+              185
+            ],
+            [
+              130,
+              186
+            ],
+            [
+              135,
+              185
+            ]
+          ],
+          "width": 0.55,
+          "height": -0.4,
+          "bevel": 0.45,
+          "cavity": 0.77,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: knuckle flexion seam",
+          "shape": "line",
+          "points": [
+            [
+              126,
+              200
+            ],
+            [
+              130,
+              201
+            ],
+            [
+              135,
+              200
+            ]
+          ],
+          "width": 0.55,
+          "height": -0.4,
+          "bevel": 0.45,
+          "cavity": 0.77,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: knuckle flexion seam",
+          "shape": "line",
+          "points": [
+            [
+              139,
+              185
+            ],
+            [
+              143,
+              186
+            ],
+            [
+              148,
+              185
+            ]
+          ],
+          "width": 0.55,
+          "height": -0.4,
+          "bevel": 0.45,
+          "cavity": 0.77,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: knuckle flexion seam",
+          "shape": "line",
+          "points": [
+            [
+              139,
+              200
+            ],
+            [
+              143,
+              201
+            ],
+            [
+              148,
+              200
+            ]
+          ],
+          "width": 0.55,
+          "height": -0.4,
+          "bevel": 0.45,
+          "cavity": 0.77,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: knuckle flexion seam",
+          "shape": "line",
+          "points": [
+            [
+              152,
+              185
+            ],
+            [
+              156,
+              186
+            ],
+            [
+              161,
+              185
+            ]
+          ],
+          "width": 0.55,
+          "height": -0.4,
+          "bevel": 0.45,
+          "cavity": 0.77,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: knuckle flexion seam",
+          "shape": "line",
+          "points": [
+            [
+              152,
+              200
+            ],
+            [
+              156,
+              201
+            ],
+            [
+              161,
+              200
+            ]
+          ],
+          "width": 0.55,
+          "height": -0.4,
+          "bevel": 0.45,
+          "cavity": 0.77,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: upper glove thumb root",
+          "shape": "line",
+          "points": [
+            [
+              167,
+              43
+            ],
+            [
+              169,
+              51
+            ],
+            [
+              168,
+              58
+            ]
+          ],
+          "width": 0.8,
+          "height": -0.7,
+          "bevel": 0.8,
+          "cavity": 0.72,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: lower glove thumb root",
+          "shape": "line",
+          "points": [
+            [
+              157,
+              154
+            ],
+            [
+              163,
+              160
+            ],
+            [
+              166,
+              169
+            ]
+          ],
+          "width": 0.8,
+          "height": -0.7,
+          "bevel": 0.8,
+          "cavity": 0.72,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: boot upper inset",
+          "shape": "polygon",
+          "points": [
+            [
+              2,
+              166
+            ],
+            [
+              20,
+              164
+            ],
+            [
+              44,
+              165
+            ],
+            [
+              59,
+              167
+            ],
+            [
+              82,
+              166
+            ],
+            [
+              98,
+              168
+            ],
+            [
+              100,
+              185
+            ],
+            [
+              2,
+              185
+            ]
+          ],
+          "height": 0.75,
+          "bevel": 1.1,
+          "edge_ao": 0.72,
+          "edge_wear": 0.5,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: boot collar rib housing",
+          "shape": "rect",
+          "bounds": [
+            2,
+            129,
+            83,
+            158
+          ],
+          "height": 0.8,
+          "bevel": 0.7,
+          "edge_ao": 0.65,
+          "roughness": 0.58,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: boot shin inset",
+          "shape": "rect",
+          "bounds": [
+            18,
+            132,
+            47,
+            153
+          ],
+          "height": -0.9,
+          "bevel": 0.6,
+          "cavity": 0.65,
+          "roughness": 0.65,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: boot toe perimeter",
+          "shape": "line",
+          "points": [
+            [
+              5,
+              183
+            ],
+            [
+              7,
+              176
+            ],
+            [
+              14,
+              173
+            ],
+            [
+              24,
+              173
+            ],
+            [
+              29,
+              179
+            ],
+            [
+              29,
+              188
+            ]
+          ],
+          "width": 1.1,
+          "height": 0.7,
+          "bevel": 0.6,
+          "edge_ao": 0.65,
+          "edge_wear": 0.6,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: harness left bevel",
+          "shape": "polygon",
+          "points": [
+            [
+              165,
+              140
+            ],
+            [
+              171,
+              139
+            ],
+            [
+              191,
+              159
+            ],
+            [
+              199,
+              169
+            ],
+            [
+              191,
+              173
+            ],
+            [
+              180,
+              161
+            ]
+          ],
+          "height": 0.85,
+          "bevel": 0.65,
+          "edge_ao": 0.68,
+          "edge_wear": 0.55,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: harness cross strap bevel",
+          "shape": "polygon",
+          "points": [
+            [
+              162,
+              175
+            ],
+            [
+              184,
+              179
+            ],
+            [
+              224,
+              162
+            ],
+            [
+              230,
+              166
+            ],
+            [
+              232,
+              177
+            ],
+            [
+              198,
+              192
+            ],
+            [
+              179,
+              189
+            ],
+            [
+              163,
+              187
+            ]
+          ],
+          "height": 0.8,
+          "bevel": 0.65,
+          "edge_ao": 0.68,
+          "edge_wear": 0.55,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: harness folded edge",
+          "shape": "line",
+          "points": [
+            [
+              173,
+              143
+            ],
+            [
+              186,
+              156
+            ],
+            [
+              192,
+              168
+            ]
+          ],
+          "width": 0.65,
+          "height": -0.65,
+          "bevel": 0.4,
+          "cavity": 0.65,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: harness transverse joint",
+          "shape": "line",
+          "points": [
+            [
+              170,
+              179
+            ],
+            [
+              181,
+              182
+            ],
+            [
+              219,
+              168
+            ]
+          ],
+          "width": 0.65,
+          "height": -0.65,
+          "bevel": 0.4,
+          "cavity": 0.65,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: chest clasp raised frame",
+          "shape": "rect",
+          "bounds": [
+            23,
+            234,
+            53,
+            252
+          ],
+          "height": 1.15,
+          "bevel": 0.7,
+          "edge_ao": 0.6,
+          "edge_wear": 0.75,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: chest clasp inset",
+          "shape": "rect",
+          "bounds": [
+            30,
+            239,
+            48,
+            251
+          ],
+          "height": -1.2,
+          "bevel": 0.6,
+          "cavity": 0.58,
+          "roughness": 0.42,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: boot collar rib",
+          "shape": "rect",
+          "bounds": [
+            6,
+            131,
+            9,
+            157
+          ],
+          "height": 0.65,
+          "bevel": 0.5,
+          "edge_ao": 0.76,
+          "edge_width": 0.5,
+          "edge_wear": 0.5,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: boot collar rib",
+          "shape": "rect",
+          "bounds": [
+            12,
+            131,
+            15,
+            157
+          ],
+          "height": 0.65,
+          "bevel": 0.5,
+          "edge_ao": 0.76,
+          "edge_width": 0.5,
+          "edge_wear": 0.5,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: boot collar rib",
+          "shape": "rect",
+          "bounds": [
+            56,
+            131,
+            59,
+            157
+          ],
+          "height": 0.65,
+          "bevel": 0.5,
+          "edge_ao": 0.76,
+          "edge_width": 0.5,
+          "edge_wear": 0.5,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: boot collar rib",
+          "shape": "rect",
+          "bounds": [
+            62,
+            131,
+            65,
+            157
+          ],
+          "height": 0.65,
+          "bevel": 0.5,
+          "edge_ao": 0.76,
+          "edge_width": 0.5,
+          "edge_wear": 0.5,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: boot collar rib",
+          "shape": "rect",
+          "bounds": [
+            69,
+            131,
+            72,
+            157
+          ],
+          "height": 0.65,
+          "bevel": 0.5,
+          "edge_ao": 0.76,
+          "edge_width": 0.5,
+          "edge_wear": 0.5,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: boot collar rib",
+          "shape": "rect",
+          "bounds": [
+            75,
+            131,
+            78,
+            157
+          ],
+          "height": 0.65,
+          "bevel": 0.5,
+          "edge_ao": 0.76,
+          "edge_width": 0.5,
+          "edge_wear": 0.5,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: recessed harness fastener",
+          "shape": "ellipse",
+          "bounds": [
+            25,
+            143,
+            29,
+            147
+          ],
+          "height": -0.6,
+          "bevel": 0.35,
+          "cavity": 0.6,
+          "roughness": 0.43,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: recessed harness fastener",
+          "shape": "ellipse",
+          "bounds": [
+            38,
+            143,
+            42,
+            147
+          ],
+          "height": -0.6,
+          "bevel": 0.35,
+          "cavity": 0.6,
+          "roughness": 0.43,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: recessed harness fastener",
+          "shape": "ellipse",
+          "bounds": [
+            165,
+            140,
+            169,
+            144
+          ],
+          "height": -0.6,
+          "bevel": 0.35,
+          "cavity": 0.6,
+          "roughness": 0.43,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: recessed harness fastener",
+          "shape": "ellipse",
+          "bounds": [
+            185,
+            137,
+            189,
+            141
+          ],
+          "height": -0.6,
+          "bevel": 0.35,
+          "cavity": 0.6,
+          "roughness": 0.43,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: recessed harness fastener",
+          "shape": "ellipse",
+          "bounds": [
+            171,
+            177,
+            175,
+            181
+          ],
+          "height": -0.6,
+          "bevel": 0.35,
+          "cavity": 0.6,
+          "roughness": 0.43,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: recessed harness fastener",
+          "shape": "ellipse",
+          "bounds": [
+            177,
+            185,
+            181,
+            189
+          ],
+          "height": -0.6,
+          "bevel": 0.35,
+          "cavity": 0.6,
+          "roughness": 0.43,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: recessed harness fastener",
+          "shape": "ellipse",
+          "bounds": [
+            194,
+            184,
+            198,
+            188
+          ],
+          "height": -0.6,
+          "bevel": 0.35,
+          "cavity": 0.6,
+          "roughness": 0.43,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: recessed harness fastener",
+          "shape": "ellipse",
+          "bounds": [
+            206,
+            176,
+            210,
+            180
+          ],
+          "height": -0.6,
+          "bevel": 0.35,
+          "cavity": 0.6,
+          "roughness": 0.43,
+          "scope_channel": 1
+        },
+        {
+          "label": "Depth: shoulder woven panel",
+          "shape": "polygon",
+          "points": [
+            [
+              193,
+              3
+            ],
+            [
+              235,
+              37
+            ],
+            [
+              226,
+              58
+            ],
+            [
+              214,
+              73
+            ],
+            [
+              202,
+              65
+            ],
+            [
+              200,
+              49
+            ],
+            [
+              173,
+              41
+            ]
+          ],
+          "height": 0.25,
+          "bevel": 0.8,
+          "finish": "woven_cloth",
+          "metalness": 0,
+          "edge_ao": 0.8,
+          "edge_width": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: woven panel stitching",
+          "shape": "line",
+          "points": [
+            [
+              176,
+              39
+            ],
+            [
+              193,
+              25
+            ],
+            [
+              201,
+              16
+            ]
+          ],
+          "width": 0.45,
+          "height": 0.25,
+          "bevel": 0.25,
+          "roughness": 0.74,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: woven panel stitching",
+          "shape": "line",
+          "points": [
+            [
+              195,
+              45
+            ],
+            [
+              207,
+              28
+            ],
+            [
+              211,
+              23
+            ]
+          ],
+          "width": 0.45,
+          "height": 0.25,
+          "bevel": 0.25,
+          "roughness": 0.74,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              125,
+              9
+            ],
+            [
+              126.2,
+              9.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              128,
+              9
+            ],
+            [
+              129.2,
+              9.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              131,
+              9
+            ],
+            [
+              132.2,
+              9.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              134,
+              9
+            ],
+            [
+              135.2,
+              9.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              137,
+              9
+            ],
+            [
+              138.2,
+              9.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              140,
+              9
+            ],
+            [
+              141.2,
+              9.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              143,
+              9
+            ],
+            [
+              144.2,
+              9.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              146,
+              9
+            ],
+            [
+              147.2,
+              9.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              149,
+              9
+            ],
+            [
+              150.2,
+              9.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              152,
+              9
+            ],
+            [
+              153.2,
+              9.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              115,
+              119
+            ],
+            [
+              116.2,
+              119.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              118,
+              119
+            ],
+            [
+              119.2,
+              119.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              121,
+              119
+            ],
+            [
+              122.2,
+              119.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              124,
+              119
+            ],
+            [
+              125.2,
+              119.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              127,
+              119
+            ],
+            [
+              128.2,
+              119.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              130,
+              119
+            ],
+            [
+              131.2,
+              119.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              133,
+              119
+            ],
+            [
+              134.2,
+              119.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              136,
+              119
+            ],
+            [
+              137.2,
+              119.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              139,
+              119
+            ],
+            [
+              140.2,
+              119.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        },
+        {
+          "label": "Depth: cuff stitch",
+          "shape": "line",
+          "points": [
+            [
+              142,
+              119
+            ],
+            [
+              143.2,
+              119.7
+            ]
+          ],
+          "width": 0.3,
+          "height": 0.16,
+          "bevel": 0.15,
+          "roughness": 0.7,
+          "scope_channel": 0
+        }
+      ],
+      "profile_overrides": {
+        "review_soft_leather": {
+          "metalness": 0,
+          "finish": "leather",
+          "roughness": {
+            "mode": "constant",
+            "value": 0.56
+          },
+          "finish_overrides": {
+            "normal_gain": 0.32,
+            "normal_highpass": 0.006,
+            "repeats": 8,
+            "roughness": 0.61,
+            "variation": 0.15,
+            "roughness_range": [
+              0.5,
+              0.73
+            ]
+          }
+        },
+        "review_satin_alloy": {
+          "metalness": 1,
+          "finish": "brushed_steel",
+          "roughness": {
+            "mode": "constant",
+            "value": 0.37
+          },
+          "finish_overrides": {
+            "normal_gain": 0.3,
+            "repeats": 5,
+            "roughness": 0.37,
+            "variation": 0.12,
+            "roughness_range": [
+              0.29,
+              0.48
+            ]
+          }
+        }
+      },
+      "state": "Fitted depth revision; native visual comparison required; full all-moby pass remains incomplete",
+      "region_overrides": [
+        {
+          "label": "Glove leather; original painted highlights are not metal studs",
+          "shape": "polygon",
+          "bevel": 0.15,
+          "channel": 0,
+          "points": [
+            [
+              117,
+              3
+            ],
+            [
+              171,
+              3
+            ],
+            [
+              175,
+              9
+            ],
+            [
+              172,
+              29
+            ],
+            [
+              167,
+              39
+            ],
+            [
+              180,
+              45
+            ],
+            [
+              191,
+              46
+            ],
+            [
+              197,
+              55
+            ],
+            [
+              198,
+              62
+            ],
+            [
+              184,
+              66
+            ],
+            [
+              175,
+              64
+            ],
+            [
+              176,
+              97
+            ],
+            [
+              171,
+              105
+            ],
+            [
+              159,
+              109
+            ],
+            [
+              145,
+              110
+            ],
+            [
+              129,
+              108
+            ],
+            [
+              119,
+              99
+            ],
+            [
+              115,
+              74
+            ],
+            [
+              116,
+              43
+            ]
+          ]
+        },
+        {
+          "label": "Glove leather; original painted highlights are not metal studs",
+          "shape": "polygon",
+          "bevel": 0.15,
+          "channel": 0,
+          "points": [
+            [
+              110,
+              112
+            ],
+            [
+              154,
+              112
+            ],
+            [
+              155,
+              122
+            ],
+            [
+              151,
+              143
+            ],
+            [
+              153,
+              155
+            ],
+            [
+              171,
+              158
+            ],
+            [
+              181,
+              169
+            ],
+            [
+              181,
+              173
+            ],
+            [
+              170,
+              176
+            ],
+            [
+              161,
+              172
+            ],
+            [
+              162,
+              208
+            ],
+            [
+              159,
+              218
+            ],
+            [
+              146,
+              222
+            ],
+            [
+              133,
+              221
+            ],
+            [
+              121,
+              218
+            ],
+            [
+              109,
+              211
+            ],
+            [
+              106,
+              197
+            ],
+            [
+              106,
+              172
+            ],
+            [
+              109,
+              150
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "stem": "211295e6748c07d-8bf51b54876cd82e-00001dd3",
+      "model": "source_c6306",
+      "state": "Detailed near-mesh art review in progress",
+      "overrides": [],
+      "surface_layers": [
+        {
+          "label": "Armour pivot housing",
+          "shape": "ellipse",
+          "bounds": [
+            114,
+            59,
+            157,
+            101
+          ],
+          "height": 0.45,
+          "bevel": 0.8,
+          "metalness": 1,
+          "finish": "cast_alloy"
+        },
+        {
+          "label": "Pivot recessed centre",
+          "shape": "ellipse",
+          "bounds": [
+            129,
+            74,
+            143,
+            88
+          ],
+          "height": -0.8,
+          "bevel": 0.65,
+          "metalness": 1,
+          "roughness": 0.4,
+          "cavity": 0.72
+        },
+        {
+          "label": "Machined circular cap",
+          "shape": "ellipse",
+          "bounds": [
+            164,
+            35,
+            207,
+            77
+          ],
+          "height": 0.4,
+          "bevel": 0.8,
+          "metalness": 1,
+          "finish": "cast_alloy"
+        },
+        {
+          "label": "Cap screw groove",
+          "shape": "line",
+          "points": [
+            [
+              173,
+              65
+            ],
+            [
+              196,
+              46
+            ]
+          ],
+          "width": 2,
+          "height": -0.4,
+          "bevel": 0.4,
+          "roughness": 0.5,
+          "cavity": 0.7
+        },
+        {
+          "label": "Armour ventilation housing",
+          "shape": "polygon",
+          "points": [
+            [
+              137,
+              139
+            ],
+            [
+              153,
+              139
+            ],
+            [
+              158,
+              170
+            ],
+            [
+              130,
+              170
+            ]
+          ],
+          "height": -0.35,
+          "bevel": 0.6,
+          "metalness": 0,
+          "roughness": 0.6,
+          "cavity": 0.8
+        },
+        {
+          "label": "Armour vent rib 0",
+          "shape": "line",
+          "points": [
+            [
+              136,
+              146
+            ],
+            [
+              153,
+              146
+            ]
+          ],
+          "width": 1.7,
+          "height": 0.55,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Armour vent rib 1",
+          "shape": "line",
+          "points": [
+            [
+              136,
+              153
+            ],
+            [
+              153,
+              153
+            ]
+          ],
+          "width": 1.7,
+          "height": 0.55,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Armour vent rib 2",
+          "shape": "line",
+          "points": [
+            [
+              136,
+              160
+            ],
+            [
+              153,
+              160
+            ]
+          ],
+          "width": 1.7,
+          "height": 0.55,
+          "bevel": 0.4,
+          "metalness": 1,
+          "finish": "brushed_steel"
+        },
+        {
+          "label": "Lower mechanical cap",
+          "shape": "ellipse",
+          "bounds": [
+            112,
+            202,
+            137,
+            228
+          ],
+          "height": 0.35,
+          "bevel": 0.7,
+          "metalness": 1,
+          "roughness": 0.35
+        }
+      ],
+      "profile_overrides": {
+        "review_painted_metal": {
+          "metalness": 0,
+          "roughness": {
+            "mode": "source_variation",
+            "base": 0.41500000000000004,
+            "strength": 0.18,
+            "range": [
+              0.34,
+              0.49
+            ],
+            "source": "C:/riftapart-export/metal/steel_painted_panels_002_g.png",
+            "channel": 0,
+            "crop": [
+              256,
+              1088,
+              640,
+              1472
+            ],
+            "encoding_evidence": "Inspected tiling-library _g: R gloss, G reflectance, B zero, A opaque; plain panel crop only."
+          },
+          "normal_strength": 0.35,
+          "finish": "enamel"
+        },
+        "review_dark_alloy": {
+          "metalness": 1,
+          "roughness": {
+            "mode": "inverse_channel",
+            "channel": 2,
+            "range": [
+              0.42,
+              0.74
+            ]
+          },
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.2,
+            "repeats": 4,
+            "tool_marks": 0.018
+          }
+        },
+        "review_ty_skin": {
+          "metalness": 0,
+          "roughness": {
+            "mode": "normal_slope",
+            "base": 0.69,
+            "strength": 0.15,
+            "range": [
+              0.62,
+              0.76
+            ]
+          },
+          "normal_strength": 0.45,
+          "finish": "alien_skin"
+        },
+        "review_satin_alloy": {
+          "metalness": 1,
+          "roughness": {
+            "mode": "inverse_channel",
+            "channel": 2,
+            "range": [
+              0.22,
+              0.42
+            ]
+          },
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.2,
+            "repeats": 4,
+            "tool_marks": 0.018
+          }
+        }
+      },
+      "delivery_key": "mecha-body",
+      "imagegen_height": {
+        "source": "captures/rift-texture-review/authored/mecha-body-height-source.png",
+        "strength": [
+          3,
+          1.2,
+          1.3,
+          0
+        ],
+        "highpass": 8,
+        "protect": [
+          {
+            "shape": "rect",
+            "bounds": [
+              22,
+              160,
+              50,
+              190
+            ]
+          },
+          {
+            "shape": "rect",
+            "bounds": [
+              110,
+              181,
+              140,
+              215
+            ]
+          },
+          {
+            "shape": "rect",
+            "bounds": [
+              234,
+              26,
+              250,
+              91
+            ]
+          }
+        ]
+      },
+      "imagegen_colour": {
+        "source": "captures/rift-texture-review/authored/mecha-body-colour-source.png",
+        "baseline": "captures/rift-texture-review/profile/texture_replacements/reddyxd-uya/211295e6748c07d-8bf51b54876cd82e-00005dd3.png",
+        "opacity_source": "C:/Users/<you>/Games/Ratchet and Clank 3/texture_dumps/211295e6748c07d-8bf51b54876cd82e-00001dd3.png",
+        "channels": [
+          0,
+          1,
+          2
+        ],
+        "blend": [
+          0.78,
+          0.7,
+          0.3,
+          0
+        ],
+        "protect": [
+          {
+            "shape": "rect",
+            "bounds": [
+              22,
+              160,
+              50,
+              190
+            ]
+          },
+          {
+            "shape": "rect",
+            "bounds": [
+              110,
+              181,
+              140,
+              215
+            ]
+          },
+          {
+            "shape": "rect",
+            "bounds": [
+              234,
+              26,
+              250,
+              91
+            ]
+          }
+        ]
+      },
+      "emissive_regions": [
+        {
+          "label": "Cannon front shared circular swatch; source-face policy excludes body",
+          "shape": "ellipse",
+          "bounds": [
+            111,
+            183,
+            139,
+            212
+          ],
+          "strength": 1.5,
+          "glow": 0.65
+        }
+      ]
+    },
+    {
+      "overrides": [],
+      "surface_layers": [],
+      "profile_overrides": {
+        "review_dark_alloy": {
+          "metalness": 1,
+          "roughness": {
+            "mode": "inverse_channel",
+            "channel": 2,
+            "range": [
+              0.42,
+              0.74
+            ]
+          },
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.2,
+            "repeats": 4,
+            "tool_marks": 0.018
+          }
+        },
+        "review_satin_alloy": {
+          "metalness": 1,
+          "roughness": {
+            "mode": "inverse_channel",
+            "channel": 2,
+            "range": [
+              0.22,
+              0.42
+            ]
+          },
+          "finish": "brushed_steel",
+          "finish_overrides": {
+            "normal_gain": 0.2,
+            "repeats": 4,
+            "tool_marks": 0.018
+          }
+        }
+      },
+      "stem": "fb761a23195daa8a-8a748c3929ef9026-00001dd3",
+      "model": "source_c6306",
+      "delivery_key": "mecha-gear",
+      "state": "Detailed near-mesh art review in progress",
+      "imagegen_height": {
+        "source": "captures/rift-texture-review/authored/mecha-gear-height-source.png",
+        "strength": [
+          3,
+          1.2,
+          1.2,
+          0
+        ],
+        "highpass": 8,
+        "protect": [
+          {
+            "shape": "rect",
+            "bounds": [
+              250,
+              28,
+              256,
+              66
+            ]
+          },
+          {
+            "shape": "rect",
+            "bounds": [
+              168,
+              242,
+              211,
+              256
+            ]
+          },
+          {
+            "shape": "rect",
+            "bounds": [
+              210,
+              62,
+              231,
+              131
+            ]
+          }
+        ]
+      },
+      "imagegen_colour": {
+        "source": "captures/rift-texture-review/authored/mecha-gear-colour-source.png",
+        "baseline": "captures/rift-texture-review/profile/texture_replacements/reddyxd-uya/fb761a23195daa8a-8a748c3929ef9026-00005dd3.png",
+        "opacity_source": "C:/Users/<you>/Games/Ratchet and Clank 3/texture_dumps/fb761a23195daa8a-8a748c3929ef9026-00001dd3.png",
+        "channels": [
+          0,
+          1,
+          2
+        ],
+        "blend": 0.75,
+        "protect": [
+          {
+            "shape": "rect",
+            "bounds": [
+              250,
+              28,
+              256,
+              66
+            ]
+          },
+          {
+            "shape": "rect",
+            "bounds": [
+              168,
+              242,
+              211,
+              256
+            ]
+          },
+          {
+            "shape": "rect",
+            "bounds": [
+              210,
+              62,
+              231,
+              131
+            ]
+          }
+        ]
+      },
+      "material_overrides": {
+        "steel_painted_panels_002": "review_painted_metal",
+        "aged_steel_001": "review_dark_alloy",
+        "rust_tile_001": "review_satin_alloy",
+        "plastic_004": "plastic_004"
+      },
+      "emissive_regions": [
+        {
+          "label": "Hand cannon strips; source-face policy excludes other parts",
+          "shape": "rect",
+          "bounds": [
+            250,
+            30,
+            256,
+            63
+          ],
+          "strength": 1.5,
+          "glow": 0.65
+        },
+        {
+          "label": "Hand cannon energy face",
+          "shape": "polygon",
+          "points": [
+            [
+              168,
+              256
+            ],
+            [
+              181,
+              243
+            ],
+            [
+              195,
+              243
+            ],
+            [
+              210,
+              256
+            ]
+          ],
+          "strength": 1.6,
+          "glow": 0.65
+        }
+      ]
+    }
+  ],
+  "finishes": {
+    "enamel": {
+      "normal_source": "C:/riftapart-export/other/sbs_paint/paint_001_n.png",
+      "normal_gain": 0.85,
+      "variation_source": "C:/riftapart-export/other/sbs_paint/paint_001_g.png",
+      "roughness": 0.34,
+      "variation": 0.17,
+      "roughness_range": [
+        0.24,
+        0.46
+      ],
+      "repeats": 3
+    },
+    "powder_coat": {
+      "normal_source": "C:/riftapart-export/other/sbs_paint/paint_001_n.png",
+      "normal_gain": 1.25,
+      "variation_source": "C:/riftapart-export/other/sbs_paint/paint_001_g.png",
+      "roughness": 0.55,
+      "variation": 0.2,
+      "roughness_range": [
+        0.43,
+        0.68
+      ],
+      "repeats": 3
+    },
+    "brushed_steel": {
+      "normal_source": "C:/riftapart-export/metal/steel_001_n.png",
+      "normal_gain": 0.5,
+      "variation_source": "C:/riftapart-export/metal/brushed_steel_001_c.png",
+      "roughness": 0.3,
+      "variation": 0.16,
+      "roughness_range": [
+        0.2,
+        0.43
+      ],
+      "repeats": 2,
+      "tool_marks": 0.045,
+      "grooves": 190,
+      "variation_semantics": "Brushed albedo striations used as an authored finish mask, not interpreted as encoded gloss or geometry."
+    },
+    "cast_alloy": {
+      "normal_source": "C:/riftapart-export/other/sbs_paint/paint_001_n.png",
+      "normal_gain": 1.15,
+      "variation_source": "C:/riftapart-export/metal/steel_carbon_001_g.png",
+      "roughness": 0.44,
+      "variation": 0.22,
+      "roughness_range": [
+        0.3,
+        0.61
+      ],
+      "repeats": 3
+    },
+    "rubber": {
+      "normal_source": "C:/riftapart-export/other/sbs_rubber/rubber_001_n.png",
+      "normal_gain": 0.65,
+      "variation_source": "C:/riftapart-export/other/sbs_rubber/rubber_001_g.png",
+      "roughness": 0.77,
+      "variation": 0.15,
+      "roughness_range": [
+        0.65,
+        0.9
+      ],
+      "repeats": 3
+    },
+    "leather": {
+      "normal_source": "C:/riftapart-export/more/textures/detailmaps/leather 02/detail_leather_02_n.png",
+      "normal_gain": 0.6,
+      "variation_source": "C:/riftapart-export/more/textures/detailmaps/leather 02/detail_leather_02_n.png",
+      "variation_channel": 2,
+      "roughness": 0.61,
+      "variation": 0.16,
+      "roughness_range": [
+        0.48,
+        0.75
+      ],
+      "repeats": 3,
+      "variation_semantics": "Authored fine finish modulation from the detail normal Z; not an encoded gloss map."
+    },
+    "woven_cloth": {
+      "normal_source": "C:/riftapart-export/other/sbs_textile/denim_001_n.png",
+      "normal_gain": 0.45,
+      "variation_source": "C:/riftapart-export/other/sbs_textile/denim_001_n.png",
+      "variation_channel": 2,
+      "roughness": 0.84,
+      "variation": 0.1,
+      "roughness_range": [
+        0.75,
+        0.94
+      ],
+      "repeats": 4
+    },
+    "soft_skin": {
+      "normal_source": "C:/riftapart-export/remaster/materials/skin_micro_details.png",
+      "normal_gain": 0.25,
+      "variation_source": "C:/riftapart-export/remaster/materials/skin_micro_details.png",
+      "variation_channel": 2,
+      "roughness": 0.66,
+      "variation": 0.1,
+      "roughness_range": [
+        0.56,
+        0.78
+      ],
+      "repeats": 12
+    },
+    "alien_skin": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\candidate\\0-riftapart\\materials\\review_ty_skin.png",
+      "normal_gain": 0.45,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\candidate\\0-riftapart\\materials\\review_ty_skin.png",
+      "variation_channel": 2,
+      "roughness": 0.69,
+      "variation": 0.14,
+      "roughness_range": [
+        0.57,
+        0.82
+      ],
+      "repeats": 8
+    },
+    "chitin": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\candidate\\0-riftapart\\materials\\review_wasp_cuticle.png",
+      "normal_gain": 1,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\candidate\\0-riftapart\\materials\\review_wasp_cuticle.png",
+      "variation_channel": 2,
+      "roughness": 0.35,
+      "variation": 0.14,
+      "roughness_range": [
+        0.23,
+        0.49
+      ],
+      "repeats": 3
+    },
+    "polished_alloy": {
+      "normal_source": "C:/riftapart-export/metal/steel_001_n.png",
+      "normal_gain": 0.2,
+      "variation_source": "C:/riftapart-export/metal/brushed_steel_001_c.png",
+      "roughness": 0.28,
+      "variation": 0.08,
+      "roughness_range": [
+        0.22,
+        0.36
+      ],
+      "repeats": 2,
+      "tool_marks": 0.009,
+      "grooves": 256,
+      "variation_semantics": "Brushed albedo striations used as an authored finish mask, not interpreted as encoded gloss or geometry."
+    },
+    "kit_rubber_001": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\rubber_001.png",
+      "normal_gain": 0.6,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\rubber_001.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.78,
+      "variation": 0.12999999999999998,
+      "roughness_range": [
+        0.65,
+        0.85
+      ],
+      "repeats": 3,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_detail_grippyplasticgrain": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_grippyplasticgrain.png",
+      "normal_gain": 0.6,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_grippyplasticgrain.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.78,
+      "variation": 0.12999999999999998,
+      "roughness_range": [
+        0.65,
+        0.85
+      ],
+      "repeats": 3,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_detail_texturedplastic": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_texturedplastic.png",
+      "normal_gain": 0.45,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_texturedplastic.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.47,
+      "variation": 0.22750000000000004,
+      "roughness_range": [
+        0.3,
+        0.65
+      ],
+      "repeats": 3,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_detail_heavyclothwrinkles": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_heavyclothwrinkles.png",
+      "normal_gain": 0.34,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_heavyclothwrinkles.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.85,
+      "variation": 0.11049999999999996,
+      "roughness_range": [
+        0.78,
+        0.95
+      ],
+      "repeats": 3,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_detail_knit_02": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_knit_02.png",
+      "normal_gain": 0.34,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_knit_02.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.85,
+      "variation": 0.11049999999999996,
+      "roughness_range": [
+        0.78,
+        0.95
+      ],
+      "repeats": 3,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_fabric_detail_001": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\fabric_detail_001.png",
+      "normal_gain": 0.34,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\fabric_detail_001.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.85,
+      "variation": 0.11049999999999996,
+      "roughness_range": [
+        0.78,
+        0.95
+      ],
+      "repeats": 3,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_fabric_detail_002": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\fabric_detail_002.png",
+      "normal_gain": 0.34,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\fabric_detail_002.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.85,
+      "variation": 0.11049999999999996,
+      "roughness_range": [
+        0.78,
+        0.95
+      ],
+      "repeats": 3,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_wrinkle_001": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\wrinkle_001.png",
+      "normal_gain": 0.34,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\wrinkle_001.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.85,
+      "variation": 0.11049999999999996,
+      "roughness_range": [
+        0.78,
+        0.95
+      ],
+      "repeats": 3,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_denim_001": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\denim_001.png",
+      "normal_gain": 0.34,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\denim_001.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.85,
+      "variation": 0.11049999999999996,
+      "roughness_range": [
+        0.78,
+        0.95
+      ],
+      "repeats": 3,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_cotton_001": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\cotton_001.png",
+      "normal_gain": 0.34,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\cotton_001.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.85,
+      "variation": 0.11049999999999996,
+      "roughness_range": [
+        0.78,
+        0.95
+      ],
+      "repeats": 3,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_ard_cloth_tiling": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\ard_cloth_tiling.png",
+      "normal_gain": 0.34,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\ard_cloth_tiling.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.85,
+      "variation": 0.11049999999999996,
+      "roughness_range": [
+        0.78,
+        0.95
+      ],
+      "repeats": 3,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_detail_leather_02": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_leather_02.png",
+      "normal_gain": 0.36,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_leather_02.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.65,
+      "variation": 0.13000000000000006,
+      "roughness_range": [
+        0.6,
+        0.8
+      ],
+      "repeats": 3,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_detail_softleather_01": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_softleather_01.png",
+      "normal_gain": 0.36,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_softleather_01.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.65,
+      "variation": 0.13000000000000006,
+      "roughness_range": [
+        0.6,
+        0.8
+      ],
+      "repeats": 3,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_detail_skinhippo": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_skinhippo.png",
+      "normal_gain": 0.26,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_skinhippo.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.69,
+      "variation": 0.11049999999999996,
+      "roughness_range": [
+        0.65,
+        0.82
+      ],
+      "repeats": 4,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_detail_skinrhino_02": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_skinrhino_02.png",
+      "normal_gain": 0.26,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_skinrhino_02.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.69,
+      "variation": 0.11049999999999996,
+      "roughness_range": [
+        0.65,
+        0.82
+      ],
+      "repeats": 4,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_detail_skinreptile_02": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_skinreptile_02.png",
+      "normal_gain": 0.26,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_skinreptile_02.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.69,
+      "variation": 0.11049999999999996,
+      "roughness_range": [
+        0.65,
+        0.82
+      ],
+      "repeats": 4,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_skin_micro_details": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\skin_micro_details.png",
+      "normal_gain": 0.26,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\skin_micro_details.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.69,
+      "variation": 0.11049999999999996,
+      "roughness_range": [
+        0.65,
+        0.82
+      ],
+      "repeats": 4,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "kit_detail_skincrocodile": {
+      "normal_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_skincrocodile.png",
+      "normal_gain": 0.26,
+      "variation_source": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\profile\\texture_replacements\\0-riftapart\\materials\\detail_skincrocodile.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.69,
+      "variation": 0.11049999999999996,
+      "roughness_range": [
+        0.65,
+        0.82
+      ],
+      "repeats": 4,
+      "variation_semantics": "Authored fine finish mask from inspected source normal slopes; no source gloss or AO claim."
+    },
+    "leaf_cuticle": {
+      "normal_source": "C:/riftapart-export/more/derived/leaf_surface_002/leaf_surface_002_n.png",
+      "normal_gain": 0.22,
+      "normal_highpass": 0.012,
+      "variation_source": "C:/riftapart-export/more/derived/leaf_surface_002/leaf_surface_002_n.png",
+      "variation_mode": "normal_slope",
+      "roughness": 0.5,
+      "variation": 0.12,
+      "roughness_range": [
+        0.43,
+        0.62
+      ],
+      "repeats": 4,
+      "variation_semantics": "Fine cuticle only; the foreign macro veins are excluded. Original atlas veins receive fitted relief separately."
+    }
+  }
+}

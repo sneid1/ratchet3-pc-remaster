@@ -1,0 +1,374 @@
+From d60a5545a02b6f51f4bce7ce3cdb2609c8c54e92 Mon Sep 17 00:00:00 2001
+From: sneid1 <sneid1@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 16:39:00 +1100
+Subject: [PATCH] UYA: static recompilation of the EE code (recgen_iso.py rc3,
+ rec table keyed on level_current)
+
+tools/recgen_iso.py reads UYA's code from the disc (boot payload core, the boot program's front end as pseudo-level 100, frontbin as 101,
+any level 1..55 from the level table) over bounds given with --bounds, leaves host-stubbed functions to the interpreter, and writes
+r3* crates plus an ee-game-rc3 facade without the rc1-aot feature. ee-oracle: rec table range to 0x700000, front-end pseudo-levels
+from 100, level_key = level_current (0x1d545c), table rebuild backstop at vblank, n_skip counter for the run report.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ oracle/src/cpu.rs     |   4 ++
+ oracle/src/lib.rs     |   5 +-
+ oracle/src/rc3/mod.rs |   5 ++
+ oracle/src/rec/mod.rs |  27 ++++++--
+ tools/recgen_iso.py   | 149 ++++++++++++++++++++++++++++++++++++++----
+ 5 files changed, 171 insertions(+), 19 deletions(-)
+
+diff --git a/oracle/src/cpu.rs b/oracle/src/cpu.rs
+index 9c348d0..6c87e87 100644
+--- a/oracle/src/cpu.rs
++++ b/oracle/src/cpu.rs
+@@ -100,6 +100,9 @@ pub struct Cpu {
+     pub vblank_pc: u32,
+     /// R&C2: a 989snd CD channel read is done at the next field tick (rc2/hle.rs `snd_cd_finish`); never set on R&C1.
+     pub snd_cd_pending: bool,
++    /// Instructions counted without being run: the idle vblank poll `poll_ff` skips and the estimates of non-exact hands
++    /// (a report counter: instructions run = `icount - n_skip`; the interpreter's own are `ri`, the compiled code's the rest).
++    pub n_skip: u64,
+ }
+ 
+ /// Architectural state for the hand-written functions' checks (`Cpu::snapshot` / `restore`): registers, RAM,
+@@ -238,6 +241,7 @@ impl Cpu {
+             skinff: Default::default(),
+             vblank_pc: crate::ver::addrs().vblank_wait,
+             snd_cd_pending: false,
++            n_skip: 0,
+         }
+     }
+ 
+diff --git a/oracle/src/lib.rs b/oracle/src/lib.rs
+index 6fa71f0..07a37a9 100644
+--- a/oracle/src/lib.rs
++++ b/oracle/src/lib.rs
+@@ -385,7 +385,10 @@ impl Machine {
+                     // A new level's overlay: its recompiled functions (none while the loader replaces the overlay).
+                     let lvl = rec::level_key(&c.mem);
+                     let ld = rec::loader(&c.mem);
+-                    if c.rec.as_ref().is_some_and(|t| t.level != lvl || t.loader != ld) {
++                    // UYA: also when code at a compiled function changed since the table was built (its overlay is loaded over
++                    // RAM that held other code or data; the game's FlushCache after the load rebuilds it too, this is the backstop).
++                    let rc3_stale = crate::ver::rc3() && c.rec.as_ref().is_some_and(|t| t.stale(&c.mem));
++                    if c.rec.as_ref().is_some_and(|t| t.level != lvl || t.loader != ld) || rc3_stale {
+                         c.rec = Some(Box::new(rec::Table::build(&c.mem, lvl)));
+                         c.rec_unwind = true;
+                     }
+diff --git a/oracle/src/rc3/mod.rs b/oracle/src/rc3/mod.rs
+index f21620a..f758973 100644
+--- a/oracle/src/rc3/mod.rs
++++ b/oracle/src/rc3/mod.rs
+@@ -60,6 +60,11 @@ pub const IOP_CACHE_SID: u32 = 0x11;
+ pub const IOP_CACHE_BASE: u32 = 0x4_0000;
+ pub const IOP_CACHE_SIZE: u32 = 0xc_0000;
+ 
++/// rac3-decomp's `level_current` (config/names.tsv, D_001D545C): the level being played, 1 Veldin, 2 Florana, ... 55 (the number of the disc's
++/// level table); -1 in the front end. `level_load` (the core's, 0x3bd030 in the boot program) sets it before it starts loading the
++/// level's files. The recompiled code's table is keyed on it (`rec::level_key`).
++pub const LEVEL_CURRENT: u32 = 0x1d545c;
++
+ /// Stub rules (oracle/stubs.txt format) and cold-boot hook rules (cold_hooks.txt format) of UYA.
+ pub const STUBS: &str = include_str!("stubs.txt");
+ pub const HOOKS: &str = include_str!("cold_hooks.txt");
+diff --git a/oracle/src/rec/mod.rs b/oracle/src/rec/mod.rs
+index 780337c..b112d42 100644
+--- a/oracle/src/rec/mod.rs
++++ b/oracle/src/rec/mod.rs
+@@ -34,8 +34,14 @@ pub fn register_level(level: u32, set: &'static [Fn]) {
+ /// title runs with the level byte 0.
+ pub const FRONT_LEVEL: u32 = 19;
+ 
++/// The first pseudo-level of the front-end code of this disc: `FRONT_LEVEL`, and 100 on Up Your Arsenal (whose levels are numbered 1..55;
++/// 100 is the boot program's own front end, 101 frontbin; tools/recgen_iso.py RC3_FRONT_A / RC3_FRONT_B).
++fn front_level() -> u32 {
++    if crate::ver::rc3() { 100 } else { FRONT_LEVEL }
++}
++
+ fn is_front(tag: Option<u32>) -> bool {
+-    tag.is_some_and(|l| l >= FRONT_LEVEL)
++    tag.is_some_and(|l| l >= front_level())
+ }
+ 
+ fn register_at(tag: Option<u32>, set: &'static [Fn]) {
+@@ -165,8 +171,8 @@ impl Table {
+ 
+     /// `build` over the given sets (tests build over their own).
+     fn build_sets(mem: &Mem, level: u32, sets: &[(Option<u32>, &'static [Fn])]) -> Table {
+-        // R&C2's game code overlay runs to 0x450000 (rac2/notes_rec.md).
+-        let (lo, hi) = (0x10_0000u32, if crate::ver::rc2() { 0x50_0000u32 } else { 0x40_0000u32 });
++        // R&C2's game code overlay runs to 0x450000 (rac2/notes_rec.md); UYA's level code to 0x6debb8 (rac3-decomp levels.tsv).
++        let (lo, hi) = (0x10_0000u32, if crate::ver::rc2() { 0x50_0000u32 } else if crate::ver::rc3() { 0x70_0000u32 } else { 0x40_0000u32 });
+         let loader = loader(mem);
+         let mut t = Table {
+             lo,
+@@ -400,15 +406,22 @@ impl Table {
+ /// The level loader state word (`LOADER`); R&C2: 0 (its sets are not tied to a loader state: a set is used while all its
+ /// functions match RAM).
+ pub fn loader(mem: &Mem) -> u16 {
+-    if crate::ver::rc2() {
++    if crate::ver::rc2() || crate::ver::rc3() {
+         return 0;
+     }
+     u16::from_le_bytes([mem.ram[LOADER as usize], mem.ram[LOADER as usize + 1]])
+ }
+ 
+-/// The level byte the table is keyed on (R&C1 0x15ed84); R&C2: 0 (no level tag, so no rebuild for a level change).
++/// The level number the table is keyed on (R&C1 byte 0x15ed84); R&C2: 0 (no level tag, so no rebuild for a level change); UYA: the
++/// word `level_current` (rc3/mod.rs `LEVEL_CURRENT`: the level number 1..55 once `level_load` has chosen it, -1 in the front end).
+ pub fn level_key(mem: &Mem) -> u32 {
+-    if crate::ver::rc2() { 0 } else { mem.ram[crate::LEVEL as usize] as u32 }
++    if crate::ver::rc2() {
++        0
++    } else if crate::ver::rc3() {
++        u32::from_le_bytes(mem.ram[crate::rc3::LEVEL_CURRENT as usize..][..4].try_into().unwrap())
++    } else {
++        mem.ram[crate::LEVEL as usize] as u32
++    }
+ }
+ 
+ /// ORACLE_REC_LOG=1 (read once): every table rebuild after a FlushCache prints `rec_rebuild ICOUNT LEVEL LOADER` to stderr.
+@@ -512,6 +525,7 @@ impl Cpu {
+             return false;
+         }
+         self.icount += est;
++        self.n_skip += est;
+         self.mem.now = self.icount;
+         self.pc = ra;
+         self.npc = ra.wrapping_add(4);
+@@ -811,6 +825,7 @@ impl Cpu {
+             return;
+         }
+         self.icount += (k - 1) * N;
++        self.n_skip += (k - 1) * N;
+         self.s(rt, 0);
+     }
+ }
+diff --git a/tools/recgen_iso.py b/tools/recgen_iso.py
+index e8a9e25..291ae41 100644
+--- a/tools/recgen_iso.py
++++ b/tools/recgen_iso.py
+@@ -36,6 +36,9 @@ ISO_VERSIONS = {
+     'usa': (4214095872, 'aee9275384f739c9b24cd5de6f7e200292db7b01', 'SCUS_971.99', 'SCUS-97199', 'fn_bounds_usa.tsv'),
+     # Ratchet & Clank 2 PAL v1.00 (Going Commando, SCES-51607): its own game; levels 0..26 = G/LEVELn.WAD, crates r2*.
+     'rc2': (3548545024, '5a64211823e62faf33c0e86f1ad4df962a028ed0', 'SCES_516.07', 'SCES-51607', 'fn_bounds_rc2.tsv'),
++    # Ratchet & Clank: Up Your Arsenal NTSC-U v1.00 (SCUS-97353): levels 1..55 (disc table of contents), crates r3*. The bounds file
++    # is written from rac3-decomp's configuration by the player's own tooling (--bounds PATH is required for this disc).
++    'rc3': (4379377664, 'b080139c5a94688ef9472b78d5f5585a756d1ee4', 'SCUS_973.53', 'SCUS-97353', None),
+ }
+ ISO_VER = 'pal'
+ ISO_SEC = 0x800
+@@ -210,6 +213,8 @@ FRONT_A, FRONT_B = 19, 20
+ 
+ def is_front(lvl):
+     """FRONT_A / FRONT_B when lvl is one of R&C1's front-end pseudo-levels, else 0 (R&C2's levels 19.. are real levels)."""
++    if ISO_VER == 'rc3':
++        return lvl if lvl in (RC3_FRONT_A, RC3_FRONT_B) else 0
+     return lvl if lvl in (FRONT_A, FRONT_B) and ISO_VER != 'rc2' else 0
+ 
+ 
+@@ -235,6 +240,98 @@ def iso_overlay_code(d, lvl):
+     return iso_level_section(d, lvl, 0)
+ 
+ 
++# ---- Up Your Arsenal (rc3) ----
++# The disc boots SCUS_973.53, a loader whose .rodata holds the main program (rac3-decomp's boot_elf) as a WAD image at file offset
++# 0x7080: records {address, size, kind, entry} + bytes, copied to their addresses. The core (engine code and data, below
++# RC3_CORE_END) stays resident; every level carries its own copy of the rest (.lit .bss .data three vtbls .text, 7 records, from the
++# disc's level table at sector 1001), and the front end is the same kind of program (the boot payload's own copy, and "frontbin" from
++# the MISC wad, which the game loads after Quit Game). Pseudo-levels 100 / 101 are those two front ends.
++RC3_BOOT_OFFSET = 0x7080
++RC3_PAYLOAD_SHA1 = 'f0d7eba4c9500247be705a3055e0a19bfeb6f698'
++RC3_CORE_END = 0x1d5680
++RC3_FRONT_A, RC3_FRONT_B = 100, 101
++RC3_TOC = 1001
++RC3_LEVEL_SECTIONS = 7
++
++
++def rc3_records(raw, stop_at_padding=False):
++    """[(address, size, kind, bytes)] of a program in the disc's format (every record repeats the entry point; the list ends
++    where it changes)."""
++    out, p, ep = [], 0, None
++    while p + 16 <= len(raw):
++        dest, n, kind, e = struct.unpack_from('<4I', raw, p)
++        ep = e if ep is None else ep
++        if e != ep or (stop_at_padding and dest == 0 and n == 0):
++            break
++        out.append((dest, n, kind, raw[p + 16:p + 16 + n]))
++        p += 16 + n
++    return out, p
++
++
++def rc3_payload(d):
++    """The main program as the loader unpacks it (its records), checked against rac3-decomp's SHA-1 of it."""
++    lba, size = iso_find(d, 'SCUS_973.53')
++    payload = iso_wad_decompress(d.bytes(lba, size)[RC3_BOOT_OFFSET:])
++    import hashlib
++    if hashlib.sha1(payload).hexdigest() != RC3_PAYLOAD_SHA1:
++        sys.exit("SCUS_973.53: boot payload SHA-1 is not the retail disc's")
++    recs, used = rc3_records(payload)
++    assert used == len(payload), (used, len(payload))
++    return recs
++
++
++def rc3_level_program(d, number):
++    """The records of level `number`'s program (tools/levels.py of rac3-decomp: the level table follows the global WAD headers of
++    the table of contents; each entry holds three (sector, size) pairs, the LEVEL one has a 0x60-byte header)."""
++    toc = d.bytes(RC3_TOC, 0x100000)
++    ofs = 0
++    while True:
++        size = struct.unpack_from('<i', toc, ofs)[0]
++        if size < 8 or size > 0xffff:
++            break
++        ofs += size
++    for i in range(128):
++        entry = struct.unpack_from('<6i', toc, ofs + 24 * i)
++        for lba in entry[0::2]:
++            at = (lba - RC3_TOC) * ISO_SEC
++            if lba <= RC3_TOC or at + 0x60 > len(toc):
++                continue
++            size, file_lba, num, _, data_sectors, _ = struct.unpack_from('<6i', toc, at)
++            if size != 0x60 or num != number:
++                continue
++            base = file_lba + data_sectors
++            prog_ofs, prog_size = struct.unpack('<ii', d.bytes(base, 8))
++            recs, used = rc3_records(d.bytes(base, prog_ofs + prog_size)[prog_ofs:])
++            assert used == prog_size and len(recs) == RC3_LEVEL_SECTIONS, (number, used, prog_size, len(recs))
++            return recs
++    sys.exit(f"level {number}: not in the disc's level table")
++
++
++def rc3_frontbin(d):
++    """The records of frontbin, the front end the game reloads after Quit Game (the MISC wad's global header, size 0x48 at
++    table-of-contents offset 0x648; its frontend_code range at +0x20)."""
++    toc = d.bytes(RC3_TOC, 0x1000)
++    size, sector = struct.unpack_from('<ii', toc, 0x648)
++    assert size == 0x48, size
++    fofs, fsize = struct.unpack_from('<ii', toc, 0x648 + 0x20)
++    recs, used = rc3_records(d.sectors(sector + fofs, fsize), stop_at_padding=True)
++    assert len(recs) == RC3_LEVEL_SECTIONS, len(recs)
++    return recs
++
++
++def rc3_build_image(d, lvl, size=0x2000000):
++    """Fresh-RAM image: the core records, then level `lvl`'s records (0: the core alone; RC3_FRONT_A: the boot payload as the
++    loader leaves it, its own front end included; RC3_FRONT_B: the core plus frontbin)."""
++    ram = bytearray(size)
++    for a, n, kind, b in rc3_payload(d):
++        if lvl == RC3_FRONT_A or a < RC3_CORE_END:
++            ram[a:a + len(b)] = b
++    extra = rc3_frontbin(d) if lvl == RC3_FRONT_B else rc3_level_program(d, lvl) if lvl not in (0, RC3_FRONT_A) else []
++    for a, n, kind, b in extra:
++        ram[a:a + len(b)] = b
++    return ram
++
++
+ def iso_front_window(d):
+     """The front end's text: the frontbin record that holds the overlay entry point (all other records are data), widened up
+     to the boot ELF's end for the boot copy of the same code. Returns (lo, hi_frontbin, hi_boot_elf)."""
+@@ -347,13 +444,15 @@ def write_facade(out, oracle):
+     os.makedirs(REC, exist_ok=True)
+     deps = '\n'.join(f'rec-{c.replace("_", "-")} = {{ path = "../rec/{c}" }}' for c in all_crates)
+     # R&C2's tree (crates r2*) is its own facade crate, so one cargo graph can hold both games.
+-    pkg = 'ee-game-rc2' if any(c.startswith('r2') for c in all_crates) else 'ee-game'
++    pkg = 'ee-game-rc2' if any(c.startswith('r2') for c in all_crates) else 'ee-game-rc3' if any(c.startswith('r3') for c in all_crates) else 'ee-game'
++    # UYA's tree: ee-oracle without the first game's generated microprograms (feature rc1-aot), as the port builds it.
++    nodef = ', default-features = false' if pkg == 'ee-game-rc3' else ''
+     _put(os.path.join(G, 'Cargo.toml'),
+         f'# Generated by recgen.py.\n[package]\nname = "{pkg}"\nversion = "0.1.0"\nedition = "2021"\n\n'
+-        f'[dependencies]\nee-oracle = {{ path = "{_rel(oracle, G)}" }}\n{deps}\n')
++        f'[dependencies]\nee-oracle = {{ path = "{_rel(oracle, G)}"{nodef} }}\n{deps}\n')
+     def _reg(c):
+         # A level crate (lN_MM) is tied to its level byte N: Table::build probes it only while that level is current.
+-        m = re.fullmatch(r'l(\d+)_\d+', c)
++        m = re.fullmatch(r'(?:r3)?l(\d+)_\d+', c)
+         if m:
+             return f'    ee_oracle::rec::register_level({int(m.group(1))}, rec_{c}::FNS);'
+         return f'    ee_oracle::rec::register(rec_{c}::FNS);'
+@@ -406,8 +505,13 @@ def skin_head(L):
+ def poll_head(L):
+     w = word(L)
+     rs, rt = w >> 21 & 31, w >> 16 & 31
+-    return (w >> 26 == 0x23 and rt != 0 and rs != rt and word(L + 4) == 0x30000004 | rt << 21 | rt << 16
+-            and word(L + 8) == word(L + 12) == word(L + 16) == 0 and word(L + 20) == 0x1000fffa | rt << 21 and word(L + 24) == 0)
++    r1 = (word(L + 4) == 0x30000004 | rt << 21 | rt << 16 and word(L + 8) == word(L + 12) == word(L + 16) == 0
++          and word(L + 20) == 0x1000fffa | rt << 21 and word(L + 24) == 0)
++    # UYA's sceGsSyncV poll (0x11f390): lw rt,(rs); andi rt,rt,4; bnez rt,+4; nop; lw rt,0(sp); beqz rt,-6; nop (rec/mod.rs poll_ff
++    # checks the rest at run time)
++    r3 = (word(L + 4) == 0x30000004 | rt << 21 | rt << 16 and word(L + 8) == 0x14000004 | rt << 21 and word(L + 12) == word(L + 24) == 0
++          and word(L + 16) == 0x8fa00000 | rt << 16 and word(L + 20) == 0x1000fffa | rt << 21)
++    return w >> 26 == 0x23 and rt != 0 and rs != rt and (r1 or r3)
+ 
+ if A.src == 'iso':
+     if not A.iso:
+@@ -419,10 +523,20 @@ if A.src == 'iso':
+         OV_START, VBLANK_WAIT, PAD_READ, CODE_HI, PFX = 0x26e780, 0x11b190, 0x128a50, 0x460000, 'r2'
+         # Code between the listed functions may be data the level changes (one changed word disables a whole set).
+         A.no_holes = True
++    if ISO_VER == 'rc3':
++        # UYA: resident core below 0x1d5680, overlays above (levels' code runs to 0x6debb8); no vblank poll / pad read address
++        # of the R&C1 kind (rc3/mod.rs ADDRS); the bounds list is exact, so no code is searched for between its functions.
++        OV_START, VBLANK_WAIT, PAD_READ, CODE_HI, PFX = RC3_CORE_END, 0xffff_fff0, 0xffff_fff0, 0x700000, 'r3'
++        A.no_holes = True
++        if A.bounds is None:
++            sys.exit('--bounds PATH is required for Up Your Arsenal (scripts/uya_bounds.py writes it from rac3-decomp)')
+     if A.bounds is None:
+         A.bounds = os.path.join(HERE, ISO_VERSIONS[ISO_VER][4])
+     _d = IsoDisc(A.iso)
+-    ram = bytes(iso_build_image(_d, lvl, zero_from=OV_START)[0])
++    if ISO_VER == 'rc3':
++        ram = bytes(rc3_build_image(_d, lvl))
++    else:
++        ram = bytes(iso_build_image(_d, lvl, zero_from=OV_START)[0])
+ else:
+     ram = open(os.path.join(A.src.split(':', 1)[1], 'eeMemory.bin'), 'rb').read()
+ if A.bounds is None:
+@@ -460,7 +574,7 @@ if A.names and not is_front(lvl):
+ 
+ # Stops: the vblank poll, the stubbed functions (interpreter HLE) and the pad read.
+ stops = {PAD_READ}
+-for line in open(A.stubs):
++for line in open(os.path.join(A.oracle, 'src', 'rc3', 'stubs.txt') if ISO_VER == 'rc3' else A.stubs):
+     p = line.split()
+     if not p or p[0].startswith('#'):
+         continue
+@@ -469,11 +583,22 @@ for line in open(A.stubs):
+             stops.add(int(p[1], 16))
+     else:
+         stops.add(int(p[0], 16))
+-# R&C2's cold-boot hook rules (ee-oracle rc2/cold_hooks.txt) run in the dispatcher's stub check; one at a function entry
+-# also runs from the compiled prologue (`c.hand`), one at any other address must stay visible there, so it is a stop.
+-if ISO_VER == 'rc2':
++# R&C2's and UYA's cold-boot hook rules (ee-oracle rc2 / rc3 cold_hooks.txt) run in the dispatcher's stub check; one at a function
++# entry also runs from the compiled prologue (`c.hand`), one at any other address must stay visible there, so it is a stop.
++if ISO_VER == 'rc3':
++    # UYA's host stubs (ee-oracle Cpu::add_host_stub, rc3/mod.rs `install`) run only where the interpreter or the dispatcher looks
++    # (`Cpu::stub`), never from a direct compiled call: those functions are not compiled at all, so every call to them goes through
++    # the dispatcher. Their addresses are the constants of rc3/movie.rs and rc3/sif.rs.
++    for _f, _c in (('movie.rs', 'PLAYER'), ('sif.rs', 'CHECK_STAT')):
++        _m = re.search(rf'pub const {_c}: u32 = (0x[0-9a-f_]+);', open(os.path.join(A.oracle, 'src', 'rc3', _f)).read())
++        if _m is None:
++            sys.exit(f'rc3/{_f}: no `pub const {_c}: u32 = 0x...;`')
++        stops.add(int(_m.group(1).replace('_', ''), 16))
++    # every function whose entry is a stop (host stub, HLE stub) stays interpreted
++    fns = [(lo, hi) for lo, hi in fns if lo not in stops]
++if ISO_VER in ('rc2', 'rc3'):
+     _entries = {lo for lo, _ in fns}
+-    for line in open(os.path.join(A.oracle, 'src', 'rc2', 'cold_hooks.txt')):
++    for line in open(os.path.join(A.oracle, 'src', ISO_VER, 'cold_hooks.txt')):
+         p = line.split()
+         if len(p) >= 2 and not p[0].startswith('#'):
+             try:
+@@ -511,7 +636,7 @@ TITLE_CODE = [(0x3c020000, 0xffff0000), (0x8c420000, 0xffff0000), (0x50400004, ~
+               (0xac820034, ~0), (0x03e00008, ~0), (0x0000102d, ~0)]
+ FE_WINDOW = None     # (lo, hi): the front end's text, the only place discover_holes looks for functions
+ FE_DROP = {}         # entry -> what: functions that are not compiled
+-if is_front(lvl):
++if is_front(lvl) and ISO_VER != 'rc3':
+     if A.src != 'iso':
+         sys.exit('--level 19/20 (front end) needs --src iso')
+     _wlo, _whi_b, _whi_a = iso_front_window(_d)
+-- 
+2.51.2.windows.1
+

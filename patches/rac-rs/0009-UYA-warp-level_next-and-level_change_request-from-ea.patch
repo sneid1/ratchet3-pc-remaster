@@ -1,0 +1,88 @@
+From 2da12cec033f5e0b9db3803db914a871845a3d77 Mon Sep 17 00:00:00 2001
+From: sneid1 <sneid1@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 16:28:10 +1100
+Subject: [PATCH 11/12] UYA warp: level_next and level_change_request from each
+ level's own request_level_change
+
+Each level program is linked on its own: level_next is gp + 0x3314 in Veldin but gp + 0x2c94 in Starship Phoenix. The warp read
+Veldin's address in every level, saw a wrong "mapping" and wrote the level number into another variable of the level being left.
+It now takes both words from the function's own sw ...($gp) stores and the live $gp.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ oracle/src/rc3/warp.rs | 35 ++++++++++++++++++++++++++---------
+ 1 file changed, 26 insertions(+), 9 deletions(-)
+
+diff --git a/oracle/src/rc3/warp.rs b/oracle/src/rc3/warp.rs
+index 0e6836c..a26519e 100644
+--- a/oracle/src/rc3/warp.rs
++++ b/oracle/src/rc3/warp.rs
+@@ -5,7 +5,8 @@
+ //! the hero's start fields. The level's main loop sees the request at the top of its next frame and runs `level_change` (the
+ //! teardown), `level_switch` and `level_load` with the level's own transition and set-up, as a trip in the ship does. When the
+ //! story state mapped the level to another one, `level_next` is set back to the level asked for (the warp loads the program
+-//! asked for); `Warp::mapped` says so.
++//! asked for); `Warp::mapped` says so. Each level program is linked on its own, so the two words are found in the function's own
++//! code (its `sw v0, off(gp)` after `li v0, 1` and its `sw a1, off(gp)`: Veldin gp + 0x3314, Starship Phoenix gp + 0x2c94).
+ //!
+ //! The call runs on the host between fields with the registers saved and put back afterwards, interrupts masked (the vblank
+ //! raised for the parked field must be taken by the game thread, not inside the call) and its own stack frame below the game's.
+@@ -22,11 +23,10 @@ const REQUEST: [(u32, u32); 34] = [
+ ];
+ /// Its first four code words, the same in every level program: the call is made only while they are in RAM.
+ const SIG: [u32; 4] = [0x27bd_ffe0, 0xffb0_0010, 0xafa4_0000, 0x00a0_802d];
+-/// `level_current` (1 Veldin, 2 Florana, ...).
++/// `level_current` (1 Veldin, 2 Florana, ...), in the main program.
+ pub const LEVEL_CURRENT: u32 = 0x1d_545c;
+-/// `level_next` and `level_change_request`: $gp (0x1dc8b0) + 0x3314 and - 0x623c, as request_level_change addresses them.
+-pub const LEVEL_NEXT: u32 = 0x1d_fbc4;
+-pub const CHANGE_REQUEST: u32 = 0x1d_6674;
++/// Code words of request_level_change searched for its two stores.
++const SCAN: u32 = 24;
+ /// The return address the call is given: free low RAM that is never executed (the call ends when the pc reaches it).
+ const RET: u32 = 0xff0;
+ 
+@@ -49,6 +49,23 @@ pub fn warp(c: &mut Cpu, level: u32) -> Result<Warp, String> {
+             return Err(format!("warp: level {from}'s request_level_change at {f:#x} is not in RAM (word {k} is {got:08x}, not {w:08x})"));
+         }
+     }
++    // Its stores of level_change_request (v0, r2) and level_next (a1, r5) relative to $gp.
++    let (mut req_off, mut next_off) = (None, None);
++    for k in 0..SCAN {
++        let w = c.mem.rd32(f + 4 * k);
++        if w >> 26 == 0x2b && (w >> 21) & 31 == 28 {
++            match (w >> 16) & 31 {
++                2 => req_off = Some(w as u16 as i16 as i32),
++                5 => next_off = Some(w as u16 as i16 as i32),
++                _ => {}
++            }
++        }
++    }
++    let (Some(req_off), Some(next_off)) = (req_off, next_off) else {
++        return Err(format!("warp: level {from}'s request_level_change at {f:#x} has no store of level_next and level_change_request"));
++    };
++    let gp = c.g(28) as u32;
++    let (change_request, level_next) = (gp.wrapping_add(req_off as u32), gp.wrapping_add(next_off as u32));
+     let (r, hi, lo, sa, pc, npc, status) = (c.r, c.hi, c.lo, c.sa, c.pc, c.npc, c.cp0[12]);
+     let sp = (c.g(29) as u32).wrapping_sub(0x400) & !0xf;
+     c.s(29, sp as i32 as i64 as u64);
+@@ -63,12 +80,12 @@ pub fn warp(c: &mut Cpu, level: u32) -> Result<Warp, String> {
+     if !ended {
+         return Err(format!("warp: request_level_change did not return (pc {at:08x}, stop {stop:?}, fault {fault:?})"));
+     }
+-    if c.mem.rd32(CHANGE_REQUEST) != 1 {
+-        return Err("warp: request_level_change returned without setting level_change_request".into());
++    if c.mem.rd32(change_request) != 1 {
++        return Err(format!("warp: request_level_change returned without setting level_change_request ({change_request:#x})"));
+     }
+-    let mapped = c.mem.rd32(LEVEL_NEXT);
++    let mapped = c.mem.rd32(level_next);
+     if mapped != level {
+-        c.mem.wr32(LEVEL_NEXT, level);
++        c.mem.wr32(level_next, level);
+     }
+     Ok(Warp { from, mapped })
+ }
+-- 
+2.51.2.windows.1
+

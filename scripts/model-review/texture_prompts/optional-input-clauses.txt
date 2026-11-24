@@ -1,0 +1,19 @@
+VARIANT (current image 2 contract)
+
+Image 2 is a previously accepted redraw of the same layout in another colour scheme. Use its compatible drawing technique and corresponding detail only where those features agree with Image 1. Image 1 controls every feature's position, size, colours, brightness, shading and intentional edge softness. Do not import Image 2's palette, extra features, layout errors or lighting changes.
+
+RGB-ONLY ALPHA NOTE
+
+This texture uses transparency in the game, but the supplied reference is RGB and contains no alpha mask. Reconstruct the supplied colour image only. Preserve visible silhouettes, edge colours and soft colour fades at their original widths. Do not infer transparent holes from black pixels, invent a cutout, harden fading edges or add a new background.
+
+OPTIONAL HARD-PIXEL SOURCE
+
+Image {pixel_reference_index} is the same source enlarged with hard pixels. Use it to identify the original small-feature layout, colour boundaries and grain scale. Reconstruct those marks at native resolution without drawing the square pixel grid. It supplies source evidence, not a different texture or a style to copy.
+
+TILING
+
+{
+  "x": "This texture repeats horizontally. Preserve the existing wrap across the left and right edges, including the positions and widths of features meeting there. Do not add a border or alter the interior layout to disguise a mismatch.",
+  "y": "This texture repeats vertically. Preserve the existing wrap across the top and bottom edges, including the positions and widths of features meeting there. Do not add a border or alter the interior layout to disguise a mismatch.",
+  "xy": "This texture repeats horizontally and vertically. Preserve the existing wrap across both pairs of opposite edges, including the positions and widths of features meeting there. Do not add a border or alter the interior layout to disguise a mismatch."
+}

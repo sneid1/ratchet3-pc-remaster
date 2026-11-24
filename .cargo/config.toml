@@ -1,0 +1,6 @@
+# The linker for every build in the repository (the port, the translator, the level libraries): the LLD that ships with the
+# Rust toolchain (rustlib\x86_64-pc-windows-msvc\bin\rust-lld.exe). It links the same MSVC import libraries and C runtime as
+# link.exe (it reads LIB from vcvars64), writes PDBs, and keeps .pdata/.xdata for unwinding; it resolves symbols and writes the
+# PDB on many threads, where link.exe took about 11 minutes over uya.exe's 414 MB PDB (PLAN 5.3).
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"

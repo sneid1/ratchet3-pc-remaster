@@ -1,0 +1,298 @@
+From 67c6c9e95abc82740b53679c5abf4c230d5a763e Mon Sep 17 00:00:00 2001
+From: sneid1 <sneid1@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 14:22:02 +1100
+Subject: [PATCH] UYA sound: version 3 grains decoded, 989snd RNG from UYA's
+ module image
+
+SBlk version 3 grains (8-byte records: type << 24 | operand, delay) are translated at parse time to the
+model's version 1 grains, with their operands read where UYA's 989snd grain handlers (table 0x1d638) read
+them: tones and LFOs from the parameter area at SBlk +0x34, the rest from the three signed operand bytes.
+The v3 loop end jumps back at most once per tick (flag 0x40), and type 44 (copy register) is new.
+
+The driver's R250 table comes from UYA's 989snd module image in EE RAM at its init call: without it every
+draw was 0, random waits never waited and looping ambiences took all 48 voices.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ oracle/src/rc3/hle.rs        | 16 +++++++
+ oracle/src/snd989/bank.rs    | 93 +++++++++++++++++++++++++++++++++---
+ oracle/src/snd989/handler.rs | 24 ++++++++--
+ oracle/src/snd989/rng.rs     | 18 +++++++
+ 4 files changed, 142 insertions(+), 9 deletions(-)
+
+diff --git a/oracle/src/rc3/hle.rs b/oracle/src/rc3/hle.rs
+index 8c94b42..00ca2c7 100644
+--- a/oracle/src/rc3/hle.rs
++++ b/oracle/src/rc3/hle.rs
+@@ -210,6 +210,9 @@ impl Cpu {
+                 let nowait = self.g(6) & 1 != 0 && recv != 0;
+                 let before = if nowait { super::sif::before(self, recv, rsize) } else { Vec::new() };
+                 self.snd_rpc_rc2(fno, send, ssize, recv, rsize);
++                if fno == 0 {
++                    self.snd_rng_rc3();
++                }
+                 if nowait {
+                     super::sif::hold(self, client, recv, before);
+                 }
+@@ -250,6 +253,19 @@ impl Cpu {
+         ));
+     }
+ 
++    /// 989snd's module init (fno 0): its random stream starts from the table in the module's own .data (rng.rs
++    /// `from_uya_irx`), read from the module image the EE loaded the IOP module from, which is still in EE RAM at this call.
++    /// Without it every draw is 0: a random wait never waits, and a looping ambience keys a voice every tick until the 48
++    /// voices are gone.
++    fn snd_rng_rc3(&mut self) {
++        use crate::snd989::{irx::{Irx, MODULE_989SND}, rng::Rng250};
++        let elf = Irx::find_in_blob(&self.mem.ram[..32 << 20], MODULE_989SND).ok_or_else(|| "989snd: the module image is not in EE RAM".to_string());
++        match elf.and_then(|e| Irx::parse(e)).and_then(|irx| Rng250::from_uya_irx(&irx)) {
++            Ok(rng) => self.snd.ensure(&self.iop, &self.mem.ram, true, 0).drv.core.rng = rng,
++            Err(e) => self.stop = Some(e),
++        }
++    }
++
+     fn zero_reply(&mut self, recv: u32, rsize: u32) {
+         for k in 0..rsize / 4 {
+             self.mem.wr32(recv + 4 * k, 0);
+diff --git a/oracle/src/snd989/bank.rs b/oracle/src/snd989/bank.rs
+index 2bd3da6..865bbfd 100644
+--- a/oracle/src/snd989/bank.rs
++++ b/oracle/src/snd989/bank.rs
+@@ -8,6 +8,8 @@
+ //! +0x20 u32 grain table offset. Sound entry (12 bytes): +0 s8 volume, +1 u8 volume group, +2 u16 pan degrees,
+ //! +4 u8 grain count, +5 pad, +6 u16 flags, +8 u32 byte offset of its grains inside the grain table.
+ //! Grain (0x28 bytes): u32 type, u32 delay (the driver reads the u16 at +4), 32 operand bytes ("p" = grain+8).
++//! Version 3 (Up Your Arsenal's 989snd): 8-byte grains plus a parameter area (+0x34), translated to version 1 grains at
++//! parse time (`Grain::from_v3`).
+ 
+ use std::collections::HashMap;
+ use std::sync::Arc;
+@@ -15,6 +17,8 @@ use std::sync::Arc;
+ pub const SECTOR: usize = 0x800;
+ pub const GRAIN_BYTES: usize = 0x28;
+ pub const SOUND_BYTES: usize = 12;
++/// A version 3 grain: u32 word (type << 24 | operand), u32 delay.
++pub const GRAIN3_BYTES: usize = 8;
+ 
+ /// Grain type 1: key a tone on.
+ pub const GRAIN_TONE: u32 = 1;
+@@ -62,6 +66,74 @@ impl Grain {
+         u32::from_le_bytes([self.p[o], self.p[o + 1], self.p[o + 2], self.p[o + 3]])
+     }
+ 
++    /// A version 3 grain {word, delay} as the model's version 1 grain. The operands are read where UYA's 989snd grain
++    /// handlers read them (table at module 0x1d638, called from 0x6240 with the grain's address): `b` = the word's low three
++    /// bytes as s8, `params` = the bank's parameter area (SBlk +0x34) the 24-bit operand points into.
++    pub fn from_v3(word: u32, delay: u32, meta: &[u8], params: usize) -> Result<Grain, String> {
++        let (kind, arg) = (word >> 24, (word & 0xff_ffff) as usize);
++        let b = word.to_le_bytes().map(|x| x as i8 as i16);
++        let delay = u16::try_from(delay).map_err(|_| format!("type {kind} delay {delay:#x} beyond 16 bits"))?;
++        let mut p = [0u8; 32];
++        let put = |p: &mut [u8; 32], o: usize, v: i16| p[o..o + 2].copy_from_slice(&v.to_le_bytes());
++        let kind = match kind {
++            // 0x4a2c, the handler of both: the 0x18-byte tone record at params + arg, version 1's tone operands.
++            1 | 9 => {
++                p[..0x18].copy_from_slice(span(meta, params + arg, 0x18)?);
++                GRAIN_TONE
++            }
++            // 0x4f34: the 16-byte LFO record at params + arg: version 1's operands except the start phase, +0xa (v1 +0x12).
++            4 => {
++                let l = span(meta, params + arg, 0x10)?;
++                p[..0x10].copy_from_slice(l);
++                p[0x12..0x14].copy_from_slice(&l[0xa..0xc]);
++                4
++            }
++            // 0x506c: the loop end of version 3 jumps back at most once per tick; a second jump in the same tick waits one
++            // tick (handler flag 0x40, cleared every tick). Marked in p0 for the model (`exec`, type 22).
++            22 => {
++                p[0] = 1;
++                22
++            }
++            // 0x5204 random block (N, L, last pick), 0x5560 random register (reg, low, high), 0x56d4 register test (reg, op,
++            // value), 0x5980 sequential block (N, L, state): version 1's p0 / p2 / p4.
++            25 | 31 | 34 | 39 => {
++                put(&mut p, 0, b[0]);
++                put(&mut p, 2, b[1]);
++                put(&mut p, 4, b[2]);
++                kind
++            }
++            // 0x5314 random wait: rand % (24-bit operand + 1). The model's operand is s16 (version 1).
++            26 => {
++                put(&mut p, 0, i16::try_from(arg).map_err(|_| format!("random wait {arg:#x} beyond the model's 16-bit operand"))?);
++                26
++            }
++            // 0x5360 random bend (s8 percent), 0x5428 bend, 0x54a0 add to bend, 0x55f4 / 0x5664 register inc / dec,
++            // 0x5798 marker id, 0x57a0 goto marker: one s8 operand, version 1's p0.
++            27 | 28 | 29 | 32 | 33 | 35 | 36 => {
++                put(&mut p, 0, b[0]);
++                kind
++            }
++            // 0x5524 set register: reg (s8), value (u8 at p2).
++            30 => {
++                put(&mut p, 0, b[0]);
++                p[2] = word.to_le_bytes()[1];
++                30
++            }
++            // 0x5848 random goto (low, high marker), 0x5a4c add to register (value, reg), 0x5b2c copy register (from, to):
++            // version 1's p0 / p2.
++            37 | 40 | 44 => {
++                put(&mut p, 0, b[0]);
++                put(&mut p, 2, b[1]);
++                kind
++            }
++            // No operands: 0x4a24 null, 0x4f24 / 0x4f2c cross references, 0x505c / 0x5064 control null / loop start, 0x511c
++            // loop continue, 0x51b8 stop, 0x5944 wait for voices, 0x5ab0 / 0x5ad4 key off / kill voices, 0x5b0c stop marker.
++            0 | 2 | 3 | 20 | 21 | 23 | 24 | 38 | 41 | 42 | 43 => kind,
++            _ => return Err(format!("version 3 grain type {kind} (operand {arg:#x}) is not decoded")),
++        };
++        Ok(Grain { kind, delay, p })
++    }
++
+     /// The tone operands of a type-1 grain.
+     pub fn tone(&self) -> Option<Tone> {
+         if self.kind != GRAIN_TONE {
+@@ -193,15 +265,24 @@ impl Bank {
+         let signature = Signature::from_sblk(meta)?;
+         let sound_table = u32le(meta, 0x1c)? as usize;
+         if version == 3 {
+-            // Version 3 (Up Your Arsenal): the header counts, the sound table offset (+0x1c) and its 12-byte entries are
+-            // version 1's, but a grain is an 8-byte record (each sound's grain offset steps by 8 per grain; the grain area
+-            // ends at the offset in +0x34, where a parameter area begins) whose layout the model does not decode yet. The
+-            // bank loads with its sample data and every sound entry, without grains: the model voices none of them, so a
+-            // play returns no handle (`playable`).
++            // Version 3 (Up Your Arsenal's 989snd): the header counts, the sound table (+0x1c) and its 12-byte entries are
++            // version 1's (+5 is the instance limit). A grain is an 8-byte record {u32 word, u32 delay} in the table at +0x20
++            // (a sound's grain offset steps by 8 per grain); the word's top byte is the type, its low 24 bits the operand:
++            // three signed bytes, or a byte offset into the parameter area at +0x34 (tones, LFOs). Each grain is translated
++            // to the version 1 operands the model reads (`Grain::from_v3`).
++            let grain_table = u32le(meta, 0x20)? as usize;
++            let params = u32le(meta, 0x34)? as usize;
+             let mut sounds = Vec::with_capacity(signature.sounds as usize);
+             for i in 0..signature.sounds as usize {
+                 let e = span(meta, sound_table + i * SOUND_BYTES, SOUND_BYTES)?;
+-                sounds.push(Sound { volume: e[0] as i8, group: e[1], pan: u16le(e, 2)?, pad5: e[5], flags: u16le(e, 6)?, grain_offset: u32le(e, 8)?, grains: Vec::new() });
++                let (count, grain_offset) = (e[4] as usize, u32le(e, 8)?);
++                let mut list = Vec::with_capacity(count);
++                for g in 0..count {
++                    let at = grain_table + grain_offset as usize + g * GRAIN3_BYTES;
++                    let grain = u32le(meta, at).and_then(|word| Grain::from_v3(word, u32le(meta, at + 4)?, meta, params));
++                    list.push(grain.map_err(|err| format!("sound {i} grain {g}: {err}"))?);
++                }
++                sounds.push(Sound { volume: e[0] as i8, group: e[1], pan: u16le(e, 2)?, pad5: e[5], flags: u16le(e, 6)?, grain_offset, grains: list });
+             }
+             return Ok(Bank { signature, sounds, data: data.to_vec() });
+         }
+diff --git a/oracle/src/snd989/handler.rs b/oracle/src/snd989/handler.rs
+index d2b075b..f0f8ed2 100644
+--- a/oracle/src/snd989/handler.rs
++++ b/oracle/src/snd989/handler.rs
+@@ -23,6 +23,8 @@ pub const HANDLE_LINKED: u32 = 0x8000_0000;
+ pub const HANDLE_TYPE: u32 = 0x0500_0000;
+ /// Guard against an endless zero-delay loop inside one tick (retail would hang the IOP thread).
+ pub const MAX_GRAINS_PER_PASS: u32 = 200_000;
++/// Handler flag (+0x16) of a version 3 loop end that jumped back in this tick (UYA's 989snd 0x506c / 0x47dc).
++pub const FLAG_LOOPED: u8 = 0x40;
+ 
+ /// Error codes passed to FUN_00001e64 by the grain handlers.
+ pub mod err {
+@@ -32,7 +34,7 @@ pub mod err {
+     pub const GOTO_MISSING: u32 = 11; // grain 36, 0x5224
+     pub const RANDOM_GOTO_MISSING: u32 = 12; // grain 37, 0x52cc
+     pub const SEQ_BLOCK_NESTED: u32 = 13; // grain 39, 0x5420
+-    pub const BAD_GRAIN: u32 = 0x5f; // types 8-19, 5-7 (children, not modelled), >= 44 (null handler)
++    pub const BAD_GRAIN: u32 = 0x5f; // types 8-19, 5-7 (children, not modelled), >= 45 (null handler; 44 = version 3 copy register)
+     pub const DIVIDE_TRAP: u32 = 0x1c00; // `trap(0x1c00)` in a % by zero
+     pub const RUNAWAY: u32 = 0xffff_0001; // MAX_GRAINS_PER_PASS exceeded (model guard, not a retail code)
+     pub const BAD_INDEX: u32 = 0xffff_0002; // idx outside the grain table (model guard)
+@@ -569,11 +571,19 @@ impl Core {
+             1 => self.grain_tone(s, bank, gi, v, lfo),
+             4 => self.grain_lfo(s, g, lfo),
+             22 => {
+-                // 0x4b84: idx := (nearest type-21 before this grain) - 1
++                // 0x4b84: idx := (nearest type-21 before this grain) - 1. A version 3 loop end (p0 = 1, bank.rs
++                // `Grain::from_v3`; UYA 0x506c) jumps back at most once per tick: the second jump in a tick waits one tick
++                // (handler flag 0x40, cleared at every tick of the handler).
+                 let mut j = self.slots[s].idx as i32 - 1;
+                 while j >= 0 {
+                     if grains[j as usize].kind == 21 {
+                         self.slots[s].idx = (j - 1) as i16;
++                        if g.u8_at(0) == 1 {
++                            if self.slots[s].flags & FLAG_LOOPED != 0 {
++                                return 1;
++                            }
++                            self.slots[s].flags |= FLAG_LOOPED;
++                        }
+                         return 0;
+                     }
+                     j -= 1;
+@@ -771,8 +781,14 @@ impl Core {
+                 self.slots[s].idx = (count - 1) as i16;
+                 0
+             }
++            44 => {
++                // version 3 only (UYA 0x5b2c): register p2 := register p0
++                let r = self.reg(s, g.s16_at(0));
++                self.set_reg(s, g.s16_at(2), r);
++                0
++            }
+             _ => {
+-                // 5-7 (child sounds, not in any bank), 8-19, >= 44 (null table entry)
++                // 5-7 (child sounds, not in any bank), 8-19, >= 45 (null table entry; 44 is version 3's copy register)
+                 self.error(s, err::BAD_GRAIN);
+                 -1
+             }
+@@ -972,6 +988,7 @@ impl Core {
+             self.slots[s].masks = [0, 0];
+             self.voice_ends(ends, lfo);
+             self.slots[s].idx = (k + 1) as i16;
++            self.slots[s].flags &= !FLAG_LOOPED;
+             let mut guard = 0;
+             loop {
+                 if self.slots[s].idx == -1 {
+@@ -1195,6 +1212,7 @@ impl Core {
+         if self.slots[s].idx == -1 {
+             return false;
+         }
++        self.slots[s].flags &= !FLAG_LOOPED;
+         self.slots[s].wait = self.slots[s].wait.wrapping_sub(1);
+         let mut guard = 0;
+         while self.slots[s].wait < 1 {
+diff --git a/oracle/src/snd989/rng.rs b/oracle/src/snd989/rng.rs
+index a463e85..f30ace2 100644
+--- a/oracle/src/snd989/rng.rs
++++ b/oracle/src/snd989/rng.rs
+@@ -9,6 +9,11 @@ use super::irx::Irx;
+ pub const TABLE_ADDR: u32 = 0x18f44;
+ pub const INDEX_ADDR: u32 = 0x18f40;
+ pub const LEN: usize = 250;
++/// Up Your Arsenal's 989snd: rand (its first four code words), the u16 index and the table.
++pub const UYA_RAND: u32 = 0xbecc;
++pub const UYA_RAND_CODE: [u32; 4] = [0x3c07_0002, 0x00e0_4821, 0x84e6_d7e8, 0x94e8_d7e8];
++pub const UYA_INDEX_ADDR: u32 = 0x1d7e8;
++pub const UYA_TABLE_ADDR: u32 = 0x1d7ec;
+ 
+ #[derive(Clone, Debug, PartialEq, Eq)]
+ pub struct Rng250 {
+@@ -31,6 +36,19 @@ impl Rng250 {
+         Rng250::from_state(decode(raw), i)
+     }
+ 
++    /// Initial state of Up Your Arsenal's 989snd (the version 3 driver): the same generator (rand at module 0xbecc), its
++    /// index a u16 at 0x1d7e8 and the table at 0x1d7ec of the module's .data. The rand code is checked first, so another
++    /// build of the module fails here instead of drawing from the wrong bytes.
++    pub fn from_uya_irx(irx: &Irx) -> Result<Rng250, String> {
++        let code: Vec<Option<u32>> = (0..4).map(|k| irx.u32_at(UYA_RAND + 4 * k)).collect();
++        if code != UYA_RAND_CODE.map(Some) {
++            return Err(format!("989snd: no R250 rand at {UYA_RAND:#x} ({code:x?})"));
++        }
++        let raw = irx.bytes(UYA_TABLE_ADDR, LEN * 2).ok_or("989snd: R250 table outside the module image")?;
++        let i = irx.u16_at(UYA_INDEX_ADDR).ok_or("989snd: R250 index outside the module image")? as usize;
++        Rng250::from_state(decode(raw), i)
++    }
++
+     /// Continue exactly where a savestate's IOP RAM is: `base` = the module's load address
+     /// (`Irx::find_base_in_ram`), table at base + 0x18f44, index word at base + 0x18f40.
+     pub fn from_iop(iop: &[u8], base: u32) -> Result<Rng250, String> {
+-- 
+2.51.2.windows.1
+

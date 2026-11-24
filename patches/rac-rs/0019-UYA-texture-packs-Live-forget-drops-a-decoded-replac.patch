@@ -1,0 +1,31 @@
+From af30dd06e2ace733456741fe23fcc4e96cf96bb6 Mon Sep 17 00:00:00 2001
+From: sneid1 <sneid1@users.noreply.github.com>
+Date: Fri, 13 Nov 2026 15:37:14 +1100
+Subject: [PATCH] UYA texture packs: Live::forget drops a decoded replacement
+ once a renderer has uploaded it
+
+---
+ rac-rs/src/engine/texpack/live.rs | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/rac-rs/src/engine/texpack/live.rs b/rac-rs/src/engine/texpack/live.rs
+index d228fff..ab14401 100644
+--- a/rac-rs/src/engine/texpack/live.rs
++++ b/rac-rs/src/engine/texpack/live.rs
+@@ -150,6 +150,13 @@ impl Live {
+ 		Ok(r)
+ 	}
+ 
++	/// Drops the decoded chain of `name`: a renderer that has uploaded it keeps no copy here (a later `get` decodes it again).
++	pub fn forget(&mut self, name: &TexName) {
++		if let Some(Some(r)) = self.cache.remove(name) {
++			self.used -= r.bytes();
++		}
++	}
++
+ 	/// Every replacement looked up so far, in order of first use.
+ 	pub fn outcomes(&self) -> &[Outcome] {
+ 		&self.outcomes
+-- 
+2.51.2.windows.1
+

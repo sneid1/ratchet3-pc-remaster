@@ -1,0 +1,38 @@
+[package]
+name = "uya"
+version = "0.1.0"
+edition = "2024"
+
+# The game: the port's own code alone, no rac-rs crate (PLAN item 0.6; `cargo tree -p uya` shows it). The library (src/lib.rs) is
+# the game's code, src/main.rs its command line; the emulated reference, port/uyaref, uses the library and is built apart.
+[dependencies]
+# This game's disc and data formats: what the native world renderer draws (src/native.rs).
+uyafmt = { path = "../uyafmt" }
+# The native world renderer (src/native.rs). wgpu-hal is the port's copy with its one DirectX 12 change (port/vendor/wgpu-hal).
+wgpu = "30.0.1"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+# DLSS (src/dlss.rs): NVIDIA's upscaler on wgpu's Vulkan backend. Its build needs DLSS_SDK (NVIDIA's DLSS SDK checkout),
+# VULKAN_SDK (a folder with Include/vulkan) and LIBCLANG_PATH (bindgen's libclang): docs/WORKFLOW.md, "DLSS".
+dlss_wgpu = "6.0.0"
+uuid = "1"
+pollster = "1.0.1"
+# The port's own runtime (PLAN item 0) and the game's code as port/uyatr translates it from the player's disc into translated/uya
+# (gitignored, never committed; a build without it fails).
+uyart = { path = "../uyart" }
+uya-game = { path = "../../translated/uya/game" }
+tr-vu1 = { path = "../../translated/uya/vu1" }
+# The play window (src/play.rs): raw-window-handle 0.6 for wgpu's surface.
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06"] }
+# The game's text in a vector font (src/text.rs): ttf-parser's rasteriser.
+ab_glyph = "0.2.32"
+# The live audio output (src/audio.rs).
+cpal = "0.18.2"
+
+[target.'cfg(windows)'.dependencies]
+# SetPriorityClass (the batch commands run below normal priority, `lower_priority`; `uya play` at normal), XInput (Xbox
+# controllers) and the HID API (DualSense, DualShock 4) for src/input.rs; the console (`keep_log`).
+windows = { version = "0.62", default-features = false, features = ["Win32_System_Console", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_UI_Input_XboxController", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO", "Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Kernel"] }
+
+[build-dependencies]
+# The Streamline layer (native/streamline.cpp), compiled with the SDK's headers (STREAMLINE_SDK).
+cc = "1"

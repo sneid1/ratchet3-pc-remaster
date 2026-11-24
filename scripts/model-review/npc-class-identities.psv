@@ -1,0 +1,526 @@
+# NPC/enemy catalogue: identity of every jointed LEVEL class and every SCENE (cutscene) class. Authored 2026-11-17.
+# Read by catalogue_full.py, which fails on any class of the source export that is not listed here.
+#
+# Evidence: native review-renderer front/rear views (npc-catalogue/native, normal decode revision 2), the level each class
+# occurs in (story level numbers as in captures/gameplay/all-levels.png), texture-prefix matches to existing reviewed
+# assets, exact fingerprints, and exported-mesh signatures (identical positions, UVs and faces) from catalogue_export.
+# Confidence: manifest = an existing project manifest or captured asset names the class; visual+level = the render and the
+# level settle the role and a named-cast match; visual = descriptive identity from the render only (proper name not
+# asserted); signature = identical exported mesh to an identified class; unviewed = no native view (see blocker).
+#
+# @group | id | section | title | note
+@group | nefarious | Story cast | Dr. Nefarious - robot | LEVEL 7662 art pass complete (Codex). Cutscene fingerprint 88217a44 has the identical exported mesh.
+@group | lawrence | Story cast | Lawrence - butler | Cutscene-only class 6519 (no LEVEL class): Nefarious's robot butler in every Nefarious cutscene.
+@group | lawrence_bassist | Story cast | Lawrence - bassist | Cutscene-only class 7360 (level 20). The earlier candidate 4979 is a museum swordsman.
+@group | courtney | Story cast | Courtney Gears | 7109 art pass complete (Codex). 7661 has the same 5,370 triangles but different atlases (00002213 format) and levels 7/21/23.
+@group | backup_dancer | Story cast | Courtney Gears backup dancer | Purple female robot dancer on Courtney's level 21.
+@group | skrunch | Story cast | Skrunch - standard | 7969 art pass complete (Codex). Class 6816 has the identical fingerprint. Cutscene class 7657 has Skrunch's 3,022 triangles (unviewed).
+@group | skrunch_qforce | Story cast | Skrunch - Q-Force outfit | Monkey anatomy, tail and ears of Skrunch in a green hooded Q-Force suit with the Q emblem; four classes share one exported mesh.
+@group | helga | Story cast | Helga von Streissenburgen | Class 7014: large figure in a blue suit on Starship Phoenix (levels 3/6); identified by the user.
+@group | president | Story cast | President Phyronix | Cutscene-only class 5885 (levels 1/3/4). Class 7014 is Helga.
+@group | plumber | Supporting cast | Plumber | Bearded alien in work overalls with tool belt and keys, only on level 28 (the sewers). Replaces the earlier provisional Captain Blackstar match for class 4339.
+@group | director | Supporting cast | Holostar Director | Seated in a director's chair with a megaphone, only on level 23 (Holostar Clank level).
+@group | slim | Supporting cast | Slim Cognito | Class 6866: his eyes, the only part of him ever shown (Aquatos, level 8).
+@group | darla | Supporting cast | Darla Gratch | Cutscene-only class 5859 (level 9), the Channel 64 newsreader.
+@group | fred | Supporting cast | Fred | Not found: no short cat-eared alien with round glasses and a lab coat in any of the 1,327 native views (every jointed LEVEL class of the 34 story levels and every cutscene class). Possibly screen-only.
+@group | taxi_driver | Supporting cast | Taxi Driver | No driver mesh: the taxi (class 5670) has a closed canopy, and no driver class exists among the 1,327 native views.
+@group | maxmillian | Named enemies / bosses | Maxmillian | Not found in any of the 1,327 native views. His film henchmen (robot ninjas 7111/7139) and the Terror of Talos (7129) are on Holostar level 23; no separate villain mesh is among the decoded classes.
+@group | gary | Named enemies / bosses | Gary | Class 6684, Annihilation Nation boss.
+@group | helen | Named enemies / bosses | Helen | Class 6687, Annihilation Nation boss.
+@group | scorpio | Named enemies / bosses | Scorpio | Brain in a glass dome, six wheels, saw-tailed scorpion tail; Annihilation Nation (level 7).
+@group | klunk | Named enemies / bosses | Klunk | Not distinguished from the dark-suit Clank art: 6322, 8043 and cutscene class 10's costume 1 share it, and no red-eyed Clank class exists. Cutscene 8069 is standard Clank.
+@group | giant_klunk | Named enemies / bosses | Giant Klunk | Class 6666: Giant Clank's mesh with a darker body and orange trim, level 16.
+@group | momma_ty | Named enemies / bosses | Momma Tyhrranoid | Class 6623, Tyhrranosis boss.
+@group | biobliterator | Named enemies / bosses | Biobliterator (provisional) | Level 20 assembly: giant legs 6554, gun-armed sphere 6556 and crewed pod 6555, viewed from the saved tour8 level 20 frame.
+@group | big_al | Existing character variants | Big Al | 6501 art pass complete.
+@group | big_al_qforce | Existing character variants | Big Al - Q-Force outfit | Big Al's face, hair and goggles with Q-Force harness, backpack and emblem shirt on Starship Phoenix (levels 3/6). Cutscene class 8049 has the same 4,483 triangles (unviewed).
+@group | skidd | Existing character variants | Skidd McMarx - organic | 7012 art pass complete. 6499 and 7209 bind the same two atlases; 7122 binds different atlases. No two share an exported mesh.
+@group | skidd_robot | Existing character variants | Skidd McMarx - robot (provisional) | Grey robot with spiked cap and visor on level 3. Cutscene class 7986 (two fingerprints) has the same 3,872 triangles (unviewed).
+@group | sasha | Existing character variants | Sasha Phyronix | 7013 has detailed texture layers (no ledger completion). 6642 (levels 21/22) and its cutscene fingerprint share one exported mesh.
+@group | qwark_hero | Existing character variants | Captain Qwark - hero uniform | 7000 has detailed texture layers (no ledger completion). 5978 and 6491 share 7000's exported mesh; one of them binds different atlases.
+@group | qwark_tribal | Existing character variants | Captain Qwark - jungle/tribal | 6468 (captured as phoenix_crew) art pass complete. 5835 (Florana) and 7063 (museum) have the same 3,684 triangles with their own atlases.
+@group | qwark_pajamas | Existing character variants | Captain Qwark - pajamas | Button-up long johns with green gloves, level 19.
+@group | rangers | Existing character variants | Galactic Rangers | Captured Veldin pair 5542 (upper) + 6886 (legs) art pass complete. Other upper/leg classes and colourways listed per class.
+@group | phoenix_dummies | Generic enemies | Q-Force training dummies | Crash-test-dummy robots on a ball base, Starship Phoenix (level 3); three classes, one atlas.
+@group | florana_tribe | Generic enemies | Florana tribal humanoids | Lizard-faced humanoid in a leather vest (2,744 triangles) and a 161-triangle masked figure, level 2 only.
+@group | clank_standalone | Player / companion variants | Clank - standalone | Class 87 (L19 slot 60) art pass complete. Cutscene classes 10 and 8069 have Clank's 4,502 triangles (unviewed).
+@group | clank_backpack | Player / companion variants | Clank - backpack | Class 601, drawn with Clank's runtime skin; existing refined material-depth edit (blender/edited/clank.*), no ledger completion.
+@group | giant_clank | Player / companion variants | Giant Clank | Class 637 now renders with corrected normals (the old preview was empty).
+@group | agent_clank | Player / companion variants | Secret Agent Clank | 8043: Clank in black formal wear with bow tie, Holostar Clank level 23. 6322 (level 19) wears the same atlas art.
+@group | jeeves | Player / companion variants | Jeeves / chauffeur Ratchet | Cutscene-only class 6320 (Holostar film, level 23): Ratchet in chauffeur costume.
+@group | clank_like | Generic enemies | Goggled Clank-level robot | 2404: goggled round robot with a drill tail on the Clank levels 19/23/27; not Clank, Agent Clank or Klunk.
+@group | ty_grunts | Generic enemies | Tyhrranoid grunts | Eye-stalked Tyhrranoids. 5821 near mesh art pass complete (fingerprint e9cb753b). 5947 is the atlas of the captured Veldin distant Tyhrranoid and shares its mesh with 6734.
+@group | ty_armoured | Generic enemies | Armoured Tyhrranoids | 1,760-triangle armoured three-eyed Tyhrranoids. 7074 fingerprint 076c7522 art pass complete.
+@group | ty_mecha | Generic enemies | Mecha-Tyhrranoids | 3,817-triangle walkers. 6306 fingerprint 969e221b art pass complete; 7938 is the larger variant whose atlas the captured distant mesh used.
+@group | ty_hoverpod | Generic enemies | Tyhrranoid hover pods | A Tyhrranoid riding an armed hover pod (2,654 triangles).
+@group | ty_ships | Generic enemies | Tyhrranoid dropships and fighters | Enemy craft.
+@group | reptile_gunners | Generic enemies | Armoured reptilian heavy gunners | Three classes share one exported mesh (green skin, gold armour, dark armour).
+@group | robots | Generic enemies | Robot troopers and sentries | Humanoid and walker robots, drones and turrets; descriptive identities.
+@group | creatures | Generic enemies | Creatures | Organic enemies outside the Tyhrranoid forces; descriptive identities.
+@group | florana_wasp | Generic enemies | Florana wasp | 6619 (captured as florana_creature) art pass complete.
+@group | slime | Generic enemies | Sewer/Aquatos slime creatures | Slime monsters and the recurring green blob trio (three outfits per level set).
+@group | arena | Annihilation Nation arena | Arena combatants (level 7) | Gladiators, robots, drones and the arena's heavy champions; descriptive identities.
+@group | holostar | Holostar film set | Secret Agent Clank film cast (level 23) | Terror of Talos and Maxmillian's robot ninjas.
+@group | museum | Insomniac Museum exhibits | Insomniac Museum exhibits (level 24) | Prototype/unused character models on display in the bonus museum level; descriptive identities.
+@group | ambient | Ambient creatures | Ambient wildlife | Non-hostile flying creatures (pterosaur-like birds).
+@group | vidcomic | Vid-comic (out of scope) | Vid-comic characters and enemies | Levels 30-36. Out of scope: the player dropped the vid-comic levels (PLAN.md 9.2; HANDOVER "Rift Apart remaster of the picture").
+@group | weapon_summons | Weapon effects (out of scope) | Weapon-created creatures | Created by the player's weapons (duck/bird transformations, summoned robots); global classes in every story level.
+@group | player_gear | Player gear (out of scope) | Ratchet's gear, weapons and armour models | Player equipment, weapon parts and pickups; not NPCs.
+@group | vehicles | Vehicles (out of scope) | Vehicles | Driveable or set-dressing vehicles without a character; enemy craft are under ty_ships.
+@group | ship_kit | Vehicles (out of scope) | Ratchet's ship kit | Standard ship parts; the three ship art passes are complete and outside this task.
+@group | trophies | Props (out of scope) | Trophy room statues and pedestals | Golden trophies on Starship Phoenix (level 3); character-shaped statues are props.
+@group | props | Props (out of scope) | Jointed props | Jointed world objects: crates, doors, platforms, machines, signs, vendors.
+@group | no_draw | Unresolved identity | Classes the review stage cannot draw | Meshes decode, but their only texture setup is the special -1 register set; the review stage draws them fully transparent (zero pixels in the lit and normals channels), so their shapes are unseen.
+#
+# class | group | role | confidence | identity | note
+7662 | nefarious | story | manifest | Dr. Nefarious (robot) | Ledger source_c7662.
+4979 | museum | museum | visual | Armoured alien swordsman | Two swords on the back; rejected as Lawrence the bassist.
+7109 | courtney | story | manifest | Courtney Gears | Ledger source_c7109.
+7661 | courtney | story | visual+level | Courtney Gears (second class) | Same triangle count as 7109, own atlases; levels 7/21/23.
+7192 | backup_dancer | story | visual+level | Courtney Gears backup dancer |
+7969 | skrunch | story | manifest | Skrunch | Ledger source_c7969.
+6816 | skrunch | story | signature | Skrunch (level 23 class) | Identical fingerprint to 7969.
+6951 | skrunch_qforce | story | visual+level | Skrunch, Q-Force outfit | Level 9.
+7123 | skrunch_qforce | story | visual+level | Skrunch, Q-Force outfit | Levels 10/19/27.
+7795 | skrunch_qforce | story | visual+level | Skrunch, Q-Force outfit | Level 3.
+7665 | skrunch_qforce | story | signature | Skrunch, Q-Force outfit (cutscene) | Identical exported mesh to 6951/7123/7795.
+7014 | helga | story | visual+level | Helga von Streissenburgen | Corrected by the user 17 November: previously mislabelled President Phyronix.
+4339 | plumber | story | visual+level | Plumber |
+7103 | director | story | visual+level | Holostar Director |
+6680 | scorpio | boss | visual+level | Scorpio (provisional) |
+6322 | agent_clank | companion | visual | Clank in a dark suit (level 19): Secret Agent Clank or Klunk | Clank's exact mesh; its atlas is a pixel copy of 8043's dark-suit atlas, so the two classes wear the same art. Not asserted as Klunk.
+637 | giant_clank | companion | visual+level | Giant Clank |
+6601 | giant_clank | companion | signature | Giant Clank (second class, level 23) | Same 6,070 triangles and UV layout as 637; its atlases are pixel copies of 637's.
+6666 | giant_klunk | boss | visual+level | Giant Klunk | Giant Clank's 6,070-triangle mesh, darker body with orange trim; level 16 (search sessions find-npcs-1/2/3, verified in the native views 17 November).
+6501 | big_al | story | manifest | Big Al | Ledger source_c6501 (requires the edited shirt mesh).
+7121 | big_al_qforce | story | visual+level | Big Al, Q-Force outfit |
+8049 | big_al_qforce | story | visual+level | Big Al, Q-Force outfit (cutscene class) | Same design as LEVEL 7121 (cutscene native view (@scene review path) 17 November).
+7012 | skidd | story | manifest | Skidd McMarx | Ledger source_c7012.
+6499 | skidd | story | visual+level | Skidd McMarx (level 8 class) | Same atlases as 7012.
+7209 | skidd | story | visual+level | Skidd McMarx (level 11 class) | Same atlases as 7012.
+7122 | skidd | story | visual+level | Skidd McMarx, other atlases (level 11 and cutscenes) | Own atlases.
+7186 | skidd_robot | story | visual+level | Robot Skidd (provisional) |
+7986 | skidd_robot | story | visual+level | Robot Skidd (cutscene class, two fingerprints) | Same design as LEVEL 7186 (cutscene native view (@scene review path) 17 November).
+7013 | sasha | story | manifest | Sasha Phyronix | review-assets source_c7013.
+6642 | sasha | story | visual+level | Sasha Phyronix (levels 21/22, cutscenes) |
+7000 | qwark_hero | story | manifest | Captain Qwark, hero uniform | review-assets source_c7000.
+5978 | qwark_hero | story | signature | Captain Qwark, hero uniform (level 10) | Same exported mesh as 7000.
+6491 | qwark_hero | story | signature | Captain Qwark, hero uniform (level 20, cutscenes) | Same exported mesh as 7000; no native view (level 20).
+6468 | qwark_tribal | story | manifest | Captain Qwark, jungle outfit | Captured phoenix_crew prefix ce5bc261.
+5835 | qwark_tribal | story | visual+level | Captain Qwark, jungle outfit (Florana) | Level 2.
+7063 | qwark_tribal | museum | visual+level | Captain Qwark, jungle outfit (museum) | Level 24.
+6492 | qwark_pajamas | story | visual+level | Captain Qwark, pajamas |
+5542 | rangers | story | manifest | Galactic Ranger upper body | Captured ranger prefix f29031bb; art pass complete for fingerprint a898d292.
+6886 | rangers | story | manifest | Galactic Ranger legs (green) | Captured ranger prefix efa796ee; art pass complete for fingerprint 30ceb696.
+6417 | rangers | story | visual+level | Galactic Ranger upper (level 3) |
+7029 | rangers | story | visual+level | Galactic Ranger upper, 2,530 triangles (level 3) |
+6366 | rangers | story | visual+level | Galactic Ranger legs (level 3) |
+6802 | rangers | story | visual+level | Galactic Ranger legs (level 4) |
+5669 | rangers | story | visual+level | Galactic Ranger legs, blue-grey |
+7682 | rangers | story | signature | Galactic Ranger legs, blue-grey (level 20) | Same exported mesh as 5669; no native view.
+5785 | rangers | story | visual | Ranger-type legs, red |
+7679 | rangers | story | signature | Ranger-type legs, red (level 20) | Same exported mesh as 5785; no native view.
+6593 | rangers | enemy | visual | Small Ranger-atlas gun robot | Binds the captured Ranger legs atlas efa796ee.
+6522 | phoenix_dummies | enemy | visual+level | Q-Force training dummy |
+6523 | phoenix_dummies | enemy | visual+level | Q-Force training dummy |
+6524 | phoenix_dummies | enemy | visual+level | Q-Force training dummy |
+5805 | florana_tribe | enemy | visual | Lizard-faced tribal humanoid |
+5849 | florana_tribe | enemy | visual | Low-detail masked tribal figure |
+87 | clank_standalone | companion | manifest | Clank, standalone | review-assets clank_standalone.
+10 | clank_standalone | companion | visual+level | Clank (cutscene class): WAD 5 costume 0 standard silver, costume 1 dark-bodied | No images of its own; the game binds WAD 5 image class10_texture. Costume 1 matches the dark-suit art of 6322/8043 (cutscene native view (@scene review path) 17 November).
+8069 | clank_standalone | companion | visual+level | Clank (cutscene class, level 16, standard silver) | Not Klunk: plain silver body, green eyes (cutscene native view (@scene review path) 17 November).
+601 | clank_backpack | companion | manifest | Clank, backpack | review-assets clank.
+8043 | agent_clank | companion | visual+level | Secret Agent Clank (provisional) |
+2404 | clank_like | enemy | visual | Goggled round robot with drill tail |
+5821 | ty_grunts | enemy | manifest | Tyhrranoid grunt | small_ty_near prefix 1327fb77.
+7072 | ty_grunts | enemy | visual | Tyhrranoid grunt, dark variant |
+7896 | ty_grunts | enemy | visual | Tyhrranoid grunt, beige variant |
+5860 | ty_grunts | enemy | visual | Tyhrranoid, teal with yellow belly (Veldin) |
+5947 | ty_grunts | enemy | manifest | Tyhrranoid, global class | Atlas 47a27d18 of the captured Veldin small_ty distant mesh.
+6734 | ty_grunts | enemy | signature | Tyhrranoid (levels 22/27) | Same exported mesh as 5947.
+8066 | ty_grunts | enemy | visual+level | Tyhrranoid grunt (cutscene class) | Same design as 5947 (cutscene native view (@scene review path) 17 November).
+7074 | ty_armoured | enemy | manifest | Armoured Tyhrranoid | Ledger source_c7074.
+5861 | ty_armoured | enemy | visual | Armoured Tyhrranoid, pink variant |
+7940 | ty_armoured | enemy | visual | Armoured Tyhrranoid, brown variant |
+7941 | ty_armoured | enemy | visual | Armoured Tyhrranoid, dark bronze variant |
+6306 | ty_mecha | enemy | manifest | Mecha-Tyhrranoid | Ledger source_c6306.
+7939 | ty_mecha | enemy | visual | Mecha-Tyhrranoid, other atlases |
+7897 | ty_mecha | enemy | visual | Mecha-Tyhrranoid, bronze |
+7938 | ty_mecha | enemy | manifest | Mecha-Tyhrranoid, larger teal walker | Atlas e7a10620 of the captured tyhrranoid distant mesh.
+6317 | ty_hoverpod | enemy | visual | Tyhrranoid hover pod |
+7944 | ty_hoverpod | enemy | visual | Tyhrranoid hover pod, variant |
+7898 | ty_hoverpod | enemy | visual | Tyhrranoid hover pod, variant |
+6800 | ty_ships | enemy | visual | Tyhrranoid dropship |
+7338 | ty_ships | enemy | visual | Tyhrranoid dropship, variant |
+7303 | ty_ships | enemy | visual | Small Tyhrranoid lander |
+6675 | ty_ships | enemy | visual | Dark fighter craft with lights |
+5734 | ty_ships | enemy | visual | Dark fighter craft with lights (level 5) |
+5648 | ty_ships | enemy | visual | Thin flying craft |
+6969 | reptile_gunners | enemy | visual | Reptilian heavy gunner, green skin |
+7075 | reptile_gunners | enemy | signature | Reptilian heavy gunner, gold armour | Same exported mesh as 6969.
+7943 | reptile_gunners | enemy | signature | Reptilian heavy gunner, dark armour | Same exported mesh as 6969.
+5657 | robots | enemy | visual | Copper humanoid robot trooper |
+5675 | robots | enemy | visual | Silver robot trooper with arm cannons |
+7176 | robots | enemy | visual | White heavy robot with gatling arms |
+5834 | robots | enemy | visual | Yellow sentry robot with arm cannons |
+7315 | robots | enemy | visual | Grey sphere drone with orange eye |
+7149 | robots | enemy | visual | Tall green-pod walker robot |
+7158 | robots | enemy | visual | Thin dark armoured robot |
+7020 | robots | enemy | visual | White egg-bodied robot (level 11) |
+7132 | robots | enemy | visual | White egg-bodied robot (levels 5/6/17/21) |
+7541 | robots | enemy | visual | Spider-legged turret walker |
+7187 | robots | enemy | visual | Hooded gnome with twin blades |
+5969 | robots | enemy | visual | Spider sentry with purple eye |
+6447 | robots | enemy | visual | Pole sentry turret with purple eye |
+6448 | robots | enemy | visual | Pole sentry turret with purple eye, variant |
+6455 | robots | enemy | visual | Wall turret with spike launcher |
+5724 | robots | enemy | visual | Yellow cannon turret |
+7572 | robots | enemy | visual | Gatling turret |
+7157 | robots | enemy | visual | Red cannon turret on base |
+7243 | robots | enemy | visual | Gatling sphere turret |
+6598 | robots | enemy | visual | Turret on stand |
+6792 | robots | enemy | visual | Small turret |
+6869 | robots | enemy | visual | Red turret on column |
+6681 | robots | enemy | visual | Green dome turret with antenna |
+7559 | robots | enemy | visual | Small turret (level 19) |
+7195 | vidcomic | vidcomic | visual | Vid-comic gun turret |
+2375 | creatures | enemy | visual | Orange fanged creature with dorsal fin |
+5882 | creatures | enemy | visual | Tall Florana plant creature |
+6623 | momma_ty | boss | visual+level | Momma Tyhrranoid | Immense eye-stalked Tyhrranoid whose face is its torso, huge toothed mouth; Tyhrranosis (level 9) only (search sessions find-npcs-1/2/3, verified in the native views 17 November).
+6619 | florana_wasp | enemy | manifest | Florana wasp | Captured florana_creature prefix 98c818d4.
+6559 | slime | enemy | visual | Green slime monster with fangs |
+6594 | slime | boss | visual | Large spiked slime monster (level 28 only) |
+6503 | slime | enemy | visual | Green blob creature, outfit 1 (level 8) |
+6504 | slime | enemy | visual | Green blob creature, outfit 2 (level 8) |
+6505 | slime | enemy | visual | Green blob creature, outfit 3 (level 8) |
+7005 | slime | enemy | visual | Green blob creature, outfit 1 (level 28) |
+7006 | slime | enemy | visual | Green blob creature, outfit 2 (level 28) |
+7007 | slime | enemy | visual | Green blob creature, outfit 3 (level 28) |
+6494 | arena | enemy | visual | Blue fanged gladiator ogre |
+7564 | arena | enemy | visual | Yellow-green fanged gladiator ogre | Same 1,538 triangles as 6494.
+5993 | arena | enemy | visual | Orange armoured arena robot |
+7563 | arena | enemy | visual | Dark gold arena robot | Same 1,606 triangles as 5993.
+6684 | gary | boss | visual+level | Gary | Heavily armoured black and gold robot with missile pods and a huge rapid-fire gun; Annihilation Nation boss couple (search sessions find-npcs-1/2/3, verified in the native views 17 November).
+6687 | helen | boss | visual+level | Helen | Horned armoured robot with purple gauntlets and copper trim; Annihilation Nation boss couple (search sessions find-npcs-1/2/3, verified in the native views 17 November).
+6228 | arena | enemy | visual | Round grinning robot with visor and jetpack |
+6610 | arena | enemy | visual | Green dome drone |
+7560 | arena | enemy | visual | Blue dome drone |
+6611 | arena | enemy | visual | Gatling sphere turret |
+5662 | arena | enemy | visual | Orange hover tank |
+7111 | holostar | enemy | visual+level | Maxmillian's robot ninja | Slim visored ninja robot, orange and black armour (search sessions find-npcs-1/2/3, verified in the native views 17 November).
+7129 | holostar | boss | visual+level | Terror of Talos | Winged reptilian film boss with two pairs of arms; Holostar Clank level 23 (search sessions find-npcs-1/2/3, verified in the native views 17 November).
+7139 | holostar | enemy | visual+level | Maxmillian's small robot ninja with katana | Small hooded robot ninja with a katana (search sessions find-npcs-1/2/3, verified in the native views 17 November).
+5646 | museum | museum | visual+level | Unused Daxx ape-like enemy (museum exhibit) | Matches the museum's cut Daxx enemy (search sessions find-npcs-1/2/3, verified in the native views 17 November).
+5665 | museum | museum | visual | Blocky robot with staff |
+5731 | museum | museum | visual | Spiked-shell turtle creature |
+6410 | museum | museum | visual | Blue mech walker |
+6412 | museum | museum | visual | Grey mech walker |
+6694 | blackstar | museum | visual+level | Captain Blackstar (museum exhibit) | Robot pirate captain with peg leg, skull buckle and cutlass (search sessions find-npcs-1/2/3, verified in the native views 17 November).
+7003 | museum | museum | visual | Dark robot with red visor |
+7062 | museum | museum | visual | Ratchet model (museum) | 6,828 triangles; player character, catalogued as an exhibit.
+7066 | museum | museum | visual | Reptilian gunner with arm cannon | Was the rejected Lawrence match.
+7946 | museum | museum | visual | White low-poly bear-like creature |
+7947 | museum | museum | visual | Robotic bulldog |
+7728 | museum | museum | signature | Vid-comic shark-dog replica | Same exported mesh as vid-comic 5700.
+7729 | museum | museum | signature | Robotic pirate ghost crewman replica (museum) | Identical fingerprint to vid-comic 6810.
+7730 | museum | museum | signature | Vid-comic turbine creature replica | Same exported mesh as vid-comic 6470.
+7731 | museum | museum | signature | Vid-comic claw robot replica | Same exported mesh as vid-comic 7194.
+7815 | museum | museum | signature | Vid-comic purple robot replica | Same exported mesh as vid-comic 5874.
+4220 | vehicles | vehicle | visual | Black buggy (museum) |
+5588 | vehicles | vehicle | visual | Wheeled vehicle (museum) |
+5595 | props | prop | visual | Rocket (museum) |
+5602 | props | prop | visual | Rocket (museum) |
+5620 | props | prop | visual | Rocket (museum) |
+6200 | props | prop | visual | Shard (museum) |
+6201 | props | prop | visual | Shard (museum) |
+6203 | props | prop | visual | Shard (museum) |
+1564 | ambient | ambient | visual | Pterosaur-like bird |
+7306 | ambient | ambient | visual | Pterosaur-like bird (Florana) |
+4963 | vidcomic | vidcomic | visual+level | Captain Qwark, vid-comic hero |
+7929 | vidcomic | vidcomic | visual+level | Captain Qwark, vid-comic tutu |
+6609 | vidcomic | vidcomic | visual+level | Dr. Nefarious robot, vid-comic | Green brain dome.
+5718 | vidcomic | vidcomic | visual | Robotic pirate ghost crewman (vid-comic) | Blue skull face in a striped shirt; not organic Nefarious (search sessions find-npcs-1/2/3, verified in the native views 17 November).
+6810 | vidcomic | vidcomic | visual | Robotic pirate ghost crewman (vid-comic) | Identical fingerprint to museum 7729 (search sessions find-npcs-1/2/3, verified in the native views 17 November).
+5015 | vidcomic | vidcomic | visual | Spiked tank |
+5016 | vidcomic | vidcomic | visual | Blue bug creature |
+5625 | vidcomic | vidcomic | visual | Blue turret robot |
+5626 | vidcomic | vidcomic | visual | Yellow spider-leg robot |
+5633 | vidcomic | vidcomic | visual | Purple robot trooper |
+5874 | vidcomic | vidcomic | visual | Purple robot trooper |
+6636 | vidcomic | vidcomic | visual | Purple robot trooper |
+5700 | vidcomic | vidcomic | visual | Blue shark-dog creature |
+5705 | vidcomic | vidcomic | visual | Blue fish head |
+5726 | vidcomic | vidcomic | visual | Centipede |
+5736 | vidcomic | vidcomic | visual | Captain Blackstar's skull spirit (vid-comic) | Floating blue skull with tricorn hat (search sessions find-npcs-1/2/3, verified in the native views 17 November).
+6582 | vidcomic | vidcomic | visual | Captain Blackstar's skull spirit (vid-comic) | Floating blue skull with tricorn hat (search sessions find-npcs-1/2/3, verified in the native views 17 November).
+5758 | vidcomic | vidcomic | visual | Thin robot |
+5799 | vidcomic | vidcomic | visual | Winged bug |
+5877 | vidcomic | vidcomic | visual | Propeller robot head |
+5923 | vidcomic | vidcomic | visual | Claw machine robot |
+5962 | vidcomic | vidcomic | visual | Green and yellow robot soldier |
+6470 | vidcomic | vidcomic | visual | Turbine creature |
+7194 | vidcomic | vidcomic | visual | Orange claw robot |
+6341 | vidcomic | vidcomic | visual | Blue mask |
+5983 | vidcomic | vidcomic | visual | Green blob creature, outfit 1 (vid-comic) |
+5984 | vidcomic | vidcomic | visual | Green blob creature, outfit 2 (vid-comic) |
+5985 | vidcomic | vidcomic | visual | Green blob creature, outfit 3 (vid-comic) |
+5587 | vidcomic | vidcomic | unviewed | 73-joint vid-comic class, 2,445 triangles | Decoded mesh, but its only texture setup is the special -1 register set: the review stage draws nothing (zero pixels in the lit and normals channels, 17 November).
+6361 | vidcomic | prop | visual | Tank treads |
+6403 | vidcomic | prop | visual | Knife |
+5570 | vidcomic | prop | visual | Claw |
+5589 | vidcomic | prop | visual | Pickup |
+5593 | vidcomic | prop | visual | Gear |
+5594 | vidcomic | prop | visual | Wall panel |
+5637 | vidcomic | prop | visual | Turret base |
+5875 | vidcomic | prop | visual | Dome |
+6533 | vidcomic | prop | visual | Box |
+7196 | vidcomic | prop | visual | Rocket |
+7270 | vidcomic | prop | visual | Train |
+7299 | vidcomic | prop | visual | Bell |
+7292 | vidcomic | prop | visual | Pickup |
+7293 | vidcomic | prop | visual | Pickup |
+7294 | vidcomic | prop | visual | Pickup |
+6834 | vidcomic | prop | visual | Q-Force emblem |
+6960 | vidcomic | prop | visual | Q-Force emblem |
+7801 | vidcomic | prop | visual | Q-Force emblem |
+8029 | vidcomic | prop | visual | Bolt |
+4945 | vidcomic | prop | visual | Plank |
+6874 | weapon_summons | summon | visual | Round grinning walker robot (global; weapon summon candidate) |
+6299 | weapon_summons | summon | visual | Duck (weapon transformation) |
+7107 | weapon_summons | summon | visual | Duck (weapon transformation) |
+7486 | weapon_summons | summon | visual | Orange bird (weapon transformation) |
+1290 | player_gear | player | manifest | Ratchet's helmet | review-assets ratchet prefix f76fd429.
+173 | player_gear | player | visual | Boot gadget |
+192 | player_gear | player | visual | Glove gadget |
+208 | player_gear | player | visual | Green weapon |
+209 | player_gear | player | visual | Heli-pack rotor |
+607 | player_gear | player | visual | Rotor and thruster pack |
+608 | player_gear | player | visual | Armour pieces |
+609 | player_gear | player | visual | Thruster pack |
+2652 | player_gear | player | visual | Gyroscope gadget |
+2675 | player_gear | player | visual | Black boot |
+3696 | player_gear | player | visual | Red boot |
+4498 | player_gear | player | visual | Red ring gadget |
+4966 | player_gear | player | visual | Cannon club weapon |
+4967 | player_gear | player | visual | Multi-barrel weapon |
+5833 | player_gear | player | visual | Cyan ring gadget |
+6253 | player_gear | player | visual | Ring gadget |
+6295 | player_gear | player | visual | Spiked mine |
+6395 | player_gear | player | visual | Black glove |
+6398 | player_gear | player | visual | Helmet |
+6478 | player_gear | player | visual | Green gun |
+6818 | player_gear | player | visual | Green device |
+6879 | player_gear | player | visual | Satellite gadget |
+7269 | player_gear | player | visual | Purple claw glove |
+6988 | player_gear | player | visual | Bladed weapon (vendor display) |
+2690 | player_gear | player | visual | Rocket projectile |
+7994 | player_gear | player | visual | Lombax-shaped armour model, orange and black | Armour display candidate.
+6239 | no_draw | unknown | unviewed | 4-joint global class, 1,176 triangles | Decoded mesh, but its only texture setup is the special -1 register set: the review stage draws nothing (zero pixels in the lit and normals channels, 17 November).
+6240 | no_draw | unknown | unviewed | 2-joint class, 360 triangles | Decoded mesh, but its only texture setup is the special -1 register set: the review stage draws nothing (zero pixels in the lit and normals channels, 17 November).
+5697 | no_draw | museum | unviewed | 66-joint museum class, 1,938 triangles | Decoded mesh, but its only texture setup is the special -1 register set: the review stage draws nothing (zero pixels in the lit and normals channels, 17 November).
+7520 | no_draw | museum | unviewed | 26-joint museum class, 2,808 triangles | Decoded mesh, but its only texture setup is the special -1 register set: the review stage draws nothing (zero pixels in the lit and normals channels, 17 November).
+5670 | vehicles | vehicle | visual | Taxi (no driver mesh) |
+6577 | vehicles | vehicle | visual | Hover bike |
+6836 | vehicles | vehicle | signature | Hover bike | Same exported mesh as 6577.
+6679 | vehicles | vehicle | visual | Green buggy |
+7056 | vehicles | vehicle | visual | ATV |
+6913 | vehicles | vehicle | visual | Submarine pod |
+7239 | vehicles | vehicle | visual | Green ship |
+4222 | vehicles | vehicle | visual | Ship |
+8028 | vehicles | vehicle | visual | Large ship |
+7018 | vehicles | vehicle | visual | Dark craft |
+8048 | vehicles | vehicle | visual | Boat |
+7180 | vehicles | vehicle | visual | Green ship |
+7557 | vehicles | vehicle | signature | Green ship (level 20) | Same exported mesh as 7180.
+7556 | vehicles | vehicle | signature | Rocket | Same exported mesh as 7180 family.
+7191 | vehicles | vehicle | visual | Rocket ship |
+4308 | ship_kit | vehicle | manifest | Ship wing variant 0 | ship-assembly.json.
+4309 | ship_kit | vehicle | manifest | Ship wing variant 1 | ship-assembly.json.
+4310 | ship_kit | vehicle | manifest | Ship wing variant 2 | ship-assembly.json.
+4312 | ship_kit | vehicle | manifest | Ship twin engines | ship-assembly.json.
+4314 | ship_kit | vehicle | manifest | Ship weapon | ship-assembly.json.
+4318 | ship_kit | vehicle | visual | Ship kit part |
+4323 | ship_kit | vehicle | visual | Ship kit part |
+4325 | ship_kit | vehicle | visual | Ship kit part |
+7502 | trophies | prop | visual | Golden trophy statue |
+7503 | trophies | prop | visual | Golden trophy statue |
+7504 | trophies | prop | visual | Golden trophy statue |
+7505 | trophies | prop | visual | Golden trophy statue |
+7506 | trophies | prop | visual | Golden trophy statue |
+7507 | trophies | prop | visual | Golden trophy statue |
+7508 | trophies | prop | visual | Golden trophy statue |
+7509 | trophies | prop | visual | Golden trophy statue |
+7510 | trophies | prop | visual | Trophy pedestal (bolt) |
+7511 | trophies | prop | visual | Trophy pedestal (target) |
+7512 | trophies | prop | visual | Trophy pedestal (bomb) |
+7513 | trophies | prop | visual | Trophy pedestal (helmet) |
+7514 | trophies | prop | visual | Trophy pedestal (sphere) |
+7515 | trophies | prop | visual | Trophy pedestal (rocket) |
+11 | props | prop | visual | Crate |
+758 | props | prop | visual | Green canister crate |
+803 | props | prop | visual | Green canister crate |
+1134 | props | prop | visual | Bolt pickup |
+1143 | props | prop | visual | Gadgetron sphere sign |
+1146 | props | prop | visual | Rotor on pole |
+2244 | props | prop | visual | Crystals |
+2386 | props | prop | visual | Green-banded dome pod |
+3734 | props | prop | visual | Small red lights |
+4399 | props | prop | visual | Panel device |
+4661 | props | prop | visual | Terminal panel |
+4664 | props | prop | visual | Octagonal lens |
+5578 | props | prop | visual | Hut |
+5618 | props | prop | visual | Q-Force emblem sign |
+5623 | props | prop | visual | Octagonal platform |
+5639 | props | prop | visual | Green-banded dome pod |
+5653 | props | prop | visual | Fan turbine |
+5677 | props | prop | visual | Ramp |
+5778 | props | prop | visual | Bunting flags |
+5787 | props | prop | visual | Engine assembly |
+5788 | props | prop | visual | Rocket |
+5831 | props | prop | visual | Wooden ring |
+5955 | props | prop | visual | Blade |
+5980 | props | prop | visual | Small part |
+6202 | props | prop | visual | Debris shard |
+6204 | props | prop | visual | Debris shard |
+6247 | props | prop | visual | Platform |
+6319 | props | prop | visual | Bridge |
+6372 | props | prop | visual | Door panel |
+6393 | props | prop | visual | Red device |
+6449 | props | prop | visual | Wall panel with eye |
+6450 | props | prop | visual | Spike projectile |
+6465 | props | prop | visual | Ring |
+6528 | props | prop | visual | Tube |
+6589 | props | prop | visual | Arena spiked roller |
+6590 | props | prop | visual | Arena spiked roller |
+6603 | props | prop | visual | Dome device |
+6618 | props | prop | visual | Tower with orb |
+6631 | props | prop | visual | Piston |
+6633 | props | prop | visual | Seaweed |
+6641 | props | prop | visual | Drum tank |
+6716 | props | prop | visual | Barrel |
+6739 | props | prop | visual | Rock |
+6740 | props | prop | visual | Rock |
+6815 | props | prop | visual | Spiked wheel |
+6837 | props | prop | visual | Device |
+6838 | props | prop | visual | Egg shapes |
+6839 | props | prop | visual | Banana |
+6840 | props | prop | visual | Hanging lamp |
+6866 | slim | story | visual+level | Slim Cognito (eyes) | A pair of eyes only, as Slim is always shown; level 8 (Aquatos) only (search sessions find-npcs-1/2/3, verified in the native views 17 November).
+6880 | props | prop | visual | Vehicle-dispensing robot terminal |
+6885 | props | prop | visual | Small part |
+6952 | props | prop | visual | Glider |
+6953 | props | prop | visual | Turret base |
+6983 | props | prop | visual | Ring |
+6984 | props | prop | visual | Ring |
+6985 | props | prop | visual | Chair |
+6989 | props | prop | visual | Crate |
+7004 | props | prop | visual | Pipe |
+7021 | props | prop | visual | Cloth banner |
+7042 | props | prop | visual | Tube |
+7054 | props | prop | visual | Small part |
+7090 | props | prop | visual | Platform device |
+7106 | props | prop | visual | Screen panel |
+7131 | props | prop | visual | Platform |
+7169 | props | prop | visual | Cylinder container |
+7189 | props | prop | visual | Tower |
+7232 | props | prop | visual | Door |
+7246 | props | prop | visual | Q-Force blimp |
+7280 | props | prop | visual | Gold blocks |
+7302 | props | prop | visual | Lamp |
+7310 | props | prop | visual | Tank part |
+7352 | props | prop | visual | Small part |
+7487 | props | prop | visual | Shard |
+7500 | props | prop | visual | Tube |
+7501 | props | prop | visual | Disc |
+7547 | props | prop | manifest | Gadgetron vendor | review-assets phoenix_machine prefix fca76314.
+7550 | props | prop | visual | Octagonal crate |
+7561 | props | prop | visual | Arena spiked roller |
+7562 | props | prop | visual | Arena spiked roller |
+7577 | props | prop | visual | Platform |
+7643 | props | prop | visual | Container panel |
+7654 | props | prop | visual | Vehicle-dispensing robot terminal |
+7701 | props | prop | visual | Qwark suit mannequin |
+7718 | props | prop | visual | Arena camera |
+7738 | props | prop | visual | Door |
+7743 | props | prop | visual | Planter |
+7775 | props | prop | visual | Logs |
+7793 | props | prop | visual | Chair |
+7796 | props | prop | visual | Mechanical arm |
+7797 | props | prop | visual | Booth |
+7845 | props | prop | visual | Turret mount |
+7876 | props | prop | visual | Rocket |
+7965 | props | prop | visual | Disc |
+7975 | props | prop | visual | Pilot seat |
+8011 | props | prop | visual | Crate |
+8012 | props | prop | visual | Crate |
+8057 | props | prop | visual | Shell |
+8058 | props | prop | visual | Box |
+3412 | vehicles | vehicle | visual | Hover car (level 12) | 
+6554 | biobliterator | boss | visual+level | Biobliterator legs (provisional) | Giant mech legs, 7,776 triangles, level 20 only.
+6555 | biobliterator | boss | visual+level | Biobliterator crewed pod (provisional) | Armoured green pod with a crew window and cannons, level 20 only.
+6556 | biobliterator | boss | visual+level | Biobliterator body sphere with gun arms (provisional) | 7,186 triangles, 74 joints, level 20 only.
+6909 | nefarious | story | visual+level | Dr. Nefarious (level 20 class) | Brain-dome robot, 5,373 triangles; viewed from the saved tour8 level 20 frame.
+7498 | nefarious | story | visual+level | Dr. Nefarious (level 20 class, second) | Brain-dome robot, 5,373 triangles.
+7343 | nefarious | story | visual+level | Dr. Nefarious (level 20, low detail) | 2,327 triangles, 82 joints.
+7578 | vehicles | vehicle | visual | Q-Force ship | 
+7680 | robots | enemy | visual | Orange heavy robot trooper with drum backpacks | 
+7672 | props | prop | visual | Green spiked pod | 
+7348 | player_gear | player | visual | Pistol-style gun | 
+7492 | props | prop | visual | Green screen arch | 
+7493 | props | prop | visual | Green glass dome (level 20; Nefarious brain-dome shape) | LEVEL class, 56 triangles; viewed from the saved tour8 level 20 frame.
+8022 | vehicles | vehicle | visual | Q-Force ship (also a level 10 cutscene) | 
+8053 | props | prop | visual | Rail track | 
+8054 | props | prop | visual | Building | 
+8055 | props | prop | visual | Large machine platform | 
+4000 | props | prop | visual | Screen panel | Cutscene prop (cutscene native view (@scene review path) 17 November).
+5859 | darla | story | visual+level | Darla Gratch | Channel 64 newsreader: her atlases hold a pink jacket, green shirt, purple shoes, metallic skin, black metal hair and a '64' badge; level 9 cutscene (cutscene native view (@scene review path) 17 November).
+5885 | president | story | visual+level | President Phyronix | Brown-furred cazar in a dark suit with gold collar trim, gold buttons and a tail; levels 1/3/4 cutscenes (cutscene native view (@scene review path) 17 November).
+6320 | jeeves | companion | visual+level | Jeeves (Ratchet as chauffeur) | Lombax with Ratchet's ears and tail in a chauffeur cap and red-and-black uniform; Holostar level 23 film cutscene (cutscene native view (@scene review path) 17 November). Ratchet costume.
+6335 | props | prop | visual | Remote control | Cutscene prop (cutscene native view (@scene review path) 17 November).
+6519 | lawrence | story | visual+level | Lawrence | Tall pear-shaped robot butler: narrow long head, black tailcoat, white collar, blue vest; cutscenes on levels 3/10/16/20/22/27 (cutscene native view (@scene review path) 17 November).
+7035 | props | prop | visual | Tribal spiked mask | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7044 | props | prop | visual | Banana | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7076 | props | prop | visual | Magnifying glass | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7175 | props | prop | visual | Q-Force box | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7224 | props | prop | visual | Banana | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7273 | props | prop | visual | Crystals | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7305 | props | prop | visual | Antenna device | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7307 | props | prop | visual | Game controller | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7322 | props | prop | visual | Gun (cutscene) | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7323 | props | prop | visual | Gun (cutscene) | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7324 | props | prop | visual | Gun (cutscene) | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7347 | props | prop | visual | Satellite device | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7360 | lawrence_bassist | story | visual+level | Lawrence, bassist | Lawrence's head and pear shape in a purple tailcoat and long blond wig, playing a red bass guitar; level 20 cutscene (cutscene native view (@scene review path) 17 November).
+7529 | extras | story | visual | Blue-skinned alien in a striped shirt and cap (cutscene, level 17) | Not Fred (Fred is a short cat-eared alien with round glasses) (cutscene native view (@scene review path) 17 November).
+7530 | player_gear | player | visual | Boot gadget (cutscene) | 
+7568 | vehicles | vehicle | visual | Black sports car (Holostar film cutscene) | 
+7657 | skrunch | story | visual+level | Skrunch (cutscene class) | Brown monkey, Skrunch's 3,022 triangles; levels 2/3 cutscenes (cutscene native view (@scene review path) 17 November).
+7659 | props | prop | visual | Green device | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7663 | props | prop | visual | Device | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7664 | props | prop | visual | Gadget boot | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7724 | props | prop | visual | Two-triangle card | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7749 | props | prop | visual | Gun shell | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7763 | props | prop | visual | Box | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7764 | props | prop | visual | Panel | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7778 | props | prop | visual | Q-Force game cartridge | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7779 | props | prop | visual | Q-Force game cartridge | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7780 | props | prop | visual | Q-Force game cartridge | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7782 | props | prop | visual | Device | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7996 | props | prop | visual | Claw grabber | Cutscene prop (cutscene native view (@scene review path) 17 November).
+7999 | props | prop | visual | Clank poster | Cutscene prop (cutscene native view (@scene review path) 17 November).
+8000 | props | prop | visual | Crowbar | Cutscene prop (cutscene native view (@scene review path) 17 November).
+8003 | props | prop | visual | Glowing containment cage | Cutscene prop (cutscene native view (@scene review path) 17 November).
+8008 | props | prop | visual | Platform | Cutscene prop (cutscene native view (@scene review path) 17 November).
+8016 | props | prop | visual | Courtney Gears face plate | Cutscene prop (cutscene native view (@scene review path) 17 November).
+8017 | backup_dancer | story | visual+level | Courtney Gears backup dancer (low-detail cutscene class) | 86 triangles, level 21 (cutscene native view (@scene review path) 17 November).
+8019 | props | prop | visual | Box | Cutscene prop (cutscene native view (@scene review path) 17 November).
+8021 | vehicles | vehicle | visual | Orange vehicle cabin (cutscene) | 
+8026 | props | prop | visual | Starburst backdrop | Cutscene prop (cutscene native view (@scene review path) 17 November).
+8044 | props | prop | visual | Dome device with hoops | Cutscene prop (cutscene native view (@scene review path) 17 November).
+8047 | props | prop | visual | Crayon | Cutscene prop (cutscene native view (@scene review path) 17 November).
+8074 | props | prop | visual | Reticle | Cutscene prop (cutscene native view (@scene review path) 17 November).
+#
+# Named roster entries with no local class (kept so nothing on the cast list is silently dropped).
+@group | blackstar | Named enemies / bosses | Captain Blackstar | Class 6694 in the Insomniac Museum (peg leg, cutlass). 4339 is the Plumber. Vid-comic skull heads 5736/6582 are his skull spirit.
+@group | screen_cast | Screen / cameo audit | Lance / Janice and other screen-only performers | Screen-only roles; no 3D mesh asserted.
+@group | extras | Screen / cameo audit | Cinema audience / background extras | Cutscene class 7529 (blue alien in striped shirt and cap, level 17) is the only unnamed cutscene extra.

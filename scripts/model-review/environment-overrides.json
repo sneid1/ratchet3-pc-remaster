@@ -1,0 +1,10 @@
+{
+ "schema":1,
+ "evidence":"Veldin saved frame 803 and user screenshot: original colour atlases inspected at full size. Terrain pixel probe confirms b4320b797f8909e8 and 7767c069eee0e928 on the central cliff geometry. These are not haze sprites or wood.",
+ "surfaces":[
+  {"stem":"b4320b797f8909e8-3e7db675dce04b5e-00001dd3","material":"mol_desert_cliff_face_002","tiles_u":3,"tiles_v":3,"normal":0.65,"grain":0,"metal":0,"reason":"Eroded cliff strata; previous backdrop classification omitted lighting detail."},
+  {"stem":"c87bbcefdfc6aa94-ba48ec5bfc27a3b6-00001dd3","material":"mol_desert_cliff_face_002","tiles_u":2,"tiles_v":3,"normal":0.65,"grain":0,"metal":0,"reason":"Dark variant of the same cliff strata colour family; preserve original palette."},
+  {"stem":"7767c069eee0e928-3e7db675dce04b5e-00001dd3","material":"mol_desert_cliff_face_002","tiles_u":3,"tiles_v":3,"normal":0.5,"grain":0,"metal":0,"reason":"Rock cap used on cliff geometry; remove incorrect 23 by 21 wood repeat."},
+  {"stem":"b8f3e6ded2a442c5-ba48ec5bfc27a3b6-00001dd3","material":"mol_desert_cliff_face_002","tiles_u":1,"tiles_v":2,"normal":0.65,"grain":0,"metal":0,"reason":"Vertical eroded cliff face; matching material relief without multiplying photographed dirt."}
+ ]
+}

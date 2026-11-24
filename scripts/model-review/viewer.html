@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>R&amp;C · Material review</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#08090b;color:#e5e7ea;font:14px system-ui,sans-serif}header{height:65px;border-bottom:1px solid #292c32;display:flex;align-items:center;justify-content:space-between;padding:0 28px}header strong{letter-spacing:.06em}header span{color:#959ba6;font-size:12px}main{display:grid;grid-template-columns:minmax(0,1fr) 280px;height:calc(100vh - 65px)}.stage{background:#000;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden}.stage img{width:100%;height:100%;object-fit:contain;touch-action:none;cursor:grab}.caption{position:absolute;left:24px;bottom:20px;color:#89909b;font-size:12px;pointer-events:none}.panel{padding:24px 22px;overflow:auto;border-left:1px solid #292c32}label{display:block;font-size:12px;color:#aeb4be;margin:18px 0 7px}select,button{width:100%;background:#171a20;color:#edf0f5;border:1px solid #363c46;padding:10px;border-radius:5px;font:inherit}button{cursor:pointer}button:hover{border-color:#9aaa80}.row{display:flex;gap:8px;margin-top:10px}.row button{flex:1}input[type=range]{width:100%;accent-color:#a7bd7c}.value{float:right;font-variant-numeric:tabular-nums;color:#e5e7ea}#status{color:#a9b5c4;font-size:12px;line-height:1.5;margin-top:22px}small{display:block;color:#777f8a;font-size:11px;line-height:1.5;margin-top:16px}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #b3ce8c;outline-offset:3px}@media(max-width:700px){main{grid-template-columns:1fr;height:auto}.stage{height:65vh}.panel{border-left:0}.caption{left:12px}header{padding:0 14px}}
+</style>
+<header><strong>R&amp;C / MATERIAL REVIEW</strong><a href="/assets" style="color:#b3ce8c">Asset library →</a></header>
+<main><div class="stage"><img id="image" alt="Selected character under the captured level's actual lighting"><div class="caption">Drag to orbit · Scroll to zoom · Shift-drag to pan</div></div><div class="panel">
+<label for="model">Model</label><select id="model"></select>
+<label for="geometry">Geometry</label><select id="geometry"><option value="original">Original captured mesh</option><option value="edited">Blender edit</option><option value="family">Refined original surfaces</option></select>
+<label for="pack">Texture pack</label><select id="pack"><option value="before">Installed baseline copy</option><option value="candidate" selected>Candidate</option></select>
+<label for="channel">Material channel</label><select id="channel"><option value="lit">Lit material + AO</option><option value="colour">Colour</option><option value="metalness">Metalness</option><option value="roughness">Roughness</option><option value="ao">Ambient occlusion</option><option value="normals">Normals (world space)</option><option value="emission">Emission / light sources</option></select>
+<label for="yaw">Orbit <span class="value" id="yawValue"></span></label><input id="yaw" type="range" min="-180" max="180" value="90">
+<label for="pitch">Elevation <span class="value" id="pitchValue"></span></label><input id="pitch" type="range" min="-80" max="80" value="8">
+<label for="zoom">Zoom <span class="value" id="zoomValue"></span></label><input id="zoom" type="range" min="0.5" max="5" step="0.05" value="1">
+<label>Lighting</label><div id="lighting">Actual captured level lights</div>
+<label for="frame">Recorded pose <span class="value" id="frameValue"></span></label><input id="frame" type="range" min="0" max="15" value="0">
+<div class="row"><button id="play">Play poses</button><button id="reset">Fit model</button></div>
+<div class="row"><button id="reload">Reload textures</button></div>
+<div id="status" role="status">Preparing the renderer…</div><small>Uses recorded poses, actual level lights, geometry-baked cavity AO and the game's depth-based AO. Available level probes supply roughness-filtered reflections from the saved surroundings. Distance fog and surrounding-world shadows are omitted.</small>
+</div></main>
+<script>
+const $=id=>document.getElementById(id);let busy=false,pending=false,playing=false,url=null,panX=0,panY=0,reload=false,edited=[],models={};
+const fields=['yaw','pitch','zoom','frame'];
+function values(){
+ const m=models[$('model').value],source=['source','body'].includes(m?.source_layer);
+ if(m){$('frame').max=m.frames-1;$('lighting').textContent=`Level ${m.level} · saved level lights${source||m.source_layer==='shrub'?' · nearest-terrain blend':''}`;}
+ $('frame').disabled=source;$('play').disabled=source;
+ if(source){$('frame').value=0;playing=false;$('play').textContent='Bind-space model';}else if(!playing){$('play').textContent='Play poses';}
+ const hasEdit=edited.includes($('model').value),staticSource=['shrub','terrain','source','body'].includes(m?.source_layer);
+ $('geometry').options[1].disabled=!hasEdit;$('geometry').options[2].disabled=staticSource;
+ if((!hasEdit&&$('geometry').value==='edited')||(staticSource&&$('geometry').value==='family'))$('geometry').value='original';
+ const required=m?.candidate_geometry?($('pack').value==='candidate'?m.candidate_geometry:'original'):null;
+ $('geometry').disabled=!!required;
+ if(required)$('geometry').value=required;
+ let p={model:$('model').value,geometry:$('geometry').value,pack:$('pack').value,channel:$('channel').value,pan_x:panX,pan_y:panY,reload};
+ for(const id of fields){p[id]=Number($(id).value);$(id+'Value').textContent=$(id).value}return p;
+}
+async function render(){if(busy){pending=true;return}busy=true;pending=false;const p=values();reload=false;try{const r=await fetch('/render',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});if(!r.ok)throw new Error((await r.text()).replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').slice(0,350));const next=URL.createObjectURL(await r.blob());$('image').src=next;if(url)URL.revokeObjectURL(url);url=next;$('status').textContent=`${$('model').selectedOptions[0].text} · pose ${p.frame+1}`;}catch(e){$('status').textContent=e.message;playing=false;$('play').textContent='Play poses'}finally{busy=false;if(playing){$('frame').value=(Number($('frame').value)+1)%(Number($('frame').max)+1);setTimeout(render,67)}else if(pending)render()}}
+for(const id of [...fields,'model','pack','channel','geometry'])$(id).addEventListener('input',()=>{values();render()});
+$('reload').onclick=()=>{reload=true;render()};$('reset').onclick=()=>{panX=panY=0;$('zoom').value=1;$('pitch').value=8;render()};$('play').onclick=()=>{playing=!playing;$('play').textContent=playing?'Pause poses':'Play poses';if(playing&&!busy)render()};
+let drag=null;$('image').onpointerdown=e=>{drag={x:e.clientX,y:e.clientY};$('image').setPointerCapture(e.pointerId)};$('image').onpointerup=()=>drag=null;$('image').onpointermove=e=>{if(!drag)return;let dx=e.clientX-drag.x,dy=e.clientY-drag.y;drag={x:e.clientX,y:e.clientY};if(e.shiftKey){panX-=dx*.003;panY+=dy*.003}else{$('yaw').value=((Number($('yaw').value)-dx*.5+540)%360)-180;$('pitch').value=Number($('pitch').value)+dy*.4}values();render()};$('image').onwheel=e=>{e.preventDefault();$('zoom').value=Number($('zoom').value)*(e.deltaY<0?1.1:.9);values();render()};
+fetch('/config').then(r=>r.json()).then(c=>{edited=c.edited;models=c.models;for(const [key,m]of Object.entries(c.models))$('model').add(new Option(m.name,key));if(models.ranger)$('model').value='ranger';if(edited.includes($('model').value))$('geometry').value='edited';if(!c.candidate)$('pack').options[1].disabled=true;render()});
+</script></html>

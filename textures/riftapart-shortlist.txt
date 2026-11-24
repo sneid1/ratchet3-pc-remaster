@@ -1,0 +1,120 @@
+# Rift Apart materials for this game's surfaces (PLAN 9.2 step 3), by kind, best first: kind, material, metres per tile.
+#
+# Candidates: every material of the kind whose albedo wraps without a seam (the jump across the wrap edges at most 1.5 times
+# the albedo's own texel-to-texel change), that has a normal map and whose albedo holds its colour (not a bare metal's black
+# diffuse: their _g holds the colour on some, gold, brass, bronze, and packed data on others, silver, chromium, steel_001).
+# Ranked by eye from `riftapart-pair.py preview` (relief baked, 2 x 2 tiles): clear structure at the game's distance, no
+# visible repeat, natural first. Left out on sight: stn_b4_distant_twist_rock_01 (a patchy atlas), sav_rock_path_002 (white
+# strips at its edges), anodized_metal_01 (a colour ramp).
+# Metres: the world size of one tile, from what it shows (pebbles a few centimetres, panels about a metre, cliff cracks).
+# The pairing (scripts/riftapart-pair.py) draws each world surface with its material's albedo in place of the texture's
+# colour, tinted to the texture's mean colour, with the material's relief and gloss; a plant keeps its painted leaves and
+# takes the material's grain. A surface takes, of its kind's first six, the material whose own colour is nearest the
+# original's (the rank breaks a tie); a plain metal takes the first, mol_arch_painted_metal_04: chipped, worn paint, for
+# this game's painted plates of every colour (plain steels showed nothing on level 23's floor). panel is this game's designed
+# sci-fi plates, which take Rift Apart's own panel materials; metal and floor take materials without a layout of their own.
+# tech_panel_metal_003 was left out: a bare metal (its albedo is black, its colour in its _g).
+# gnd_lava_rock_01 was left out: it has no gloss map (its _cma is a packing of another kind).
+# jn_damaged_concrete was left out after the check from the game's camera: tiled 5 x 5 it made level 24's plain wall busy.
+# Read by scripts/riftapart-pair.py; the files are in the player's Rift Apart export, never committed.
+sand  sand_rocky_wavy_001        2
+sand  ard_rocky_sand_wavy_001    2
+sand  sand_wavy_001              2
+sand  sand_rocky_001             2
+sand  sand_001                   2
+sand  mol_gnd_sand_01            2
+sand  sand_cracked_001           2
+sand  sav_sand_cracked_001       2
+sand  blz_ash_dirt_002           2
+sand  ard_gravel_01              1
+sand  og_gbl_mountainous_soil    2
+sand  soil_garden_001            2
+sand  blz_ash_dirt_003           2
+sand  sav_dune_dust_001          2
+sand  mud_006                    2
+sand  ard_mud_02                 2
+sand  mud_001                    2
+sand  mud_002                    2
+sand  soil_001                   2
+sand  blz_ash_dust_001           2
+sand  sav_dirt_path_001          2
+sand  sav_dirt_fine_01           2
+sand  mud_009                    2
+sand  blz_ash_dirt_001           2
+sand  dust_002                   2
+sand  gas_ground_sand_01         2
+sand  sav_dune_sand_001          2
+sand  sand_flat_001              2
+rock  mol_desert_cliff_face_001  4
+rock  rockface_002               4
+rock  blz_rockface_01            4
+rock  blz_rock_006               3
+rock  ard_sea_rock_003           3
+rock  sav_rock_006               3
+rock  blz_rockface_00            4
+rock  mol_desert_cliff_face_002  4
+rock  ard_sea_rock_006           3
+rock  mol_desert_cliff_face_003  4
+rock  sandstone_002              3
+rock  rockface_003               4
+rock  cliff_001                  4
+rock  ard_sea_rock_001           3
+rock  ard_sea_rock_002           3
+rock  ard_sea_rock_004           3
+rock  ard_sea_rock_005           3
+rock  sav_rock_001               3
+rock  sav_rock_005               3
+rock  blz_rock_003               3
+rock  blz_rock_005               3
+rock  sandstone_003              3
+rock  sandstone_004              3
+rock  rock_001                   1
+rock  cliff_003                  4
+rock  mol_desert_cliff_face_004  4
+rock  rockface_001               4
+rock  rockfacedrk_001            4
+rock  lava_rock_001              3
+rock  blz_obsidian_001           3
+metal mol_arch_painted_metal_04 2
+metal rust_001                   2
+metal brushed_steel_001          2
+metal steel_parkerized_001       2
+metal aged_steel_001             2
+metal steel_carbon_001           2
+metal rust_002                   2
+metal bronze_patina_001          2
+grass grass_001                  2
+grass meg_gnd_grass_01           2
+grass moss_002                   2
+grass sar_moss_002               2
+grass ard_lush_moss_01           2
+grass sar_floor_moss_001         2
+grass grass-002                  2
+grass sar_moss_001               2
+grass ard_moss_01                2
+grass moss_001                   2
+grass uwb_moss_01                2
+grass gbl_gbl_ground_moss_01     2
+grass sav_moss_001               2
+grass sav_grass_weed_01          2
+floor concrete_001               2
+floor concrete_dmg_006           2
+floor meg_asphalt_001            2
+floor jsn_ddo_asphalt_road       2
+floor concrete_004               2
+floor concrete_005               2
+floor blz_lab_floor_flat_001     2
+floor kal_floor_01               2
+floor concrete_grn_01            2
+panel tech_panel_metal_002       2
+panel tech_panel_metal_005       2
+panel steel_painted_panels_002   2
+panel paint_mtl_panel_002        2
+panel macro_tech_panels_001      2
+wood  bark_001                   1
+wood  wood_001                   1
+wood  wood_grain_001             1
+wood  charred_wood_001           1
+ice   ice_sheet_001              2
+ice   snow_001                   2
+plant moss_002                   0.5

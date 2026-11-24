@@ -1,0 +1,19 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "repo": "sneid1/ratchet3-pc-remaster",
+  "inputs": [
+    {
+      "id": "game",
+      "label": "Your disc image (.iso) of the USA release, serial SCUS-97353.",
+      "formats": [{ "type": "file", "extensions": ["iso"] }],
+      "check": { "iso9660": "SCUS_973.53" }
+    }
+  ],
+  "start": {
+    "program": ["uya.exe"],
+    "args": ["play", "{input:game}", "--profile", "{install}", "--rift", "{install}/updated-textures"]
+  },
+  "saves": ["{install}/memcard", "{install}/settings.txt", "{install}/bindings.txt", "{install}/window.txt"],
+  "system": { "windows": { "version": "10", "graphics": { "d3d12": "12_0" } } }
+}

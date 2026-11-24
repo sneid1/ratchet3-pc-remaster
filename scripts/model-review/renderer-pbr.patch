@@ -1,0 +1,219 @@
+--- a/texnames.rs
++++ b/texnames.rs
+@@ -285,6 +285,8 @@
+     slots: Vec<RiftSlot>,
+     region_map: Option<String>,
+     normal: f32,
++    /// Atlas maps: slot 0 normal XY, slot 1 occlusion/roughness/metalness.
++    pbr: bool,
+ }
+ 
+ /// One of a surface's materials: its name, its tiles per 1.0 of u and of v, the square root of its reflectance at normal
+@@ -331,6 +333,7 @@
+     /// The region map's view and its key (`material_path`).
+     region: Option<(wgpu::TextureView, String)>,
+     normal: f32,
++    pbr: bool,
+ }
+ 
+ impl RiftMat {
+@@ -343,7 +346,7 @@
+         let t = |k: usize| r.slots.get(k).map_or([0.0; 2], |s| s.1.tiles);
+         let each = |f: fn(&RiftSlot) -> f32| -> [f32; 4] { std::array::from_fn(|k| r.slots.get(k).map_or(0.0, |s| f(&s.1))) };
+         [
+-            [t(0)[0], t(0)[1], r.normal, if r.region.is_some() { 2.0 } else { 1.0 }],
++            [t(0)[0], t(0)[1], r.normal, if r.pbr { 3.0 } else if r.region.is_some() { 2.0 } else { 1.0 }],
+             [t(1)[0], t(1)[1], t(2)[0], t(2)[1]],
+             [t(3)[0], t(3)[1], 0.0, 0.0],
+             each(|s| s.grain),
+@@ -367,6 +370,8 @@
+     pub(crate) fn has_fur(r: Option<&RiftMat>) -> bool {
+         r.is_some_and(|r| r.slots.iter().any(|s| s.1.fur > 0.0))
+     }
++
++    pub(crate) fn is_pbr(&self) -> bool { self.pbr }
+ 
+     /// Bindings 3 to 8 of a material's bind group: the first material's map, the materials' sampler, the region map and the
+     /// other three materials' maps (`flat` for what a texture has not).
+@@ -423,9 +428,9 @@
+ /// replacement name, a stem twice or a map that is not there stops the game, naming it.
+ fn read_surfaces(rift_dir: &Path) -> Result<HashMap<TexName, RiftSurface>, String> {
+     let mut out = HashMap::new();
+-    for (file, header) in [("surfaces.tsv", SURFACES_HEADER), ("regions.tsv", REGIONS_HEADER)] {
++    for (file, header) in [("surfaces.tsv", SURFACES_HEADER), ("regions.tsv", REGIONS_HEADER), ("pbr.tsv", "stem\tnormal_map\torm_map")] {
+         let path = rift_dir.join(file);
+-        if file == "regions.tsv" && !path.exists() {
++        if file != "surfaces.tsv" && !path.exists() {
+             continue;
+         }
+         let text = std::fs::read_to_string(&path).map_err(|e| format!("textures: {}: {e}", path.display()))?;
+@@ -438,9 +443,17 @@
+             let bad = || format!("textures: {}: the row {line:?}", path.display());
+             let num = |v: &str| v.parse::<f32>().map_err(|_| bad());
+             let (stem, s) = match (file, &f[..]) {
++                ("pbr.tsv", [stem, normal_map, orm_map]) => {
++                    let mut slots=Vec::new();
++                    for map in [normal_map, orm_map] {
++                        if map.is_empty() || !map.bytes().all(|b|b.is_ascii_alphanumeric() || b==b'_' || b==b'-') { return Err(bad()); }
++                        slots.push(RiftSlot { material: map.to_string(), tiles:[1.0;2], reflectance:0.2, grain:0.0, specular:1.0, fur:0.0, catchlight:0.0, metal:0.0 });
++                    }
++                    (*stem, RiftSurface { slots, region_map:None, normal:1.0, pbr:true })
++                }
+                 ("surfaces.tsv", [stem, material, tu, tv, r, grain, normal, specular, metal]) => {
+                     let slot = RiftSlot { material: material.to_string(), tiles: [num(tu)?, num(tv)?], reflectance: num(r)?, grain: num(grain)?, specular: num(specular)?, fur: 0.0, catchlight: 0.0, metal: num(metal)? };
+-                    (*stem, RiftSurface { slots: vec![slot], region_map: None, normal: num(normal)? })
++                    (*stem, RiftSurface { slots: vec![slot], region_map: None, normal: num(normal)?, pbr: false })
+                 }
+                 ("regions.tsv", [stem, map, normal, rest @ ..]) if rest.len() == 36 => {
+                     let mut slots = Vec::new();
+@@ -456,7 +469,7 @@
+                     if slots.is_empty() {
+                         return Err(bad());
+                     }
+-                    (*stem, RiftSurface { slots, region_map: Some(map.to_string()), normal: num(normal)? })
++                    (*stem, RiftSurface { slots, region_map: Some(map.to_string()), normal: num(normal)?, pbr: false })
+                 }
+                 _ => return Err(bad()),
+             };
+@@ -467,7 +480,10 @@
+                     return Err(format!("textures: {}: {stem}'s map {} is not there", path.display(), m.display()));
+                 }
+             }
+-            if out.insert(n, s).is_some() {
++            // A PBR atlas deliberately replaces the old tiled material row.
++            // Duplicate PBR rows are still an error.
++            let previous=out.insert(n,s);
++            if previous.is_some_and(|p|file!="pbr.tsv" || p.pbr) {
+                 return Err(format!("textures: {}: {stem} has two rows", path.display()));
+             }
+         }
+@@ -633,7 +649,7 @@
+     };
+     let slots = s.slots.iter().map(|m| Ok((if m.material == FUR { None } else { Some(view(&m.material)?) }, m.clone()))).collect::<Result<_, String>>()?;
+     let region = s.region_map.as_ref().map(|f| format!("region:{f}")).map(|k| Ok::<_, String>((view(&k)?, k))).transpose()?;
+-    Ok(Some(RiftMat { slots, region, normal: s.normal }))
++    Ok(Some(RiftMat { slots, region, normal: s.normal, pbr: s.pbr }))
+ }
+ 
+ /// A Rift Apart material's map decoded: its image as level 0 and the levels below it, as it is (no GS alpha).
+--- a/lighting.rs
++++ b/lighting.rs
+@@ -271,7 +271,7 @@
+ // A Rift Apart material at a pixel: `map` its map's texel (the normal's x and y, the gloss, the grain), `look` x the grain's
+ // power, y the specular's strength, z the root of the reflectance at normal incidence; `fur` the fur's length there in the
+ // world, `furw` the fur's weight there (`objects` `fs_fur`), `catchlight` an eye's catchlight's strength, `metal` its metalness.
+-struct MaterialPx { map: vec4<f32>, look: vec3<f32>, fur: f32, furw: f32, catchlight: f32, metal: f32 };
++struct MaterialPx { map: vec4<f32>, look: vec3<f32>, fur: f32, furw: f32, catchlight: f32, metal: f32, ao: f32 };
+ 
+ // The material at the pixel (any pixel: its gradients are the coordinates' own, taken here in uniform control flow). A
+ // surface of regions (`mat.rift.w` 2) blends its four materials, maps and looks, by the region map's weights at the texel
+@@ -285,13 +285,19 @@
+     let m1 = textureSampleGrad(mtl1, msmp, uv * mat.tiles.xy, g1 * mat.tiles.xy, g2 * mat.tiles.xy);
+     let m2 = textureSampleGrad(mtl2, msmp, uv * mat.tiles.zw, g1 * mat.tiles.zw, g2 * mat.tiles.zw);
+     let m3 = textureSampleGrad(mtl3, msmp, uv * mat.tiles3.xy, g1 * mat.tiles3.xy, g2 * mat.tiles3.xy);
++    if (mat.rift.w > 2.5) {
++        // Atlas normal XY (green up); ORM uses the glTF channel convention.
++        // Colour remains the replacement atlas in sRGB; these maps are linear.
++        let metal=clamp(m1.b,0.0,1.0);
++        return MaterialPx(vec4<f32>(m0.xy,1.0-m1.g,0.4),vec3<f32>(0.0,1.0,sqrt(mix(0.04,0.6,metal))),0.0,0.0,0.0,metal,m1.r);
++    }
+     let regions = mat.rift.w > 1.5;
+     // The materials' weights at the texel: one material's is its own.
+     let ws = select(vec4<f32>(1.0, 0.0, 0.0, 0.0), w, regions);
+     let rest = select(0.0, max(1.0 - (w.r + w.g + w.b + w.a), 0.0), regions);
+     let blend = m0 * w.r + m1 * w.g + m2 * w.b + m3 * w.a + vec4<f32>(0.5, 0.5, 0.0, 0.4) * rest;
+     let looks = vec3<f32>(dot(ws, mat.grains) + rest, dot(ws, mat.specs), dot(ws, mat.refls));
+-    return MaterialPx(select(m0, blend, regions), looks, dot(ws, mat.furs), dot(ws, step(vec4<f32>(1e-6), mat.furs)), dot(ws, mat.catches), dot(ws, mat.metals));
++    return MaterialPx(select(m0, blend, regions), looks, dot(ws, mat.furs), dot(ws, step(vec4<f32>(1e-6), mat.furs)), dot(ws, mat.catches), dot(ws, mat.metals),1.0);
+ }
+ 
+ // The material's normal in the world at the pixel: `n0` the surface's own, `dp1` and `dp2` the position's change across the
+@@ -351,6 +357,46 @@
+ // painted shading is drawn at 1 - MATERIAL_METAL_DIFFUSE x its metalness (`objects` `gs`, `gs_lit`).
+ fn material_metal(m: MaterialPx) -> f32 {
+     return m.metal;
++}
++
++fn material_to_linear(c: vec3<f32>) -> vec3<f32> {
++    return select(c/12.92,pow((c+0.055)/1.055,vec3<f32>(2.4)),c>vec3<f32>(0.04045));
++}
++fn material_to_srgb(c: vec3<f32>) -> vec3<f32> {
++    let v=max(c,vec3<f32>(0.0));
++    return select(v*12.92,1.055*pow(v,vec3<f32>(1.0/2.4))-0.055,v>vec3<f32>(0.0031308));
++}
++
++// Energy-conserving GGX metallic/roughness BRDF for authored character atlases.
++// n/l/e are world-space; colours and ambient come from the captured game light
++// sets, not a viewer studio rig. AO only attenuates indirect illumination.
++fn material_pbr_light(base:vec3<f32>,n:vec3<f32>,e:vec3<f32>,d:vec3<f32>,radiance:vec3<f32>,metal:f32,a2:f32) -> vec3<f32> {
++    let l=material_renormal(d);
++    let nl=max(dot(n,l),0.0);
++    let nv=max(dot(n,e),0.001);
++    let h=material_renormal(l+e);
++    let nh=max(dot(n,h),0.0);
++    let vh=max(dot(e,h),0.0);
++    let f0=mix(vec3<f32>(0.04),base,metal);
++    let f=f0+(1.0-f0)*pow(1.0-vh,5.0);
++    let q=nh*nh*(a2-1.0)+1.0;
++    let distribution=a2/(MATERIAL_PI*q*q);
++    let gv=nl*sqrt(nv*nv*(1.0-a2)+a2);
++    let gl=nv*sqrt(nl*nl*(1.0-a2)+a2);
++    let visibility=0.5/max(gv+gl,0.00001);
++    let diffuse=(1.0-f)*(1.0-metal)*base/MATERIAL_PI;
++    return (diffuse+f*distribution*visibility)*max(radiance,vec3<f32>(0.0))*nl*MATERIAL_PI;
++}
++fn material_pbr(base_srgb:vec3<f32>,n:vec3<f32>,e:vec3<f32>,c0:vec3<f32>,d0:vec3<f32>,c1:vec3<f32>,d1:vec3<f32>,ambient:vec3<f32>,m:MaterialPx,variance:f32) -> vec3<f32> {
++    let base=material_to_linear(clamp(base_srgb,vec3<f32>(0.0),vec3<f32>(1.0)));
++    let rough=clamp(1.0-m.map.z,0.045,1.0);
++    let a2=clamp(rough*rough*rough*rough+variance,0.0009,1.0);
++    let direct=material_pbr_light(base,n,e,d0,c0,m.metal,a2)+material_pbr_light(base,n,e,d1,c1,m.metal,a2);
++    let f0=mix(vec3<f32>(0.04),base,m.metal);
++    // A diffuse irradiance approximation from the level's ambient. Traced
++    // environment reflections remain the runtime reflection pass's job.
++    let indirect=max(ambient,vec3<f32>(0.0))*((1.0-f0)*(1.0-m.metal)*base+f0*(1.0-0.5*rough))*m.ao;
++    return 255.0*min(material_to_srgb(direct+indirect),vec3<f32>(1.0));
+ }
+ 
+ // A light's specular in bytes: `n` the material's normal, `e` toward the eye, `c` the light's colour, `d` its direction.
+--- a/objects.rs
++++ b/objects.rs
+@@ -314,6 +314,15 @@
+         let refl = material_reflection(n, e, sky, t.rgb, m);
+         let diffuse = 1.0 - MATERIAL_METAL_DIFFUSE * material_metal(m);
+         c = vec4<f32>(min(floor(c.rgb * diffuse) + floor((spec + refl) * i.ln.w), vec3<f32>(255.0)), c.a);
++        if (mat.rift.w > 2.5) {
++            let nx=dpdx(n);
++            let ny=dpdy(n);
++            let normal_variance=0.5*(dot(nx,nx)+dot(ny,ny));
++            let mode=(i.light>>16u)&3u;
++            let k=select(1.0,0.25,mode==3u);
++            let ambient=max(i.colour.rgb*(255.0/128.0)-k*(l.c0.rgb*i.ls.x+l.c1.rgb*i.ls.y),vec3<f32>(0.0));
++            c=vec4<f32>(material_pbr(t.rgb/255.0,n,e,l.c0.rgb*k*i.ln.w,l.d0,l.c1.rgb*k*i.ln.w,l.d1,ambient,m,normal_variance),c.a);
++        }
+     }
+     // A light (`mat.emit`): at least its own colour times its boost whatever falls on it, its alpha raised above 0x80 by its glow
+     // (the game's glow pass spreads it).
+--- a/raytrace.rs
++++ b/raytrace.rs
+@@ -449,6 +449,13 @@
+         s.shine = max(s.shine, gloss);
+         s.f0 = dot(w, m.f0);
+         s.metal = dot(w, m.metal);
++        if (m.rift == 3u) {{
++            let texels=p.footprint*vec2<f32>(textureDimensions({name}_tex[m.maps.y]));
++            let orm=textureSampleLevel({name}_tex[m.maps.y],{name}_smp,p.uv,log2(max(max(texels.x,texels.y),1.0)));
++            s.shine=max(m.shine,1.0-orm.g);
++            s.metal=orm.b;
++            s.f0=mix(0.04,0.6,orm.b);
++        }}
+     }}
+     return s;
+ }}
+@@ -932,6 +939,7 @@
+                 m.region = self.rift_view(key, v)?;
+                 m.rift = 2;
+             }
++            if r.is_pbr() { m.rift=3; }
+         }
+         self.mats.push(m);
+         Ok(self.mats.len() as u32 - 1)

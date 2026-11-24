@@ -1,0 +1,21 @@
+{
+  "ratchet": [
+    {
+      "label": "Iris shell; preserve its separation from the white eyeball",
+      "material_prefix": "9a6d927dedfae75e",
+      "uv_bounds": [0.61, 0.42, 0.72, 0.53],
+      "minimum_source_z": 0.40,
+      "position_refinement": 0,
+      "above_surface": "White eyeball; independently curving it intersects the iris",
+      "minimum_clearance": 0.0012,
+      "projection_limit": 0.03
+    },
+    {
+      "label": "White eyeball; independently curving it intersects the iris",
+      "material_prefix": "9a6d927dedfae75e",
+      "uv_bounds": [0.31, 0.77, 0.42, 0.88],
+      "minimum_source_z": 0.40,
+      "position_refinement": 0
+    }
+  ]
+}

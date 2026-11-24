@@ -1,0 +1,53 @@
+From 7aae6b335a590cf8019eb189809b4d1dd073948b Mon Sep 17 00:00:00 2001
+From: sneid1 <sneid1@users.noreply.github.com>
+Date: Fri, 13 Nov 2026 15:00:50 +1100
+Subject: [PATCH] UYA: the movie player stub on every story level's copy of the
+ player
+
+Each level program links its own copy of the front end's movie player (func_003AA2E8 in rac3-decomp's level catalogue). A
+level that plays a movie waited in its copy for IPU pictures the oracle never decodes: Vid-comic 1 (31) plays its intro at
+once and sent the GS nothing. The same host stub (skipped, as with Start) now sits on every copy, guarded by the code words.
+---
+ oracle/src/rc3/mod.rs   |  3 +++
+ oracle/src/rc3/movie.rs | 11 +++++++++++
+ 2 files changed, 14 insertions(+)
+
+diff --git a/oracle/src/rc3/mod.rs b/oracle/src/rc3/mod.rs
+index 40f21bf..a922c16 100644
+--- a/oracle/src/rc3/mod.rs
++++ b/oracle/src/rc3/mod.rs
+@@ -15,6 +15,9 @@ pub mod warp;
+ /// UYA's host stubs on game functions, installed at the cold boot (cold.rs `boot`).
+ pub fn install(c: &mut crate::cpu::Cpu) {
+     c.add_host_stub(movie::PLAYER, "movie player (rc3/movie.rs)", movie::PLAYER_SIG, movie::player);
++    for &(level, at) in &movie::LEVEL_PLAYERS {
++        c.add_host_stub(at, &format!("movie player, level {level} (rc3/movie.rs)"), movie::PLAYER_SIG, movie::player);
++    }
+     c.add_host_stub(sif::CHECK_STAT, "sceSifCheckStatRpc (rc3/sif.rs)", sif::CHECK_STAT_SIG, sif::check_stat);
+ }
+ 
+diff --git a/oracle/src/rc3/movie.rs b/oracle/src/rc3/movie.rs
+index a4504d9..981c02d 100644
+--- a/oracle/src/rc3/movie.rs
++++ b/oracle/src/rc3/movie.rs
+@@ -10,6 +10,17 @@ use crate::cpu::Cpu;
+ use std::sync::OnceLock;
+ 
+ pub const PLAYER: u32 = 0x3afaa8;
++/// The same player linked into each story level's program (rac3-decomp config/us/levels/functions.tsv: func_003AA2E8, the
++/// front end's function, at its own address in every level; the same code and flag word). A level that plays a movie waits
++/// for the IPU there as the front end would: Vid-comic 1 (31) plays its intro at once and parks in its copy (0x49c170, the
++/// return from the stream loop, on the game thread's stack), sending the GS nothing. The same stub skips it.
++pub const LEVEL_PLAYERS: [(u32, u32); 34] = [
++    (1, 0x4cebf0), (2, 0x4a4cc8), (3, 0x4bc1f0), (4, 0x4de9c0), (5, 0x4c79d0), (6, 0x4b25c8), (7, 0x4cda18), (8, 0x4b0ae8),
++    (9, 0x4e8a90), (10, 0x4b1730), (11, 0x4a4c30), (12, 0x4d01b8), (13, 0x4ae830), (14, 0x4b9488), (16, 0x4e0100), (17, 0x4a7e78),
++    (18, 0x4e1490), (19, 0x4c3000), (20, 0x4ee638), (21, 0x4a5aa8), (22, 0x4d5780), (23, 0x4b0548), (24, 0x4b39e0), (26, 0x4d7708),
++    (27, 0x4a5318), (28, 0x496428), (29, 0x4da040), (30, 0x49c840), (31, 0x49bff8), (32, 0x4a5428), (33, 0x49db70), (34, 0x4a2f18),
++    (35, 0x49d198), (36, 0x4a2cf8),
++];
+ /// The player's first four code words (the front end's .text): the stub applies only while they are in RAM.
+ pub const PLAYER_SIG: [u32; 4] = [0x27bd_ffc0, 0xffb5_0028, 0xffb6_0030, 0x0080_a82d];
+ /// The flag word whose bit 0x80 the player clears on its way out (0x3afc28..0x3afc60).
+-- 
+2.51.2.windows.1
+

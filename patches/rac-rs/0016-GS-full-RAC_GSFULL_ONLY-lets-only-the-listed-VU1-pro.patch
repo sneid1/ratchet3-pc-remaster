@@ -1,0 +1,53 @@
+From 735921c5cd1fe901623f2b4261963d8f4c7048cb Mon Sep 17 00:00:00 2001
+From: sneid1 <sneid1@users.noreply.github.com>
+Date: Fri, 13 Nov 2026 01:05:04 +1100
+Subject: [PATCH] GS-full: RAC_GSFULL_ONLY lets only the listed VU1 programs'
+ XGKICKs reach the GS
+
+The game's own picture of one layer (for example its terrain alone), to set beside a native layer. The numbers are the
+program ids `identify` gives; its table predates Up Your Arsenal, whose terrain programs 1 and 7 read as 5 and 6.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ rac-rs/src/engine/gsfull/vif.rs | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/rac-rs/src/engine/gsfull/vif.rs b/rac-rs/src/engine/gsfull/vif.rs
+index aac6835..ca4f3db 100644
+--- a/rac-rs/src/engine/gsfull/vif.rs
++++ b/rac-rs/src/engine/gsfull/vif.rs
+@@ -86,9 +86,21 @@ impl Out {
+     }
+ }
+ 
++/// RAC_GSFULL_ONLY=1,7: only the listed VU1 programs' XGKICKs reach the GS (the game's own picture of one layer, e.g. Up Your
++/// Arsenal's terrain programs 1 and 7, to set beside a native layer). Unset: every program's.
++fn only_progs() -> Option<u16> {
++    static M: std::sync::OnceLock<Option<u16>> = std::sync::OnceLock::new();
++    *M.get_or_init(|| {
++        std::env::var("RAC_GSFULL_ONLY").ok().map(|v| {
++            v.split(',').map(|p| p.trim().parse::<u8>().unwrap_or_else(|_| panic!("RAC_GSFULL_ONLY: {p} is not a program number"))).fold(0u16, |m, p| m | 1 << (p & 15))
++        })
++    })
++}
++
+ impl Path1 for Out {
+     fn xgkick(&mut self, data: &[[u32; 4]], addr: usize) {
+         let mut a = addr & 0x3ff;
++        let shown = only_progs().is_none_or(|m| m >> (self.prog & 15) & 1 == 1);
+         self.seg(1);
+         let mut guard = 0;
+         loop {
+@@ -112,6 +124,9 @@ impl Path1 for Out {
+                 break;
+             }
+             for k in 0..=len {
++                if !shown {
++                    break;
++                }
+                 let q = data[(a + k) & 0x3ff];
+                 self.qs.push(q[0] as u128 | (q[1] as u128) << 32 | (q[2] as u128) << 64 | (q[3] as u128) << 96);
+             }
+-- 
+2.51.2.windows.1
+

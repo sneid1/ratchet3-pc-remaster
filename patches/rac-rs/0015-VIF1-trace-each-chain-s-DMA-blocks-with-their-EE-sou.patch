@@ -1,0 +1,253 @@
+From 7acb4b3c7324dcbb507b29b79c1e7b6fe0dc6221 Mon Sep 17 00:00:00 2001
+From: sneid1 <sneid1@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 18:02:03 +1100
+Subject: [PATCH] VIF1 trace: each chain's DMA blocks with their EE source
+ addresses (oracle), each UNPACK, MPG, program run and DIRECT of a traced job
+ (pipe, vif)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ oracle/src/gs.rs                 | 32 ++++++++++++++++++++++++++++++++
+ oracle/src/mem.rs                | 15 +++++++++++++++
+ rac-rs/src/engine/gsfull/pipe.rs | 22 ++++++++++++++++++++--
+ rac-rs/src/engine/gsfull/vif.rs  | 24 ++++++++++++++++++++++++
+ 4 files changed, 91 insertions(+), 2 deletions(-)
+
+diff --git a/oracle/src/gs.rs b/oracle/src/gs.rs
+index 27ea80a..f488b46 100644
+--- a/oracle/src/gs.rs
++++ b/oracle/src/gs.rs
+@@ -36,6 +36,38 @@ struct Tag {
+ /// a consumer that never recycles only costs the old allocation. Contents are never read across kicks (len is reset to 0).
+ static WORDS_POOL: std::sync::Mutex<Vec<Vec<u32>>> = std::sync::Mutex::new(Vec::new());
+ 
++/// VIF1 trace (a capture tool's one field): while on, every VIF1 chain that goes to the GS capture records its DMA blocks, in kick
++/// order: (word index of the block's first data word in the job's stream, EE source address, qwords, DMA tag id; 99 = a normal
++/// transfer from MADR). `trace_take` returns them and turns the trace off.
++pub static VIF1_TRACE: std::sync::Mutex<Option<Vec<Vec<(usize, u32, u32, u32)>>>> = std::sync::Mutex::new(None);
++static VIF1_TRACE_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
++
++/// Starts the VIF1 trace.
++pub fn trace_start() {
++    if let Ok(mut t) = VIF1_TRACE.lock() {
++        *t = Some(Vec::new());
++    }
++    VIF1_TRACE_ON.store(true, std::sync::atomic::Ordering::Relaxed);
++}
++
++/// Ends the VIF1 trace: the blocks of each chain since `trace_start`.
++pub fn trace_take() -> Vec<Vec<(usize, u32, u32, u32)>> {
++    VIF1_TRACE_ON.store(false, std::sync::atomic::Ordering::Relaxed);
++    VIF1_TRACE.lock().ok().and_then(|mut t| t.take()).unwrap_or_default()
++}
++
++pub(crate) fn trace_on() -> bool {
++    VIF1_TRACE_ON.load(std::sync::atomic::Ordering::Relaxed)
++}
++
++pub(crate) fn trace_push(blocks: Vec<(usize, u32, u32, u32)>) {
++    if let Ok(mut t) = VIF1_TRACE.lock() {
++        if let Some(t) = t.as_mut() {
++            t.push(blocks);
++        }
++    }
++}
++
+ /// An empty word Vec with room for about `want` words (the biggest recycled buffer, else a fresh one).
+ pub fn take_words(want: usize) -> Vec<u32> {
+     let got = WORDS_POOL.lock().ok().and_then(|mut p| {
+diff --git a/oracle/src/mem.rs b/oracle/src/mem.rs
+index b6b9f81..b2a7a74 100644
+--- a/oracle/src/mem.rs
++++ b/oracle/src/mem.rs
+@@ -724,9 +724,18 @@ impl Mem {
+         let mut words = if cap { crate::gs::take_words(self.vif1_words) } else { Vec::new() };
+         let mut marks = vec![(0usize, 0u32)];
+         let mut tie = if cap { crate::rc2::tiecap::kick_start(self) } else { None };
++        let mut traced: Option<Vec<(usize, u32, u32, u32)>> = (cap && crate::gs::trace_on()).then(Vec::new);
+         if cap {
++            if let Some(t) = traced.as_mut() {
++                if qwc > 0 {
++                    t.push((words.len(), madr0, qwc, 99));
++                }
++            }
+             self.dma_words(self.hw32(VIF1 + 0x10), qwc, &mut words);
+             if mode == 0 {
++                if let Some(t) = traced.take() {
++                    crate::gs::trace_push(t);
++                }
+                 self.gsc_vif1(std::mem::take(&mut words), std::mem::take(&mut marks));
+             }
+         }
+@@ -780,6 +789,9 @@ impl Mem {
+                         }
+                     }
+                     marks.push((words.len(), 0));
++                    if let Some(t) = traced.as_mut() {
++                        t.push((words.len(), src, q, id));
++                    }
+                     if let Some(t) = tie.as_mut() {
+                         crate::rc2::tiecap::block(self, t, src, q);
+                     }
+@@ -794,6 +806,9 @@ impl Mem {
+         }
+         if cap && mode == 1 {
+             self.vif1_words = words.len();
++            if let Some(t) = traced.take() {
++                crate::gs::trace_push(t);
++            }
+             self.gsc_vif1(words, marks);
+         }
+         if let Some(t) = tie {
+diff --git a/rac-rs/src/engine/gsfull/pipe.rs b/rac-rs/src/engine/gsfull/pipe.rs
+index e1864fa..be78663 100644
+--- a/rac-rs/src/engine/gsfull/pipe.rs
++++ b/rac-rs/src/engine/gsfull/pipe.rs
+@@ -47,6 +47,8 @@ pub struct Field {
+     pub vu_errors: u64,
+     /// The EE field number (0 = the first field run in this session).
+     pub field: u64,
++    /// With `Pipe::trace` on: per VIF1 job, its word stream and the `Out::trace` events, GS qwords offset to `qs`.
++    pub trace: Vec<(Vec<u32>, Vec<[u32; 8]>)>,
+ }
+ 
+ /// VIF1 + VU1 state that lives across fields.
+@@ -54,6 +56,8 @@ pub struct Pipe {
+     pub(super) vif: Vif1,
+     pub vu: Vu1,
+     pub out: Out,
++    /// The next `process` records its VIF1 jobs (`Field::trace`); one field, then off.
++    pub trace: bool,
+ }
+ 
+ impl Pipe {
+@@ -65,7 +69,7 @@ impl Pipe {
+         let mi = if state.is_empty() { blank() } else { std::fs::read(format!("{state}/vu1MicroMem.bin")).ok() }?;
+         let w: Vec<u32> = mi.get(..64)?.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+         let out = Out { prog: super::vif::identify(&w), ..Default::default() };
+-        Some(Pipe { vif: Vif1::new(), vu: Vu1::new(&d, &mi), out })
++        Some(Pipe { vif: Vif1::new(), vu: Vu1::new(&d, &mi), out, trace: false })
+     }
+ 
+     /// One field's jobs in, its GS qwords out.
+@@ -83,9 +87,22 @@ impl Pipe {
+                 Job::Vif1(w, marks, _) => {
+                     self.out.qs.clear();
+                     self.out.segs.clear();
++                    if self.trace {
++                        self.out.trace = Some(Vec::new());
++                    }
+                     self.vif.feed(&w, &marks, &mut self.vu, &mut self.out);
+-                    ee_oracle::gs::recycle_words(w);
+                     let base = f.qs.len() as u32;
++                    if let Some(mut t) = self.out.trace.take() {
++                        for e in t.iter_mut() {
++                            match e[0] {
++                                2 => (e[4], e[5]) = (e[4] + base, e[5] + base),
++                                3 => e[3] += base,
++                                _ => {}
++                            }
++                        }
++                        f.trace.push((w.clone(), t));
++                    }
++                    ee_oracle::gs::recycle_words(w);
+                     f.qs.extend_from_slice(&self.out.qs);
+                     for &(s, p, g) in &self.out.segs {
+                         f.segs.push((base + s, p, g));
+@@ -97,6 +114,7 @@ impl Pipe {
+                 }
+             }
+         }
++        self.trace = false;
+         f.vu_errors = self.vu.st.errors;
+         // RAC_GSFULL_QDUMP=<file>: the field's GS qwords (debug; overwritten each field).
+         if let Some(p) = std::env::var_os("RAC_GSFULL_QDUMP") {
+diff --git a/rac-rs/src/engine/gsfull/vif.rs b/rac-rs/src/engine/gsfull/vif.rs
+index a6f62de..aac6835 100644
+--- a/rac-rs/src/engine/gsfull/vif.rs
++++ b/rac-rs/src/engine/gsfull/vif.rs
+@@ -13,6 +13,11 @@ use super::vu1::{Path1, Vu1};
+ /// The GS-bound qwords of one VIF1 job with where each run of them came from.
+ #[derive(Default)]
+ pub struct Out {
++    /// The trace of the job being fed, when on (`Pipe::trace`): one [kind, word index, ..] per event. 1 UNPACK: first data word,
++    /// cmd, num, VU1 data qword, CL | WL << 8 | MODE << 16, MASK, data words. 2 program run: the MSCAL word, micro address, program
++    /// id, first and end GS qword of its output (job-relative), TOPS, ITOPS. 3 DIRECT: first data word, qwords, first GS qword.
++    /// 4 MPG: first data word, micro address in bytes, data words.
++    pub trace: Option<Vec<[u32; 8]>>,
+     pub qs: Vec<u128>,
+     /// (first qword, path 1/2/3, VU1 program id)
+     pub segs: Vec<(u32, u8, u8)>,
+@@ -172,6 +177,8 @@ pub struct Vif1 {
+     bad: bool,
+     cur_tag2: bool,
+     unpack_from_tag: bool,
++    /// Word index of the VIF code being run (the trace's events).
++    code_at: usize,
+     /// Shadow mode (the effects layer's VU1 model, retail/efx_vu.rs): MPG / UNPACK / VIF registers are applied, but
+     /// MSCAL / MSCALF / MSCNT do not run VU1 (only TOPS / DBF advance) and DIRECT data is not collected.
+     pub shadow: bool,
+@@ -228,6 +235,7 @@ impl Vif1 {
+             bad: false,
+             cur_tag2: false,
+             unpack_from_tag: false,
++            code_at: 0,
+             shadow: false,
+             ovl: None,
+             lazy: !std::env::var("RAC_VIF_LAZY").is_ok_and(|v| v == "0"),
+@@ -274,6 +282,7 @@ impl Vif1 {
+                     St::Idle => {
+                         let code = w[i];
+                         self.cur_tag2 = ph == 2 && i == at + 1;
++                        self.code_at = i;
+                         i += 1;
+                         self.code(code, vu, out);
+                     }
+@@ -480,11 +489,17 @@ impl Vif1 {
+             }
+             0x4a => {
+                 let n = if num == 0 { 256 } else { num as usize };
++                if let Some(t) = out.trace.as_mut() {
++                    t.push([4, self.code_at as u32 + 1, imm * 8, n as u32 * 2, 0, 0, 0, 0]);
++                }
+                 self.st = St::Mpg { addr: imm as usize * 8, left: n * 2 };
+                 self.buf.clear();
+             }
+             0x50 | 0x51 => {
+                 let n = if imm == 0 { 65536 } else { imm as usize };
++                if let Some(t) = out.trace.as_mut() {
++                    t.push([3, self.code_at as u32 + 1, n as u32, out.qs.len() as u32, 0, 0, 0, 0]);
++                }
+                 self.st = St::Direct { left: n * 4 };
+                 self.qn = 0;
+             }
+@@ -496,6 +511,10 @@ impl Vif1 {
+                 let items = if wl <= cl || wl == 0 { n } else { (n / wl) * cl + (n % wl).min(cl) };
+                 let bits = if vl == 3 { 16 } else { (vn + 1) * (32 >> vl) };
+                 let words = (items * bits).div_ceil(32) as usize;
++                if let Some(t) = out.trace.as_mut() {
++                    let base = (imm & 0x3ff) + if imm & 0x8000 != 0 { self.tops } else { 0 };
++                    t.push([1, self.code_at as u32 + 1, cmd, n, base, self.cl | self.wl << 8 | self.mode << 16, self.mask, words as u32]);
++                }
+                 if words > 0 {
+                     self.unpack_from_tag = self.cur_tag2;
+                     self.st = St::Unpack { cmd, imm, num: n, left: words };
+@@ -530,10 +549,15 @@ impl Vif1 {
+         }
+         let (p0, c0) = (vu.st.pairs, vu.st.cycles);
+         let id = out.prog;
++        let q0 = out.qs.len() as u32;
+         // (a run that errors leaves the packets it already sent; the field goes on)
+         if vu.run(addr, top, itop, out).is_err() {
+             out.stats.run_errs += 1;
+         }
++        let q1 = out.qs.len() as u32;
++        if let Some(t) = out.trace.as_mut() {
++            t.push([2, self.code_at as u32, addr as u32, id as u32, q0, q1, top, itop]);
++        }
+         let k = (id & 15) as usize;
+         out.stats.prog_runs[k] += 1;
+         out.stats.prog_pairs[k] += vu.st.pairs - p0;
+-- 
+2.51.2.windows.1
+
