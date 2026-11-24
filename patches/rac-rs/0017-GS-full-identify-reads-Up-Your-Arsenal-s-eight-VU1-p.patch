@@ -1,0 +1,55 @@
+From b5f797889cde59eace465dbb3c2318d55b3870d3 Mon Sep 17 00:00:00 2001
+From: sneid1 <sneid1@users.noreply.github.com>
+Date: Fri, 13 Nov 2026 01:54:12 +1100
+Subject: [PATCH] GS-full: identify reads Up Your Arsenal's eight VU1 programs
+ as their own numbers
+
+The id tags each segment of GS output and is what RAC_GSFULL_ONLY selects by. The table of first-16-word hashes predates
+Up Your Arsenal (its terrain programs read as 5 and 6, its shrub programs 4 and 5 share their first 16 words). On the UYA
+disc the whole first piece the game uploads at micro address 0 is hashed, so RAC_GSFULL_ONLY=1,7 is the terrain, 2,3 the
+ties, 4,5 the shrubs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ rac-rs/src/engine/gsfull/vif.rs | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/rac-rs/src/engine/gsfull/vif.rs b/rac-rs/src/engine/gsfull/vif.rs
+index ca4f3db..1b54ba8 100644
+--- a/rac-rs/src/engine/gsfull/vif.rs
++++ b/rac-rs/src/engine/gsfull/vif.rs
+@@ -66,12 +66,30 @@ const PROGS: [(u64, u8); 12] = [
+     (0x68a07c118d24d2ca, 11),
+ ];
+ 
++/// Up Your Arsenal's eight VU1 programs (NTSC-U; the port's scripts/uya_vugen.py PROGS): (words, FNV-1a of every word) of the
++/// first piece the game uploads at micro address 0 (0x800 bytes; program 6 is 444 words), the program's number. Programs 4 and 5
++/// start with the same 16 words, so the whole piece is hashed.
++const UYA: [(usize, u64, u8); 8] = [
++    (512, 0xb8c2_fc75_0d9f_4798, 0),
++    (512, 0x803c_02c0_25a1_675d, 1),
++    (512, 0xaeec_2baa_41cf_ce9b, 2),
++    (512, 0x61db_fac0_c40b_f816, 3),
++    (512, 0x456c_0d86_006d_2ff7, 4),
++    (512, 0x91a6_de33_d4f8_f0a8, 5),
++    (444, 0x0cda_4e64_b382_2880, 6),
++    (512, 0x6edc_b086_f115_875f, 7),
++];
++
+ /// Program id of a chunk uploaded at address 0 (15 = unknown). Only tags the output (`Out::segs`, `Stats`); VU1 itself
+-/// identifies the microprogram by content (`vu1aot`).
++/// identifies the microprogram by content (`vu1aot`). Up Your Arsenal's programs read as their own numbers 0 to 7.
+ pub fn identify(w: &[u32]) -> u8 {
+     if ee_oracle::ver::rc2() {
+         return super::vif_rc2::identify(w);
+     }
++    if ee_oracle::ver::rc3() {
++        let h = w.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &x| (h ^ x as u64).wrapping_mul(0x0100_0000_01b3));
++        return UYA.iter().find(|p| p.0 == w.len() && p.1 == h).map_or(15, |p| p.2);
++    }
+     let h = w.iter().take(16).fold(0xcbf2_9ce4_8422_2325u64, |h, &x| (h ^ x as u64).wrapping_mul(0x0100_0000_01b3));
+     PROGS.iter().find(|p| p.0 == h).map(|p| p.1).unwrap_or(15)
+ }
+-- 
+2.51.2.windows.1
+

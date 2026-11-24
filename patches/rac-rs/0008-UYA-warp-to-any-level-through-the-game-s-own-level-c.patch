@@ -1,0 +1,113 @@
+From 4b108a2b0132cc4814b1c5ff06aaf52fc4fd064d Mon Sep 17 00:00:00 2001
+From: sneid1 <sneid1@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 16:01:27 +1100
+Subject: [PATCH 10/12] UYA: warp to any level through the game's own level
+ change (rc3/warp.rs)
+
+Between fields the host calls the current level's request_level_change(level, 0) (rac3-decomp func_0038E5B8, one copy per
+single-player level program, its first words checked), with the registers saved and restored and interrupts masked. The level's
+main loop then runs level_change, level_switch and level_load with the level's own transition and set-up. A level the story state
+maps to another (Holostar 13 -> 23) is set back to the one asked for, and reported.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ oracle/src/rc3/mod.rs  |  1 +
+ oracle/src/rc3/warp.rs | 74 ++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 75 insertions(+)
+ create mode 100644 oracle/src/rc3/warp.rs
+
+diff --git a/oracle/src/rc3/mod.rs b/oracle/src/rc3/mod.rs
+index f21620a..de0b445 100644
+--- a/oracle/src/rc3/mod.rs
++++ b/oracle/src/rc3/mod.rs
+@@ -10,6 +10,7 @@ pub mod hle;
+ pub mod movie;
+ pub mod pad;
+ pub mod sif;
++pub mod warp;
+ 
+ /// UYA's host stubs on game functions, installed at the cold boot (cold.rs `boot`).
+ pub fn install(c: &mut crate::cpu::Cpu) {
+diff --git a/oracle/src/rc3/warp.rs b/oracle/src/rc3/warp.rs
+new file mode 100644
+index 0000000..0e6836c
+--- /dev/null
++++ b/oracle/src/rc3/warp.rs
+@@ -0,0 +1,74 @@
++//! UYA: a warp to any level program through the game's own level change. Between two fields (the game thread parked at its
++//! vblank wait) the host calls the current level's `request_level_change(level, 0)` (rac3-decomp: func_0038E5B8 in the front
++//! end, one copy in every single-player level program). It maps a few levels by story state (Holostar 13 to 23 before a story
++//! flag, 3 to 6 in one mode), stores the level being left (0x1d4cf0), sets `level_next` and `level_change_request`, and resets
++//! the hero's start fields. The level's main loop sees the request at the top of its next frame and runs `level_change` (the
++//! teardown), `level_switch` and `level_load` with the level's own transition and set-up, as a trip in the ship does. When the
++//! story state mapped the level to another one, `level_next` is set back to the level asked for (the warp loads the program
++//! asked for); `Warp::mapped` says so.
++//!
++//! The call runs on the host between fields with the registers saved and put back afterwards, interrupts masked (the vblank
++//! raised for the parked field must be taken by the game thread, not inside the call) and its own stack frame below the game's.
++use crate::cpu::Cpu;
++
++/// `request_level_change` in each single-player level program (rac3-decomp config/us/levels/functions.tsv, func_0038E5B8).
++/// The multiplayer programs (39 to 55) have none.
++const REQUEST: [(u32, u32); 34] = [
++    (1, 0x417da0), (2, 0x3f0508), (3, 0x405020), (4, 0x4286b8), (5, 0x4114d8), (6, 0x3fc970), (7, 0x4186b0), (8, 0x3fb0b0),
++    (9, 0x430fc0), (10, 0x3fae40), (11, 0x3f14b8), (12, 0x419628), (13, 0x3f9100), (14, 0x402830), (16, 0x4277d0), (17, 0x3f3690),
++    (18, 0x42aca8), (19, 0x40cad8), (20, 0x436170), (21, 0x3f0a00), (22, 0x41d390), (23, 0x3fac78), (24, 0x3ffef8), (26, 0x421900),
++    (27, 0x3f1608), (28, 0x3e3a28), (29, 0x4243a8), (30, 0x3eb808), (31, 0x3efe08), (32, 0x3f85c8), (33, 0x3f0a80), (34, 0x3f20b0),
++    (35, 0x3f1130), (36, 0x3f6b08),
++];
++/// Its first four code words, the same in every level program: the call is made only while they are in RAM.
++const SIG: [u32; 4] = [0x27bd_ffe0, 0xffb0_0010, 0xafa4_0000, 0x00a0_802d];
++/// `level_current` (1 Veldin, 2 Florana, ...).
++pub const LEVEL_CURRENT: u32 = 0x1d_545c;
++/// `level_next` and `level_change_request`: $gp (0x1dc8b0) + 0x3314 and - 0x623c, as request_level_change addresses them.
++pub const LEVEL_NEXT: u32 = 0x1d_fbc4;
++pub const CHANGE_REQUEST: u32 = 0x1d_6674;
++/// The return address the call is given: free low RAM that is never executed (the call ends when the pc reaches it).
++const RET: u32 = 0xff0;
++
++/// What a warp did.
++#[derive(Debug, Clone, Copy)]
++pub struct Warp {
++    /// The level being left.
++    pub from: u32,
++    /// The level the game's own mapping chose for the one asked for (equal to it when no story state applies).
++    pub mapped: u32,
++}
++
++/// Asks the game for a change to level `level` (see the module comment). Call only between fields.
++pub fn warp(c: &mut Cpu, level: u32) -> Result<Warp, String> {
++    let from = c.mem.rd32(LEVEL_CURRENT);
++    let f = REQUEST.iter().find(|&&(l, _)| l == from).map(|&(_, a)| a).ok_or_else(|| format!("warp: no request_level_change known for level {from}"))?;
++    for (k, &w) in SIG.iter().enumerate() {
++        let got = c.mem.rd32(f + 4 * k as u32);
++        if got != w {
++            return Err(format!("warp: level {from}'s request_level_change at {f:#x} is not in RAM (word {k} is {got:08x}, not {w:08x})"));
++        }
++    }
++    let (r, hi, lo, sa, pc, npc, status) = (c.r, c.hi, c.lo, c.sa, c.pc, c.npc, c.cp0[12]);
++    let sp = (c.g(29) as u32).wrapping_sub(0x400) & !0xf;
++    c.s(29, sp as i32 as i64 as u64);
++    c.s(4, u64::from(level));
++    c.s(5, 0);
++    c.s(31, u64::from(RET));
++    c.cp0[12] &= !1;
++    c.call_dyn(f, RET);
++    let ended = c.pc == RET && c.stop.is_none() && c.mem.fault.is_none();
++    let (at, stop, fault) = (c.pc, c.stop.clone(), c.mem.fault.clone());
++    (c.r, c.hi, c.lo, c.sa, c.pc, c.npc, c.cp0[12]) = (r, hi, lo, sa, pc, npc, status);
++    if !ended {
++        return Err(format!("warp: request_level_change did not return (pc {at:08x}, stop {stop:?}, fault {fault:?})"));
++    }
++    if c.mem.rd32(CHANGE_REQUEST) != 1 {
++        return Err("warp: request_level_change returned without setting level_change_request".into());
++    }
++    let mapped = c.mem.rd32(LEVEL_NEXT);
++    if mapped != level {
++        c.mem.wr32(LEVEL_NEXT, level);
++    }
++    Ok(Warp { from, mapped })
++}
+-- 
+2.51.2.windows.1
+

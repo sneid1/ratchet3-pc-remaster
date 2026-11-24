@@ -1,0 +1,1053 @@
+From 61a1a90edf1f303d42c7cf8e3536a6cb1098f720 Mon Sep 17 00:00:00 2001
+From: sneid1 <sneid1@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 13:03:45 +1100
+Subject: [PATCH 1/2] Up Your Arsenal (NTSC-U) on the oracle: disc profile rc3,
+ its IOP services, pad frames, movie player stub; rc1-aot feature gate
+
+---
+ oracle/Cargo.toml                  |   4 +
+ oracle/src/cold.rs                 |   7 +-
+ oracle/src/cpu.rs                  |   6 +
+ oracle/src/hle.rs                  |   4 +-
+ oracle/src/hs_hands/f_1e80c0.rs    |   1 +
+ oracle/src/lib.rs                  |  11 +-
+ oracle/src/mc.rs                   |  13 +-
+ oracle/src/rc2/hle.rs              |  37 +++--
+ oracle/src/rc2/mod.rs              |   1 +
+ oracle/src/rc3/cold_hooks.txt      |  19 +++
+ oracle/src/rc3/hle.rs              | 232 +++++++++++++++++++++++++++++
+ oracle/src/rc3/mod.rs              |  63 ++++++++
+ oracle/src/rc3/movie.rs            |  33 ++++
+ oracle/src/rc3/pad.rs              |  66 ++++++++
+ oracle/src/rc3/stubs.txt           |   5 +
+ oracle/src/rec/mod.rs              |  16 +-
+ oracle/src/snapfile.rs             |  17 ++-
+ oracle/src/ver.rs                  |  25 +++-
+ oracle/src/vu0aot.rs               |  28 +++-
+ rac-rs/crates/engine/Cargo.toml    |   7 +-
+ rac-rs/src/engine/gsfull/vu1aot.rs |   6 +
+ 21 files changed, 572 insertions(+), 29 deletions(-)
+ create mode 100644 oracle/src/rc3/cold_hooks.txt
+ create mode 100644 oracle/src/rc3/hle.rs
+ create mode 100644 oracle/src/rc3/mod.rs
+ create mode 100644 oracle/src/rc3/movie.rs
+ create mode 100644 oracle/src/rc3/pad.rs
+ create mode 100644 oracle/src/rc3/stubs.txt
+
+diff --git a/oracle/Cargo.toml b/oracle/Cargo.toml
+index 1fc8e0d..1f54f2e 100644
+--- a/oracle/Cargo.toml
++++ b/oracle/Cargo.toml
+@@ -7,6 +7,10 @@ edition = "2021"
+ ee-core = { path = "core" }
+ 
+ [features]
++# The first game's native VU0 microprograms and skinning fast path (src/vu0_prog*.rs, skinff_*.rs), generated from the R&C1
++# disc by tools/vugen_iso.py. A build for another game leaves them out (default-features = false): its VU0 runs on the interpreter.
++default = ["rc1-aot"]
++rc1-aot = []
+ # Speed-hand gate builds only (lane scratch_perf_hs, `--example hsregion --features hs_deny`): `hs_fast::deny_set` lets the
+ # region gate refuse every N-th plain-memory access of a hand to test its fallback paths. Never enabled in a game build.
+ hs_deny = []
+diff --git a/oracle/src/cold.rs b/oracle/src/cold.rs
+index 3e870ce..8ee1c26 100644
+--- a/oracle/src/cold.rs
++++ b/oracle/src/cold.rs
+@@ -477,7 +477,7 @@ pub fn boot(iso_path: &str, stubs_path: &str, extra_hooks: Option<&str>) -> Resu
+     // The disc (PAL SCES_509.16 or USA SCUS_971.99) and the video mode the game will pick from SYSTEM.CNF.
+     crate::ver::from_iso(iso_path);
+     let boot = crate::ver::disc().boot_file();
+-    let (lba, size) = iso_find(&mut iso, &format!("{boot};1")).ok_or_else(|| format!("none of SCES_509.16, SCUS_971.99, SCES_516.07 in the ISO {iso_path}"))?;
++    let (lba, size) = iso_find(&mut iso, &format!("{boot};1")).ok_or_else(|| format!("none of SCES_509.16, SCUS_971.99, SCES_516.07, SCUS_973.53 in the ISO {iso_path}"))?;
+     let mut elf = vec![0u8; size as usize];
+     iso.seek(SeekFrom::Start(lba as u64 * 2048)).map_err(|e| e.to_string())?;
+     iso.read_exact(&mut elf).map_err(|e| e.to_string())?;
+@@ -523,6 +523,9 @@ pub fn boot(iso_path: &str, stubs_path: &str, extra_hooks: Option<&str>) -> Resu
+     }
+     c.iso = std::fs::File::open(iso_path).ok();
+     crate::load_stubs(&mut c, stubs_path);
++    if crate::ver::rc3() {
++        crate::rc3::install(&mut c);
++    }
+     c.add_stub(crate::ver::addrs().pad_read, 18, "pad_read");
+     let mut pad = [0u8; 18];
+     pad[0] = 0xff;
+@@ -535,7 +538,7 @@ pub fn boot(iso_path: &str, stubs_path: &str, extra_hooks: Option<&str>) -> Resu
+     }
+     let mut k = Kernel::default();
+     let mut hk = vec![false; 1 << 23];
+-    read_hooks(if crate::ver::rc2() { crate::rc2::HOOKS } else { HOOKS }, &mut k, &mut hk);
++    read_hooks(if crate::ver::rc2() { crate::rc2::HOOKS } else if crate::ver::rc3() { crate::rc3::HOOKS } else { HOOKS }, &mut k, &mut hk);
+     if let Some(p) = extra_hooks {
+         if let Ok(t) = std::fs::read_to_string(p) {
+             read_hooks(&t, &mut k, &mut hk);
+diff --git a/oracle/src/cpu.rs b/oracle/src/cpu.rs
+index e114daf..9c348d0 100644
+--- a/oracle/src/cpu.rs
++++ b/oracle/src/cpu.rs
+@@ -93,6 +93,7 @@ pub struct Cpu {
+     /// Native prog0 (vu0aot.rs).
+     pub vu0_aot: crate::vu0aot::Vu0Aot,
+     /// Native one-joint skinning loop (skinff.rs).
++    #[cfg(feature = "rc1-aot")]
+     pub skinff: crate::skinff::SkinFf,
+     /// The vblank poll loop of the disc's game (`ver::Addrs::vblank_wait`, chosen when the machine is made): the frame
+     /// callback runs and compiled code unwinds there (rec/mod.rs, hs.rs).
+@@ -233,6 +234,7 @@ impl Cpu {
+             vu0_trace: None,
+             mc: Default::default(),
+             vu0_aot: crate::vu0aot::Vu0Aot::from_env(),
++            #[cfg(feature = "rc1-aot")]
+             skinff: Default::default(),
+             vblank_pc: crate::ver::addrs().vblank_wait,
+             snd_cd_pending: false,
+@@ -351,6 +353,10 @@ impl Cpu {
+     pub fn vblank(&mut self) {
+         self.vsync_armed = false;
+         self.snd_cd_finish();
++        // UYA: padman's frame of every open pad port (rc3/pad.rs).
++        if crate::ver::rc3() {
++            crate::rc3::pad::field(self);
++        }
+         // ORACLE_ICOUNT_SKEW=N (default 0): the instruction count (COP0 Count, timers, DMA/interrupt clock) jumps
+         // by N once per field (timing probe).
+         static SKEW: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+diff --git a/oracle/src/hle.rs b/oracle/src/hle.rs
+index 5fd8fca..8fcc6b2 100644
+--- a/oracle/src/hle.rs
++++ b/oracle/src/hle.rs
+@@ -137,7 +137,7 @@ impl Cpu {
+         if std::env::var("ORACLE_RPC").is_ok() {
+             eprintln!("bind client {client:x} sid {sid:x} -> server {server:x}");
+         }
+-        if crate::ver::rc2() {
++        if crate::ver::rc2() || crate::ver::rc3() {
+             crate::rc2::hle::note_bind(client, sid);
+         }
+         self.mem.wr32(client + 0x24, server);
+@@ -257,6 +257,8 @@ impl Cpu {
+     fn rpc_answer(&mut self, client: u32, fno: u32, send: u32, ssize: u32, recv: u32, rsize: u32, end: u32, end_param: u32) {
+         if crate::ver::rc2() {
+             self.rpc_rc2(client, fno, send, ssize, recv, rsize, end, end_param);
++        } else if crate::ver::rc3() {
++            self.rpc_rc3(client, fno, send, ssize, recv, rsize, end, end_param);
+         } else {
+             self.rpc_reply(client, fno, send, ssize, recv, rsize, end, end_param);
+         }
+diff --git a/oracle/src/hs_hands/f_1e80c0.rs b/oracle/src/hs_hands/f_1e80c0.rs
+index b127a0e..131a9db 100644
+--- a/oracle/src/hs_hands/f_1e80c0.rs
++++ b/oracle/src/hs_hands/f_1e80c0.rs
+@@ -7522,6 +7522,7 @@ fn drive(c: &mut Cpu, fr: &Frame) -> bool {
+         hs::settle(c); // S9: a stale interrupt mark (both lines low) would deopt the region at its first due check
+         // native loop hook (driver.txt): the compiled loop head calls it before its poll; it only runs passes the compiled code
+         // would run, with the same results (skin_ff), so the hand must not bypass it
++        #[cfg(feature = "rc1-aot")]
+         if off == 0x694 && c.skin_ff(c.pc) {
+             continue;
+         }
+diff --git a/oracle/src/lib.rs b/oracle/src/lib.rs
+index 1598bb0..6fa71f0 100644
+--- a/oracle/src/lib.rs
++++ b/oracle/src/lib.rs
+@@ -24,11 +24,16 @@ pub mod snd989;
+ pub mod spu2;
+ pub mod rec;
+ pub mod rc2;
++pub mod rc3;
+ pub mod vif;
+ mod vu;
++#[cfg(feature = "rc1-aot")]
+ mod vu0_prog0;
++#[cfg(feature = "rc1-aot")]
+ mod vu0_prog1;
++#[cfg(feature = "rc1-aot")]
+ mod vu0_prog9hi;
++#[cfg(feature = "rc1-aot")]
+ pub mod skinff;
+ pub mod vu0aot;
+ 
+@@ -143,7 +148,11 @@ pub fn load_stubs(c: &mut Cpu, path: &str) {
+         c.add_watch(a);
+     }
+     // R&C2's stub rules are built in (rc2/stubs.txt); `path` names R&C1's file.
+-    let t = if ver::rc2() { crate::rc2::STUBS.to_string() } else {
++    let t = if ver::rc2() {
++        crate::rc2::STUBS.to_string()
++    } else if ver::rc3() {
++        crate::rc3::STUBS.to_string()
++    } else {
+         let Ok(t) = std::fs::read_to_string(path) else { return };
+         t
+     };
+diff --git a/oracle/src/mc.rs b/oracle/src/mc.rs
+index 000b44e..ab681a6 100644
+--- a/oracle/src/mc.rs
++++ b/oracle/src/mc.rs
+@@ -51,6 +51,9 @@ pub struct McAddrs {
+     /// The send structs of 0x30 and 0x414 bytes (`send_buffer`).
+     pub send_30: u32,
+     pub send_414: u32,
++    /// An end callback that only signals libmc's semaphore (UYA 0x12dc88): nothing to apply, since the HLE's semaphore
++    /// waits always succeed (cold hooks). 0xffff_fff0 (never an address) where libmc has none.
++    pub cb_signal: u32,
+ }
+ 
+ const RC1_MC: McAddrs = McAddrs {
+@@ -61,11 +64,18 @@ const RC1_MC: McAddrs = McAddrs {
+     cb_read: 0x1238a0,
+     send_30: 0x159a80,
+     send_414: 0x159ab0,
++    cb_signal: 0xffff_fff0,
+ };
+ 
+ /// libmc's addresses for the running disc (R&C2: rc2/mod.rs).
+ pub fn mc_addrs() -> &'static McAddrs {
+-    if crate::ver::rc2() { &crate::rc2::MC } else { &RC1_MC }
++    if crate::ver::rc2() {
++        &crate::rc2::MC
++    } else if crate::ver::rc3() {
++        &crate::rc3::MC
++    } else {
++        &RC1_MC
++    }
+ }
+ const MAX_FDS: usize = 3;
+ const M_EXISTS: u16 = 0x8000;
+@@ -770,6 +780,7 @@ impl Cpu {
+                     }
+                 }
+             }
++            e if e == mc_addrs().cb_signal => {}
+             e if e == mc_addrs().cb_read => {
+                 let (n0, n1) = (self.mem.rd32(end_param) as i32, self.mem.rd32(end_param + 4) as i32);
+                 let (d0, d1) = (self.mem.rd32(end_param + 8), self.mem.rd32(end_param + 0xc));
+diff --git a/oracle/src/rc2/hle.rs b/oracle/src/rc2/hle.rs
+index 883e9d7..6baa8cb 100644
+--- a/oracle/src/rc2/hle.rs
++++ b/oracle/src/rc2/hle.rs
+@@ -35,8 +35,9 @@ impl Cpu {
+     #[inline]
+     pub fn snd_cd_finish(&mut self) {
+         if std::mem::take(&mut self.snd_cd_pending) {
+-            self.mem.wr32(super::SND_CD_BUSY, 0);
+-            self.mem.wr32(super::SND_CD_BUSY + 0x10, 0);
++            let busy = if crate::ver::rc3() { crate::rc3::SND_CD_BUSY } else { super::SND_CD_BUSY };
++            self.mem.wr32(busy, 0);
++            self.mem.wr32(busy + 0x10, 0);
+         }
+     }
+ 
+@@ -105,17 +106,7 @@ impl Cpu {
+         // 989snd bank loads (R&C1's path above, client 0x15ebe8): without them every play command names handle 0 and no
+         // sound effect plays (only the streams: music, voices).
+         if sid == SND_LOAD_SID && (fno == 3 || fno == 0x57) && send != 0 && recv != 0 {
+-            let arg = self.mem.rd32(send);
+-            let inner = self.snd.ensure(&self.iop, &self.mem.ram, true, 0);
+-            inner.advance_to(inner.vb);
+-            let h = inner.load_bank(fno, arg, &self.mem.ram, &mut self.iso);
+-            if std::env::var("ORACLE_SNDTRACE").is_ok() {
+-                eprintln!("sndtrace bank load fno {fno:#x} arg {arg:#x} -> {h:#x}{}", inner.notes.last().map_or(String::new(), |n| format!(" ({n})")));
+-            }
+-            for k in 0..rsize / 4 {
+-                self.mem.wr32(recv + 4 * k, 0);
+-            }
+-            self.mem.wr32(recv, h);
++            self.snd_bank_load(fno, send, recv, rsize);
+             return;
+         }
+         if sid == SND_SID {
+@@ -129,8 +120,24 @@ impl Cpu {
+         }
+     }
+ 
+-    /// 989snd (sid 0x123456).
+-    fn snd_rpc_rc2(&mut self, fno: u32, send: u32, ssize: u32, recv: u32, rsize: u32) {
++    /// 989snd's bank loader (R&C2 sid 0x123457, UYA the same): fno 3 = a bank from a disc sector, fno 0x57 = a bank from EE
++    /// RAM; the reply is the bank handle the play commands pass back.
++    pub(crate) fn snd_bank_load(&mut self, fno: u32, send: u32, recv: u32, rsize: u32) {
++        let arg = self.mem.rd32(send);
++        let inner = self.snd.ensure(&self.iop, &self.mem.ram, true, 0);
++        inner.advance_to(inner.vb);
++        let h = inner.load_bank(fno, arg, &self.mem.ram, &mut self.iso);
++        if std::env::var("ORACLE_SNDTRACE").is_ok() {
++            eprintln!("sndtrace bank load fno {fno:#x} arg {arg:#x} -> {h:#x}{}", inner.notes.last().map_or(String::new(), |n| format!(" ({n})")));
++        }
++        for k in 0..rsize / 4 {
++            self.mem.wr32(recv + 4 * k, 0);
++        }
++        self.mem.wr32(recv, h);
++    }
++
++    /// 989snd (sid 0x123456; UYA the same module and protocol, rc3/hle.rs).
++    pub(crate) fn snd_rpc_rc2(&mut self, fno: u32, send: u32, ssize: u32, recv: u32, rsize: u32) {
+         // 989snd's command server, the same module and protocol as R&C1 (`rpc_reply`, client 0x15ebc0): direct calls
+         // (fno = cid, argument words in the send buffer, result at recv + 4; fno 0 module init, 42 stream init) and
+         // the batch fno 0x4d (built by 0x132e50): {count, then per command {i16 cid, i16 len, data padded to 4}}, one
+diff --git a/oracle/src/rc2/mod.rs b/oracle/src/rc2/mod.rs
+index f38ff75..1e245e1 100644
+--- a/oracle/src/rc2/mod.rs
++++ b/oracle/src/rc2/mod.rs
+@@ -33,6 +33,7 @@ pub const MC: crate::mc::McAddrs = crate::mc::McAddrs {
+     cb_read: 0x1277f8,
+     send_30: 0x141c00,
+     send_414: 0x141c30,
++    cb_signal: 0xffff_fff0,
+ };
+ 
+ /// libcdvd N-command RPC client (R&C1 0x132490; sceCdRead 0x1253a8 = R&C1 0x121450) and the words its end callback
+diff --git a/oracle/src/rc3/cold_hooks.txt b/oracle/src/rc3/cold_hooks.txt
+new file mode 100644
+index 0000000..cd5730e
+--- /dev/null
++++ b/oracle/src/rc3/cold_hooks.txt
+@@ -0,0 +1,19 @@
++# UYA (SCUS_973.53) cold-boot hooks; the R&C2 rule each one replaces is named (oracle/src/rc2/cold_hooks.txt).
++# libkernel InitSys (0x124b90): its FindAddress scan of the BIOS image in RAM (syscall 0x83 over 0x80000000..0x80080000,
++# then SetSyscall) (R&C2 11f718) -> skip
++ret 124a80 0
++# sceSifInitRpc (0x121fe8: rac3-decomp's inventory splits its first instruction off as a 4-byte function) / sceSifInitCmd wait
++# for the IOP's reply packet over SIF0 (R&C2 11cf78 / 11c8d8) -> skip
++ret 121fe8 0
++ret 1218b8 0
++# sceSifRebootIop (sends the reset command with SifSetDma) / sceSifSyncIop (SMFLAG & 0x40000) (R&C2 11eed8 / 11eea0): the IOP
++# "rebooted" at once
++ret 124138 1
++ret 1242b8 1
++# WaitSema / PollSema / iPollSema syscall wrappers (syscalls 0x44, 0x45, -0x46; R&C2 11ac60/70/80): always succeed, through
++# `jr ra; move v0,a0` placed in free low RAM when the main program's crt0 entry (0x13ada8) runs.
++w32 13ada8 1000 03e00008
++w32 13ada8 1004 0080102d
++jmp 11ee60 1000
++jmp 11ee70 1000
++jmp 11ee80 1000
+diff --git a/oracle/src/rc3/hle.rs b/oracle/src/rc3/hle.rs
+new file mode 100644
+index 0000000..5a7950a
+--- /dev/null
++++ b/oracle/src/rc3/hle.rs
+@@ -0,0 +1,232 @@
++//! UYA's IOP services (the IOP is not emulated; each reply is what the game reads back), reached from hle.rs `rpc_answer`
++//! (`rpc_rc3`) while `ver::rc3()`. A call to a server this file does not answer stops the machine with the call's
++//! details, so every service the game needs is seen and answered explicitly.
++use crate::cpu::Cpu;
++
++/// IOP RAM handed out by sceSifAllocSysMemory: a bump pointer over the 2 MB the oracle models (`Cpu::iop`), from 1 MB up
++/// (the lower part is the IOP kernel and modules on a real console).
++static IOP_HEAP_NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x10_0000);
++const IOP_RAM_END: u32 = 0x20_0000;
++
++impl Cpu {
++    /// A UYA RPC call's reply (hle.rs `rpc_answer`).
++    #[allow(clippy::too_many_arguments)]
++    pub(crate) fn rpc_rc3(&mut self, client: u32, fno: u32, send: u32, ssize: u32, recv: u32, rsize: u32, end: u32, end_param: u32) {
++        let sid = self.note_call(client, fno, send, ssize, recv, rsize, end);
++        // The memory card server (mc.rs, with rc3::MC), then the save file, as R&C2 does.
++        if self.mem.rd32(client + 0x24) == crate::mc::MCSERV {
++            self.mc_rpc(fno, send, recv, end, end_param);
++            crate::mc::persist_after(self, fno);
++            return;
++        }
++        match (sid, fno) {
++            // libcdvd init server, sceCdInit (0x12b300): reply {?, cdvdfsv version, ?, mode} read uncached at recv + 4..0xc.
++            // All zero passes its version check (0x12b4f8: (0 + 0xff) >> 8 < 2) onto the success path, as R&C2's zero reply did.
++            (0x8000_0592, 0) => {
++                self.zero_reply(recv, rsize);
++                return;
++            }
++            // libcdvd disk-ready server, sceCdDiskReady(mode) (0x12b800): returns the reply word (read uncached at 0x12b9e0);
++            // its own failure value is 6, SCECdNotReady. The disc image is always in: 2, SCECdComplete.
++            (0x8000_059c, 0) => {
++                self.mem.wr32(recv, 2);
++                return;
++            }
++            // libcdvd S-command server (sid 0x80000593; the generic S-command call 0x12bd80 returns the reply word read
++            // uncached): fno 0x22 is sceCdMmode(media), the game sends 2 (SCECdDVD). 1 = done.
++            (0x8000_0593, 0x22) => {
++                self.mem.wr32(recv, 1);
++                return;
++            }
++            // fno 1 is sceCdReadClock (called from 0x12be84, reply 0x10 bytes): with the host clock on (clock.rs), word 0 = 1
++            // (done) and the console's RTC in JST at recv + 4, as R&C1's HLE answers it; with the fixed clock of tests and
++            // replays, the zeroed reply.
++            (0x8000_0593, 1) => {
++                self.zero_reply(recv, rsize);
++                if crate::clock::real() {
++                    self.mem.wr32(recv, 1);
++                    for (k, b) in crate::clock::rtc_now().iter().enumerate() {
++                        self.mem.wr8(recv + 4 + k as u32, *b);
++                    }
++                }
++                return;
++            }
++            // fno 4 is sceCdGetError (called from 0x12bc54): 0, no error (as R&C1's HLE answers it).
++            (0x8000_0593, 4) => {
++                self.mem.wr32(recv, 0);
++                return;
++            }
++            // libcdvd N-command server (sid 0x80000595, client 0x140ad0): fno 14 is sceCdGetDiskType, 0x14 = SCECdPS2DVD (as
++            // R&C1 and R&C2 answer it).
++            (0x8000_0595, 14) => {
++                self.mem.wr32(recv, 0x14);
++                return;
++            }
++            // fno 1 is sceCdRead {lba, sectors, buf, ..}: the read completes at once and the end callback's effects are
++            // applied (super::CD_*), as R&C1's and R&C2's HLE do. Every byte lands in `buf` directly, so the callback's
++            // copy of an unaligned buffer's head and tail (0x12ab88, from the IOP's bounce struct) has nothing to add.
++            // IOP heap server (sid 0x80000003, client 0x156400): fno 4 is sceSifAllocSysMemory(type, size, addr), which
++            // 0x123b98 sends as {size, type, addr} and returns the reply word: the block's IOP address, 0 = failed. Type 2
++            // asks for `addr` itself; 0 and 1 (first or last fit) get the next free block.
++            (0x8000_0003, 4) => {
++                let (size, kind, at) = (self.mem.rd32(send), self.mem.rd32(send + 4), self.mem.rd32(send + 8));
++                let addr = if kind == 2 {
++                    at
++                } else {
++                    let a = IOP_HEAP_NEXT.load(std::sync::atomic::Ordering::Relaxed);
++                    let end = a + ((size + 0xff) & !0xff);
++                    if end > IOP_RAM_END {
++                        self.stop = Some(format!("sceSifAllocSysMemory: {size:#x} bytes do not fit in IOP RAM (next free {a:#x})"));
++                        return;
++                    }
++                    IOP_HEAP_NEXT.store(end, std::sync::atomic::Ordering::Relaxed);
++                    a
++                };
++                if std::env::var("ORACLE_RPC").is_ok() {
++                    eprintln!("sceSifAllocSysMemory type {kind} size {size:#x} addr {at:#x} -> {addr:#x}");
++                }
++                self.mem.wr32(recv, addr);
++                return;
++            }
++            // fno 6 / 7 (0x123c20 / 0x123c90, no arguments, the reply word or -1 on failure): the free IOP memory in all and
++            // its largest block, sceSifQueryTotalFreeMemSize / sceSifQueryMaxFreeMemSize. The bump region is one block.
++            (0x8000_0003, 6 | 7) => {
++                let free = IOP_RAM_END - IOP_HEAP_NEXT.load(std::sync::atomic::Ordering::Relaxed);
++                self.mem.wr32(recv, free);
++                return;
++            }
++            // loadfile server (sid 0x80000006, client 0x1567c0): fno 0xff is its version query (0x123d60), whose 4 bytes the
++            // caller copies to 0x1567e8. No code of the main program reads that word back: zero.
++            (0x8000_0006, 0xff) => {
++                self.zero_reply(recv, rsize);
++                return;
++            }
++            // IOP file I/O server (sid 0x80000001, client 0x156300): fno 0xff is its init (0x1232a0, sends two EE buffers). Of
++            // the 8-byte reply, word 0 is stored at 0x156328, which no code of the main program reads, and word 1 == 2 sets
++            // 0x13dc88, which only steers the SIF command handler 0x122cc8 that the IOP would call (never, here): zero.
++            (0x8000_0001, 0xff) => {
++                self.zero_reply(recv, rsize);
++                return;
++            }
++            (0x8000_0595, 1) => {
++                use super::{CD_BUSY, CD_CMD, CD_RESULT};
++                let (lba, n, buf) = (self.mem.rd32(send), self.mem.rd32(send + 4), self.mem.rd32(send + 8));
++                if std::env::var("ORACLE_RPC").is_ok() {
++                    eprintln!("sceCdRead lba {lba:#x} sectors {n} buf {buf:#x} ra {:08x} icount {}", self.g(31) as u32, self.icount);
++                }
++                if !self.iso_read(lba, n, buf & 0x01ff_ffff) {
++                    self.stop = Some(format!("sceCdRead lba {lba:#x} sectors {n}: outside the disc image"));
++                    return;
++                }
++                let cmd = self.mem.rd32(CD_CMD);
++                self.mem.wr32(CD_RESULT, cmd);
++                self.mem.wr32(CD_BUSY, 0);
++                self.mem.wr32(CD_CMD, 0);
++                return;
++            }
++            // libmtap's mtapman.irx (sid 0x80000900, client 0x15ba00; strings at 0x151a10..): every call sends and receives the
++            // 128-byte buffer 0x15ba40. fno 5 sceMtapGetModVersion: word 0 = the module version, which libmtap.a 3.16 requires
++            // to be 3.16 (0x12eab4: version >> 4 == 0x31). fno 1 sceMtapPortOpen(port): word 1 = 1, opened. fno 3
++            // sceMtapGetConnection(port): word 1 = 0, no multitap in the port (one controller, plugged in directly).
++            (0x8000_0900, 5) => {
++                self.zero_reply(recv, rsize);
++                self.mem.wr32(recv, 0x310);
++                return;
++            }
++            (0x8000_0900, 1) => {
++                self.mem.wr32(recv + 4, 1);
++                return;
++            }
++            (0x8000_0900, 3) => {
++                self.mem.wr32(recv + 4, 0);
++                return;
++            }
++            // fno 6 (0x12e9d8, right after the version check): gives mtapman an EE buffer (0x15bac0, zeroed just before) for
++            // its status; the init ignores the reply. Without a multitap the module never writes it: word 0 = 0.
++            (0x8000_0900, 6) => {
++                self.mem.wr32(recv, 0);
++                return;
++            }
++            // libpad's padman.irx (sids 0x80000100 / 0x80000101, clients 0x15bb40 / 0x15bb68; strings at 0x151b31..): fno 1
++            // with a 128-byte buffer whose word 0 is the command; the reply comes back in the same buffer.
++            (0x8000_0100 | 0x8000_0101, 1) => {
++                let cmd = self.mem.rd32(send);
++                match cmd {
++                    // Module version (0x12fce8 returns word 3): libpad.a 4.0 requires major 4 (0x12ed6c: version >> 8 == 4).
++                    0x12 => self.mem.wr32(recv + 0xc, 0x400),
++                    // Init (0x12ee18, with libpad's buffer at word 5) and end (0x12ef10): word 3 is the result, 1 = done.
++                    0x10 | 0xf => self.mem.wr32(recv + 0xc, 1),
++                    // scePadSetMainMode (0x12f860) and scePadSetActAlign (0x12f9e0): word 5 = 1, accepted. The frames padman
++                    // DMAs (pad.rs) already show the analog mode, and their request state stays 0, complete.
++                    6 | 8 => self.mem.wr32(recv + 0x14, 1),
++                    // Button info, the pressure-sensitive buttons on (0x12fb68): word 4 = 1, accepted.
++                    0xa => self.mem.wr32(recv + 0x10, 1),
++                    // Command 24 (0x12fd50, word 1 = 0 or 1): the caller reads no reply word, only whether the call went out.
++                    0x18 => {}
++                    // scePadPortOpen {1, port, slot, -, EE DMA buffer} (0x12f1c0): word 3 = 1, opened; word 5 = padman's area
++                    // for that port and slot in IOP RAM, which libpad keeps (0x12f23c). One 0x100 block per port and slot at
++                    // 0x3_0000, below the data cache (super::IOP_CACHE_BASE), in IOP RAM nothing else uses.
++                    1 => {
++                        let (port, slot) = (self.mem.rd32(send + 4), self.mem.rd32(send + 8));
++                        super::pad::opened(port, slot, self.mem.rd32(send + 0x10));
++                        self.mem.wr32(recv + 0xc, 1);
++                        self.mem.wr32(recv + 0x14, 0x3_0000 + (port * 4 + slot) * 0x100);
++                    }
++                    _ => {
++                        if self.stop.is_none() {
++                            self.stop = Some(format!("rc3: padman command {cmd:#x} not answered (sid {sid:#x}, send {send:x}, ra {:08x})", self.g(31) as u32));
++                        }
++                    }
++                }
++                return;
++            }
++            // 989snd (super::SND_*): R&C2's command server and bank loader HLE, the same module and protocol.
++            (super::SND_LOAD_SID, 3 | 0x57) if send != 0 && recv != 0 => {
++                self.snd_bank_load(fno, send, recv, rsize);
++                return;
++            }
++            (super::SND_SID, _) => {
++                self.snd_rpc_rc2(fno, send, ssize, recv, rsize);
++                return;
++            }
++            // IOP data cache (super::IOP_CACHE_*): fno 2 = its buffer {base, size, ..}; fno 1 {iop addr} copies rsize bytes
++            // of IOP RAM back to recv (what the EE parked there with sceSifSetDma).
++            (super::IOP_CACHE_SID, 2) => {
++                self.zero_reply(recv, rsize);
++                self.mem.wr32(recv, super::IOP_CACHE_BASE);
++                self.mem.wr32(recv + 4, super::IOP_CACHE_SIZE);
++                return;
++            }
++            (super::IOP_CACHE_SID, 1) => {
++                let (src, n) = (self.mem.rd32(send) as usize & 0x1f_ffff, rsize as usize);
++                if src + n > IOP_RAM_END as usize {
++                    self.stop = Some(format!("IOP data cache read {src:#x}+{n:#x} past the 2 MB IOP RAM"));
++                    return;
++                }
++                if src + n > self.iop.len() {
++                    self.iop.resize(IOP_RAM_END as usize, 0);
++                }
++                for k in 0..n {
++                    self.mem.wr8(recv.wrapping_add(k as u32), self.iop[src + k]);
++                }
++                return;
++            }
++            _ => {}
++        }
++        let w0 = if send != 0 { self.mem.rd32(send) } else { 0 };
++        // The first unanswered call is the one to report: later calls in the same dispatch batch must not replace it.
++        if self.stop.is_some() {
++            return;
++        }
++        self.stop = Some(format!(
++            "rc3: no reply for RPC sid {sid:#x} fno {fno:#x} (client {client:x}, send {send:x} size {ssize:#x} w0 {w0:08x}, recv {recv:x} size {rsize:#x}, end {end:x}/{end_param:x}, ra {:08x})",
++            self.g(31) as u32
++        ));
++    }
++
++    fn zero_reply(&mut self, recv: u32, rsize: u32) {
++        for k in 0..rsize / 4 {
++            self.mem.wr32(recv + 4 * k, 0);
++        }
++    }
++}
+diff --git a/oracle/src/rc3/mod.rs b/oracle/src/rc3/mod.rs
+new file mode 100644
+index 0000000..67dc599
+--- /dev/null
++++ b/oracle/src/rc3/mod.rs
+@@ -0,0 +1,63 @@
++//! Ratchet & Clank: Up Your Arsenal (NTSC-U SCUS_973.53, disc "RATCHETANDCLANK3", VER 1.00): the game profile of the oracle,
++//! used only while `ver::rc3()`. The disc boots a loader at 0x800000 (SCUS_973.53) that unpacks the main program
++//! (rac3-decomp's `boot_elf`, entry 0x13ada8) to 0x100000; every address here is in that main program. Found in the
++//! unpacked program (ratchet3-remaster scripts/uya_sdk_scan.py, function starts from rac3-decomp config/us/inventory.tsv):
++//! the libkernel syscall wrappers by their `addiu v1, zero, N; syscall` pairs, libsif by the RPC command ids it loads
++//! (0x8000_0009 bind, 0x8000_000a call) and the sceSifAddCmdHandler calls of sceSifInitRpc, the IOP servers by the sids
++//! their bind calls load. Children: `hle.rs` (UYA's IOP services).
++
++pub mod hle;
++pub mod movie;
++pub mod pad;
++
++/// UYA's host stubs on game functions, installed at the cold boot (cold.rs `boot`).
++pub fn install(c: &mut crate::cpu::Cpu) {
++    c.add_host_stub(movie::PLAYER, "movie player (rc3/movie.rs)", movie::PLAYER_SIG, movie::player);
++}
++
++/// The oracle's own hooks (ver::Addrs). sceSifBindRpc 0x122630 (loads 0x8000_0009 twice), sceSifCallRpc 0x122810 (loads
++/// 0x8000_000a twice). sceGsSyncV's INTC_STAT poll 0x11f390 (VBON, bit 2; `Cpu::poll_ff` skips it to the next vblank). The
++/// vblank wait of compiled code and the pad read are not located yet: 0xffff_fff0 is never a pc (as R&C2's poll head).
++pub const ADDRS: crate::ver::Addrs = crate::ver::Addrs { vblank_wait: 0xffff_fff0, poll_head: 0x11f390, pad_read: 0xffff_fff0, sif_call_rpc: 0x122810, sif_bind_rpc: 0x122630 };
++
++/// libcdvd N-command client (bound to sid 0x80000595) and the words the end callback of its calls leaves (0x12aae0, reached
++/// from sceCdRead's 0x12ab88): result 0x13f964 = command 0x13f960, busy word 0x13f934 cleared, then the command cleared
++/// (R&C2 0x1375d0 / 0x136454 / 0x136430 / 0x136458).
++pub const CD_NCMD_CLIENT: u32 = 0x140ad0;
++pub const CD_CMD: u32 = 0x13f960;
++pub const CD_BUSY: u32 = 0x13f934;
++pub const CD_RESULT: u32 = 0x13f964;
++
++/// libmc (client 0x15a400 bound to sid 0x80000400; call sites 0x12dbe4..0x12e95c, reply word 0x15b9c0): GetInfo end callback
++/// 0x12e3a8 and its three output pointers (R&C2 0x127c68); no Chdir call (no fno 0xc among the call sites); Read callback 0x12dfa0
++/// (head/tail layout as R&C1's); the send structs of 0x30 / 0x414 bytes; the other calls end in 0x12dc88, which only signals
++/// libmc's semaphore (iSignalSema of 0x141540).
++pub const MC: crate::mc::McAddrs = crate::mc::McAddrs {
++    cb_getinfo: 0x12e3a8,
++    getinfo_ptrs: [(0x15a428, 0), (0x15a42c, 4), (0x15a430, 0x90)],
++    cb_chdir: 0xffff_fff0,
++    chdir_dir: 0x0010_0000,
++    cb_read: 0x12dfa0,
++    send_30: 0x15a480,
++    send_414: 0x15a4b0,
++    cb_signal: 0x12dc88,
++};
++
++/// 989snd's command server (client 0x1d4900) and bank loader (client 0x1d49c0), the same module and sids as R&C2's, answered by
++/// R&C2's HLE (rc2/hle.rs `snd_rpc_rc2`, `snd_bank_load`). Its CD channel read (0x13cd20: busy word 0x1d4980 = 1, status word
++/// +0x10 = 0, then command 56 {lba, sectors, buf}; 0x13cdf0 polls the busy word) is done at the next field tick, when
++/// `snd_cd_finish` clears both words (R&C2 0x1a7180).
++pub const SND_SID: u32 = 0x123456;
++pub const SND_LOAD_SID: u32 = 0x123457;
++pub const SND_CD_BUSY: u32 = 0x1d4980;
++
++/// IOP data cache module (sid 0x11, client 0x1d4b08, as R&C2's): the EE parks blobs in IOP RAM and copies them back (fno 1),
++/// inside the buffer fno 2 reports. Its region of the modelled 2 MB IOP RAM sits below the heap that sceSifAllocSysMemory hands
++/// out from 1 MB up (hle.rs), so the two never overlap.
++pub const IOP_CACHE_SID: u32 = 0x11;
++pub const IOP_CACHE_BASE: u32 = 0x4_0000;
++pub const IOP_CACHE_SIZE: u32 = 0xc_0000;
++
++/// Stub rules (oracle/stubs.txt format) and cold-boot hook rules (cold_hooks.txt format) of UYA.
++pub const STUBS: &str = include_str!("stubs.txt");
++pub const HOOKS: &str = include_str!("cold_hooks.txt");
+diff --git a/oracle/src/rc3/movie.rs b/oracle/src/rc3/movie.rs
+new file mode 100644
+index 0000000..a4504d9
+--- /dev/null
++++ b/oracle/src/rc3/movie.rs
+@@ -0,0 +1,33 @@
++//! UYA's movie player (front end 0x3afaa8, called by the boot sequence 0x3a7ab0 and by 0x3a8f64): it allocates its buffers
++//! through its third argument, sets up libmpeg on the IPU (0x3917c0, 0x3affe8), runs the stream loop 0x3afc70 and returns
++//! that loop's result: 1 when Start ended the movie, 0 when it played to its end. On the way out it clears bit 0x80 of
++//! 0x1d4d40. The oracle has no IPU, so the loop would wait forever for decoded pictures (the decoder never reaches state 3).
++//! This host stub takes the player's place, as rac-rs's fmv_bridge does for R&C1's: a movie service (`set_service`, the
++//! window) plays the PSS and says whether Start ended it. With no service the movie cannot be watched, so it is skipped:
++//! 1, as when Start ends it. That is also what the front end's movie sequence 0x3a8d80 needs to leave for the title
++//! (0x392f68 stops the sequence on a skip, then 0x3a1258); a 0 would start the next attract movie at once, forever.
++use crate::cpu::Cpu;
++use std::sync::OnceLock;
++
++pub const PLAYER: u32 = 0x3afaa8;
++/// The player's first four code words (the front end's .text): the stub applies only while they are in RAM.
++pub const PLAYER_SIG: [u32; 4] = [0x27bd_ffc0, 0xffb5_0028, 0xffb6_0030, 0x0080_a82d];
++/// The flag word whose bit 0x80 the player clears on its way out (0x3afc28..0x3afc60).
++const FLAGS: u32 = 0x1d4d40;
++
++/// A movie service: called with the player's arguments (a0, a1, a3, t0), returns true when Start ended the movie.
++static SERVICE: OnceLock<fn(&mut Cpu, [u32; 4]) -> bool> = OnceLock::new();
++
++/// Attaches the movie service (the window that plays the PSS). Once per process.
++pub fn set_service(f: fn(&mut Cpu, [u32; 4]) -> bool) {
++    let _ = SERVICE.set(f);
++}
++
++pub fn player(c: &mut Cpu) -> bool {
++    let args = [c.g(4) as u32, c.g(5) as u32, c.g(7) as u32, c.g(8) as u32];
++    let skipped = SERVICE.get().is_none_or(|f| f(c, args));
++    let flags = c.mem.rd32(FLAGS);
++    c.mem.wr32(FLAGS, flags & !0x80);
++    c.s(2, skipped as u64);
++    true
++}
+diff --git a/oracle/src/rc3/pad.rs b/oracle/src/rc3/pad.rs
+new file mode 100644
+index 0000000..3141e1d
+--- /dev/null
++++ b/oracle/src/rc3/pad.rs
+@@ -0,0 +1,66 @@
++//! padman's side of UYA's pads: every field the IOP pad driver DMAs a 0x80-byte frame into the EE buffer each open port
++//! and slot gave scePadPortOpen (word 4 of the open command, hle.rs), alternating between the buffer's two halves and
++//! counting up the frame number at +0x58. libpad's own code reads it (0x12f2a0 copies the half with the larger frame number;
++//! scePadGetState reads its state byte +0x70, scePadRead its data and length). Frame layout as libpad 4.0 reads it:
++//!   +0x00 data (32 bytes: 0 = ok, mode id, buttons (active low), right x/y, left x/y, 12 pressures), +0x50 mode table
++//!   (u16 x4), +0x58 frame number, +0x60 data length, +0x64 mode config, +0x65 current mode id, +0x66 model, +0x67 data ready,
++//!   +0x68 mode count, +0x69 current mode offset, +0x6a actuator count, +0x6b actuator combinations, +0x6d mode,
++//!   +0x6e mode lock, +0x70 state (6 = stable), +0x71 request state (0 = complete), +0x72 current task (1 = updating).
++//! Port 0 slot 0 is a DualShock 2 in analog mode with pressure (mode id 0x79: nine halfwords of data) whose buttons and
++//! sticks are `Cpu::pad` (`Machine::set_pad`); every other port and slot reports no pad (state 0).
++use crate::cpu::Cpu;
++use std::sync::Mutex;
++
++/// (port, slot, EE address of its 0x100-byte DMA buffer) of every open port.
++static OPEN: Mutex<Vec<(u32, u32, u32)>> = Mutex::new(Vec::new());
++
++/// scePadPortOpen(port, slot, buffer) reached padman (hle.rs).
++pub fn opened(port: u32, slot: u32, buf: u32) {
++    let mut o = OPEN.lock().unwrap();
++    o.retain(|&(p, s, _)| (p, s) != (port, slot));
++    o.push((port, slot, buf));
++}
++
++/// One field of padman: the next frame of every open port.
++pub fn field(c: &mut Cpu) {
++    let open = OPEN.lock().unwrap().clone();
++    for (port, slot, buf) in open {
++        // The older half gets the new frame, numbered one past the newer half's.
++        let (n0, n1) = (c.mem.rd32(buf + 0x58), c.mem.rd32(buf + 0x80 + 0x58));
++        let half = if n0 <= n1 { buf } else { buf + 0x80 };
++        let f = frame(c.pad.filter(|_| port == 0 && slot == 0), n0.max(n1).wrapping_add(1));
++        for (k, b) in f.iter().enumerate() {
++            c.mem.wr8(half + k as u32, *b);
++        }
++    }
++}
++
++fn frame(pad: Option<[u8; 18]>, number: u32) -> [u8; 0x80] {
++    let mut f = [0u8; 0x80];
++    f[0x58..0x5c].copy_from_slice(&number.to_le_bytes());
++    let Some(report) = pad else {
++        // No pad in this port: state 0, disconnected.
++        return f;
++    };
++    f[0] = 0;
++    f[1] = 0x79;
++    f[2..20].copy_from_slice(&report);
++    for (k, id) in [0x0004u16, 0x0007].iter().enumerate() {
++        f[0x50 + 2 * k..0x52 + 2 * k].copy_from_slice(&id.to_le_bytes());
++    }
++    f[0x60..0x64].copy_from_slice(&20u32.to_le_bytes());
++    f[0x64] = 1;
++    f[0x65] = 0x79;
++    f[0x66] = 3;
++    f[0x67] = 1;
++    f[0x68] = 2;
++    f[0x69] = 1;
++    f[0x6a] = 2;
++    f[0x6b] = 1;
++    f[0x6d] = 1;
++    f[0x6e] = 3;
++    f[0x70] = 6;
++    f[0x71] = 0;
++    f[0x72] = 1;
++    f
++}
+diff --git a/oracle/src/rc3/stubs.txt b/oracle/src/rc3/stubs.txt
+new file mode 100644
+index 0000000..2f7b5f1
+--- /dev/null
++++ b/oracle/src/rc3/stubs.txt
+@@ -0,0 +1,5 @@
++# addr ret name   (UYA SCUS_973.53 main program; R&C2 oracle/src/rc2/stubs.txt equivalents in brackets)
++# SIF RPC (IOP not emulated): calls complete at once, nothing is busy. [11d620 11d810 11d450]
++122810 0 sceSifCallRpc
++122a10 0 sceSifCheckStatRpc
++122630 0 sceSifBindRpc
+diff --git a/oracle/src/rec/mod.rs b/oracle/src/rec/mod.rs
+index ac669a1..780337c 100644
+--- a/oracle/src/rec/mod.rs
++++ b/oracle/src/rec/mod.rs
+@@ -792,9 +792,18 @@ impl Cpu {
+         let w = rd(&self.mem, pc);
+         let (rs, rt) = ((w >> 21 & 31) as usize, (w >> 16 & 31) as usize);
+         let at = |i: u32| rd(&self.mem, pc + 4 * i);
+-        if w >> 26 != 0x23 || rt == 0 || rs == rt || at(1) != 0x3000_0004 | (rt as u32) << 21 | (rt as u32) << 16
+-            || at(2) | at(3) | at(4) | at(6) != 0 || at(5) != 0x1000_fffa | (rt as u32) << 21
+-        {
++        let rc1_shape = at(1) == 0x3000_0004 | (rt as u32) << 21 | (rt as u32) << 16
++            && at(2) | at(3) | at(4) | at(6) == 0
++            && at(5) == 0x1000_fffa | (rt as u32) << 21;
++        // UYA's sceGsSyncV poll (0x11f390): lw rt,(rs); andi rt,rt,4; bnez rt,+4; nop; lw rt,0(sp); beqz rt,-6; nop. It also
++        // leaves when the word at sp turns nonzero, so it is only skipped while that word is 0 (nothing in between writes it).
++        let rc3_shape = at(1) == 0x3000_0004 | (rt as u32) << 21 | (rt as u32) << 16
++            && at(2) == 0x1400_0004 | (rt as u32) << 21
++            && at(3) | at(6) == 0
++            && at(4) == 0x8fa0_0000 | (rt as u32) << 16
++            && at(5) == 0x1000_fffa | (rt as u32) << 21
++            && self.mem.rd32(self.g(29) as u32) == 0;
++        if w >> 26 != 0x23 || rt == 0 || rs == rt || !(rc1_shape || rc3_shape) {
+             return;
+         }
+         let a = (self.g(rs) as u32).wrapping_add(w as i16 as i32 as u32);
+@@ -881,6 +890,7 @@ const _: () = {
+ #[doc(hidden)]
+ pub fn ee_core_ff(c: &mut ee_core::cpu::Cpu, kind: u32, pc: u32) -> bool {
+     match kind {
++        #[cfg(feature = "rc1-aot")]
+         0 => Cpu::full(c).skin_ff(pc),
+         1 => {
+             Cpu::full(c).poll_ff(pc);
+diff --git a/oracle/src/snapfile.rs b/oracle/src/snapfile.rs
+index 40bcc95..b2d56d7 100644
+--- a/oracle/src/snapfile.rs
++++ b/oracle/src/snapfile.rs
+@@ -8,6 +8,19 @@ use std::collections::HashMap;
+ /// hashes them; reading them here ties the hash to the compilation of this crate (a build that races an edit of the
+ /// sources cannot pair old code with a new hash). Not part of it: gs.rs (only used by the GS capture, off in fndiff),
+ /// rec/ (the recompiled table is never built there), gate.rs, main.rs.
++#[cfg(feature = "rc1-aot")]
++macro_rules! rc1_gen {
++    ($f:literal) => {
++        include_str!($f)
++    };
++}
++#[cfg(not(feature = "rc1-aot"))]
++macro_rules! rc1_gen {
++    ($f:literal) => {
++        ""
++    };
++}
++
+ pub const SRC: [&str; 29] = [
+     include_str!("cpu.rs"),
+     include_str!("../core/src/fpu.rs"),
+@@ -19,8 +32,8 @@ pub const SRC: [&str; 29] = [
+     include_str!("snapfile.rs"),
+     include_str!("mc.rs"),
+     include_str!("vu0aot.rs"),
+-    include_str!("vu0_prog0.rs"),
+-    include_str!("vu0_prog1.rs"),
++    rc1_gen!("vu0_prog0.rs"),
++    rc1_gen!("vu0_prog1.rs"),
+     include_str!("snd989/driver.rs"),
+     include_str!("snd989/handler.rs"),
+     include_str!("snd989/voices.rs"),
+diff --git a/oracle/src/ver.rs b/oracle/src/ver.rs
+index a776f41..76d816b 100644
+--- a/oracle/src/ver.rs
++++ b/oracle/src/ver.rs
+@@ -14,6 +14,8 @@ pub enum Disc {
+     Usa,
+     /// Ratchet & Clank 2 PAL v1.00 (SCES-51607).
+     Rc2,
++    /// Ratchet & Clank: Up Your Arsenal NTSC-U v1.00 (SCUS-97353): rc3/mod.rs.
++    Rc3,
+ }
+ 
+ static DISC: AtomicU8 = AtomicU8::new(0);
+@@ -26,6 +28,7 @@ impl Disc {
+             Disc::Pal => "SCES_509.16",
+             Disc::Usa => "SCUS_971.99",
+             Disc::Rc2 => "SCES_516.07",
++            Disc::Rc3 => "SCUS_973.53",
+         }
+     }
+     /// The serial as the memory card directory and the setup check name it.
+@@ -34,6 +37,7 @@ impl Disc {
+             Disc::Pal => "SCES-50916",
+             Disc::Usa => "SCUS-97199",
+             Disc::Rc2 => "SCES-51607",
++            Disc::Rc3 => "SCUS-97353",
+         }
+     }
+     /// Short tag for logs and file names.
+@@ -42,6 +46,7 @@ impl Disc {
+             Disc::Pal => "pal",
+             Disc::Usa => "usa",
+             Disc::Rc2 => "rc2",
++            Disc::Rc3 => "rc3",
+         }
+     }
+ }
+@@ -51,6 +56,7 @@ pub fn disc() -> Disc {
+     match DISC.load(Ordering::Relaxed) {
+         1 => Disc::Usa,
+         2 => Disc::Rc2,
++        3 => Disc::Rc3,
+         _ => Disc::Pal,
+     }
+ }
+@@ -65,6 +71,12 @@ pub fn rc2() -> bool {
+     DISC.load(Ordering::Relaxed) == 2
+ }
+ 
++/// True while the Up Your Arsenal disc runs (every UYA-only path checks this).
++#[inline]
++pub fn rc3() -> bool {
++    DISC.load(Ordering::Relaxed) == 3
++}
++
+ /// The boot-ELF addresses the oracle itself hooks (SDK functions and loops), per game.
+ #[derive(Clone, Copy, Debug)]
+ pub struct Addrs {
+@@ -85,7 +97,13 @@ pub const RC1_ADDRS: Addrs = Addrs { vblank_wait: 0x118cb0, poll_head: 0x118c10,
+ /// The addresses of the disc of this process.
+ #[inline]
+ pub fn addrs() -> &'static Addrs {
+-    if rc2() { &crate::rc2::ADDRS } else { &RC1_ADDRS }
++    if rc2() {
++        &crate::rc2::ADDRS
++    } else if rc3() {
++        &crate::rc3::ADDRS
++    } else {
++        &RC1_ADDRS
++    }
+ }
+ 
+ /// True while the game runs in NTSC mode (60 fields a second).
+@@ -129,7 +147,7 @@ pub(crate) fn rebuilt(ram: &[u8]) {
+ /// The disc in an image: whichever boot ELF its root directory holds (None: neither, or unreadable).
+ pub fn detect(iso: &str) -> Option<Disc> {
+     let mut f = std::fs::File::open(iso).ok()?;
+-    for d in [Disc::Pal, Disc::Usa, Disc::Rc2] {
++    for d in [Disc::Pal, Disc::Usa, Disc::Rc2, Disc::Rc3] {
+         if crate::cold::iso_find(&mut f, &format!("{};1", d.boot_file())).is_some() {
+             return Some(d);
+         }
+@@ -155,6 +173,9 @@ pub fn from_iso(iso: &str) {
+     // R&C2's SYSTEM.CNF sits elsewhere (LBA 0x3e8) and says VMODE = PAL (rac2/NOTES.md "Disc").
+     if rc2() {
+         set_ntsc(false);
++    } else if rc3() {
++        // SCUS-97353's SYSTEM.CNF says VMODE = NTSC (and sits elsewhere than R&C1's sector 0x121).
++        set_ntsc(true);
+     } else if let Some(n) = vmode_ntsc(iso) {
+         set_ntsc(n);
+     }
+diff --git a/oracle/src/vu0aot.rs b/oracle/src/vu0aot.rs
+index a89d45c..a893a80 100644
+--- a/oracle/src/vu0aot.rs
++++ b/oracle/src/vu0aot.rs
+@@ -72,9 +72,14 @@ impl Vu0Aot {
+         };
+         // The native code uses PMINSD (SSE4.1; every x86-64 CPU since 2008): without it the interpreter runs.
+         let mode = if std::is_x86_feature_detected!("sse4.1") { mode } else { MODE_OFF };
++        // Without the first game's generated programs (feature rc1-aot) nothing is native: every run is interpreted.
++        let mode = if cfg!(feature = "rc1-aot") { mode } else { MODE_OFF };
+         let prof = std::env::var("VU0AOT_PROF").is_ok();
+         let mut a = Vu0Aot { mode, prof, ..Default::default() };
+-        a.cov = vec![0; crate::vu0_prog0::NODES.max(crate::vu0_prog1::NODES).max(crate::vu0_prog9hi::NODES)];
++        #[cfg(feature = "rc1-aot")]
++        {
++            a.cov = vec![0; crate::vu0_prog0::NODES.max(crate::vu0_prog1::NODES).max(crate::vu0_prog9hi::NODES)];
++        }
+         a.cov_on = mode == MODE_DIFF || std::env::var("VU0AOT_COV").is_ok();
+         a.noshort = std::env::var("VU0AOT_NOSHORT").is_ok();
+         a
+@@ -311,6 +316,12 @@ impl Cpu {
+         self.vu0_exec_interp(pc)
+     }
+ 
++    #[cfg(not(feature = "rc1-aot"))]
++    fn vu0_exec_dispatch(&mut self, pc: usize) -> Result<u64, String> {
++        self.vu0_exec_interp_prof(pc)
++    }
++
++    #[cfg(feature = "rc1-aot")]
+     fn vu0_exec_dispatch(&mut self, pc: usize) -> Result<u64, String> {
+         let a = &self.vu0_aot;
+         // A start in the prog9hi piece (its flow stays above BASE, the low programs' below it) needs only that piece.
+@@ -335,6 +346,7 @@ impl Cpu {
+         self.vu0_exec_aot_mode(pc, node)
+     }
+ 
++    #[cfg(feature = "rc1-aot")]
+     fn vu0_exec_aot_mode(&mut self, pc: usize, node: u32) -> Result<u64, String> {
+         if self.vu0_aot.mode == MODE_DIFF {
+             return self.vu0_exec_diff(pc, node);
+@@ -343,6 +355,7 @@ impl Cpu {
+     }
+ 
+     /// The native code (or the shortcut for a wait loop whose condition still holds).
++    #[cfg(feature = "rc1-aot")]
+     pub(crate) fn vu0_exec_native(&mut self, pc: usize, node: u32) -> Result<u64, String> {
+         // A start or resume at a wait loop head whose branch is not taken: the interpreter runs the loop head, its
+         // delay slot and the back branch, and parks again at the same address. Nothing else changes.
+@@ -398,9 +411,11 @@ impl Cpu {
+         Ok(cyc)
+     }
+ 
++    #[cfg(feature = "rc1-aot")]
+     fn vu0_state(&self) -> VuState {
+         VuState { vf: self.vf, vacc: self.vacc, vi: self.vi, d: self.mem.vu0d.clone(), stats: self.vu0_stats }
+     }
++    #[cfg(feature = "rc1-aot")]
+     fn vu0_set_state(&mut self, s: &VuState) {
+         self.vf = s.vf;
+         self.vacc = s.vacc;
+@@ -410,6 +425,7 @@ impl Cpu {
+     }
+ 
+     /// Differential mode: interpreter and native code from the same state; the state must agree afterwards.
++    #[cfg(feature = "rc1-aot")]
+     fn vu0_exec_diff(&mut self, pc: usize, node: u32) -> Result<u64, String> {
+         let s0 = self.vu0_state();
+         let tr = self.vu0_trace.as_ref().map(|t| t.len());
+@@ -465,6 +481,15 @@ impl Cpu {
+     /// native code is used while `vu0m_gen` (bumped by every VIF0 MPG / EE write to micro memory / state restore)
+     /// stays as it was.
+     pub(crate) fn vu0_aot_check(&mut self) {
++        if !cfg!(feature = "rc1-aot") || self.vu0_aot.mode == MODE_OFF {
++            return;
++        }
++        #[cfg(feature = "rc1-aot")]
++        self.vu0_aot_check_programs();
++    }
++
++    #[cfg(feature = "rc1-aot")]
++    fn vu0_aot_check_programs(&mut self) {
+         if self.vu0_aot.mode == MODE_OFF {
+             return;
+         }
+@@ -487,6 +512,7 @@ impl Cpu {
+     }
+ }
+ 
++#[cfg(feature = "rc1-aot")]
+ pub struct VuState {
+     vf: [[u32; 4]; 32],
+     vacc: [u32; 4],
+diff --git a/rac-rs/crates/engine/Cargo.toml b/rac-rs/crates/engine/Cargo.toml
+index 097637b..7c1e3e0 100644
+--- a/rac-rs/crates/engine/Cargo.toml
++++ b/rac-rs/crates/engine/Cargo.toml
+@@ -23,7 +23,7 @@ libloading = "0.8.9"
+ # device's buffer-device-address feature struct NGX needs (gpu/dlss_vk.rs; the version wgpu-hal uses, in Cargo.lock).
+ rac_ngx_abi = { path = "../ngx_abi" }
+ ash = "0.38"
+-ee-oracle = { path = "../../../oracle" }
++ee-oracle = { path = "../../../oracle", default-features = false }
+ # PCSX2 texture pack names (src/engine/texpack): XXH3_64 of the texture bytes.
+ xxhash-rust = { version = "0.8.18", default-features = false, features = ["xxh3"] }
+ libm = "=0.2.16"
+@@ -40,6 +40,11 @@ windows = { version = "0.62", default-features = false, features = ["Win32_Found
+ libc = "0.2.190"
+ 
+ [features]
++# The first game's native VU1 microprograms (src/engine/gsfull/vu1_prog*.rs, vu1aot_gen.rs, generated from the R&C1 disc by
++# tools/vugen_iso.py) and ee-oracle's VU0 ones. A build for another game leaves them out (default-features = false): its VU1
++# programs run on the interpreter.
++default = ["rc1-aot"]
++rc1-aot = ["ee-oracle/rc1-aot"]
+ # The packs' unit tests use this crate's test helpers (`#[cfg(any(test, feature = "test-api"))]`); never in a game build.
+ test-api = ["rac-formats/test-api"]
+ 
+diff --git a/rac-rs/src/engine/gsfull/vu1aot.rs b/rac-rs/src/engine/gsfull/vu1aot.rs
+index 855ba09..1c4979f 100644
+--- a/rac-rs/src/engine/gsfull/vu1aot.rs
++++ b/rac-rs/src/engine/gsfull/vu1aot.rs
+@@ -12,8 +12,14 @@
+ use crate::gsfull::vu1::{mac_of, st_of, Path1, Pipe, Vu1};
+ use std::arch::x86_64::*;
+ 
++#[cfg(feature = "rc1-aot")]
+ #[path = "vu1aot_gen.rs"]
+ mod progs;
++/// Without the first game's generated programs (feature rc1-aot): no native program, every VU1 run is interpreted.
++#[cfg(not(feature = "rc1-aot"))]
++mod progs {
++    pub(crate) static PROGS: [super::Native; 0] = [];
++}
+ 
+ /// `vism` value: no MAC flag landed in this run yet (vi16 / vi17 still hold the run's start values).
+ pub(crate) const NOMAC: u32 = 0x100;
+-- 
+2.51.2.windows.1
+

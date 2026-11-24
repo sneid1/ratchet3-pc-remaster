@@ -1,0 +1,375 @@
+{
+  "schema": 1,
+  "encoding": "Existing packed source maps: RG normal XY, B gloss, A grain. Each channel is processed independently. Original colour, opacity, markings and UV scale stay intact.",
+  "families": [
+    {
+      "name": "painted surfaces",
+      "metalness": 0,
+      "roughness": [
+        0.35,
+        0.65
+      ],
+      "materials": [
+        "paint_001",
+        "paint_003",
+        "steel_painted_panels_002",
+        "steel_painted_corrugated_001",
+        "mol_arch_painted_metal_04",
+        "paint_mtl_panel_002",
+        "greenmetal_001",
+        "macro_tech_panels_001",
+        "tech_panel_metal_002"
+      ]
+    },
+    {
+      "name": "exposed satin steel",
+      "metalness": 1,
+      "roughness": [
+        0.28,
+        0.55
+      ],
+      "materials": [
+        "steel_001",
+        "brushed_steel_001",
+        "corrugated_metal_001",
+        "perf_metal_001",
+        "grate_001",
+        "grate_002",
+        "grate_003"
+      ]
+    },
+    {
+      "name": "dark and aged alloy",
+      "metalness": 1,
+      "roughness": [
+        0.4,
+        0.7
+      ],
+      "materials": [
+        "steel_carbon_001",
+        "steel_parkerized_001",
+        "aged_steel_001",
+        "anodized_metal_01"
+      ]
+    },
+    {
+      "name": "polished alloy",
+      "metalness": 1,
+      "roughness": [
+        0.18,
+        0.35
+      ],
+      "materials": [
+        "chromium_001",
+        "gold_001",
+        "brass_001"
+      ]
+    },
+    {
+      "name": "bronze",
+      "metalness": 1,
+      "roughness": [
+        0.3,
+        0.65
+      ],
+      "materials": [
+        "bronze_001",
+        "bronze_002"
+      ]
+    },
+    {
+      "name": "oxidation",
+      "metalness": 0,
+      "roughness": [
+        0.65,
+        0.9
+      ],
+      "materials": [
+        "rust_001",
+        "rust_002",
+        "rust_tile_001",
+        "bronze_patina_001"
+      ]
+    },
+    {
+      "name": "foliage",
+      "metalness": 0,
+      "roughness": [
+        0.48,
+        0.8
+      ],
+      "materials": [
+        "leaf_surface_001",
+        "grass_001",
+        "grass-002",
+        "ard_lush_moss_01",
+        "sar_moss_001",
+        "sar_moss_002",
+        "moss_002",
+        "ard_moss_01",
+        "gbl_gbl_ground_moss_01",
+        "sar_floor_moss_001"
+      ],
+      "remap_roughness": true
+    },
+    {
+      "name": "bark and timber",
+      "metalness": 0,
+      "roughness": [
+        0.68,
+        0.9
+      ],
+      "materials": [
+        "bark_001",
+        "wood_001",
+        "wood_grain_001"
+      ],
+      "remap_roughness": true
+    },
+    {
+      "name": "masonry",
+      "metalness": 0,
+      "roughness": [
+        0.66,
+        0.92
+      ],
+      "materials": [
+        "concrete_001",
+        "concrete_004",
+        "concrete_005",
+        "concrete_dmg_006",
+        "detail_concretepockmarks_01",
+        "zur_plaster_001"
+      ],
+      "remap_roughness": true
+    },
+    {
+      "name": "stone",
+      "metalness": 0,
+      "roughness": [
+        0.6,
+        0.9
+      ],
+      "materials": [
+        "sandstone_002",
+        "sandstone_003",
+        "sandstone_004",
+        "cliff_003",
+        "cliff_004",
+        "sav_rock_006",
+        "stn_pebbles_01",
+        "ard_sea_rock_001",
+        "ard_sea_rock_002",
+        "ard_sea_rock_004",
+        "ard_sea_rock_005",
+        "blz_rock_003",
+        "blz_rock_005",
+        "blz_rock_006",
+        "blz_rockface_00",
+        "blz_rockface_01",
+        "rockface_003",
+        "rockfacedrk_001",
+        "mol_desert_cliff_face_002",
+        "mol_desert_cliff_face_003",
+        "lava_rock_001"
+      ],
+      "remap_roughness": true
+    },
+    {
+      "name": "soil and sand",
+      "metalness": 0,
+      "roughness": [
+        0.75,
+        0.96
+      ],
+      "materials": [
+        "sand_wavy_001",
+        "sand_001",
+        "sand_rocky_wavy_001",
+        "sand_cracked_001",
+        "soil_001",
+        "sav_dirt_path_001",
+        "sav_dirt_fine_01",
+        "city_gnd_ground_dirt_01"
+      ],
+      "remap_roughness": true
+    },
+    {
+      "name": "mud",
+      "metalness": 0,
+      "roughness": [
+        0.35,
+        0.85
+      ],
+      "materials": [
+        "mud_001",
+        "mud_002",
+        "mud_007",
+        "ard_mud_02"
+      ],
+      "remap_roughness": true
+    },
+    {
+      "name": "glass",
+      "metalness": 0,
+      "roughness": [
+        0.1,
+        0.3
+      ],
+      "materials": [
+        "glass_001",
+        "zur_pub_glass_opaque_001",
+        "meg_tech_glass_01"
+      ]
+    },
+    {
+      "name": "ice",
+      "metalness": 0,
+      "roughness": [
+        0.18,
+        0.5
+      ],
+      "materials": [
+        "ice_sheet_001",
+        "blz_obsidian_001"
+      ]
+    },
+    {
+      "name": "snow",
+      "metalness": 0,
+      "roughness": [
+        0.65,
+        0.9
+      ],
+      "materials": [
+        "snow_001",
+        "snow_basic_002"
+      ],
+      "remap_roughness": true
+    },
+    {
+      "name": "rubber",
+      "metalness": 0,
+      "roughness": [
+        0.65,
+        0.85
+      ],
+      "materials": [
+        "rubber_001",
+        "detail_grippyplasticgrain"
+      ]
+    },
+    {
+      "name": "plastic",
+      "metalness": 0,
+      "roughness": [
+        0.3,
+        0.65
+      ],
+      "materials": [
+        "detail_texturedplastic"
+      ]
+    },
+    {
+      "name": "cloth",
+      "metalness": 0,
+      "roughness": [
+        0.78,
+        0.95
+      ],
+      "materials": [
+        "detail_heavyclothwrinkles",
+        "detail_knit_02",
+        "fabric_detail_001",
+        "fabric_detail_002",
+        "wrinkle_001",
+        "denim_001",
+        "cotton_001",
+        "ard_cloth_tiling"
+      ],
+      "normal_scale": 0.3
+    },
+    {
+      "name": "leather",
+      "metalness": 0,
+      "roughness": [
+        0.6,
+        0.8
+      ],
+      "materials": [
+        "detail_leather_02",
+        "detail_softleather_01"
+      ],
+      "normal_scale": 0.35
+    },
+    {
+      "name": "skin",
+      "metalness": 0,
+      "roughness": [
+        0.65,
+        0.82
+      ],
+      "materials": [
+        "detail_skinhippo",
+        "detail_skinrhino_02",
+        "detail_skinreptile_02",
+        "skin_micro_details",
+        "detail_skincrocodile"
+      ],
+      "normal_scale": 0.35
+    },
+    {
+      "name": "fur",
+      "metalness": 0,
+      "roughness": [
+        0.75,
+        0.95
+      ],
+      "normal_scale": 0.35,
+      "materials": [
+        "fur"
+      ],
+      "builtin": true
+    }
+  ],
+  "finish_by_material": {
+    "paint_001": "enamel",
+    "paint_003": "powder_coat",
+    "steel_painted_panels_002": "enamel",
+    "steel_painted_corrugated_001": "powder_coat",
+    "mol_arch_painted_metal_04": "enamel",
+    "paint_mtl_panel_002": "enamel",
+    "greenmetal_001": "enamel",
+    "macro_tech_panels_001": "powder_coat",
+    "tech_panel_metal_002": "enamel",
+    "steel_001": "brushed_steel",
+    "brushed_steel_001": "brushed_steel",
+    "steel_carbon_001": "cast_alloy",
+    "steel_parkerized_001": "cast_alloy",
+    "anodized_metal_01": "cast_alloy",
+    "chromium_001": "polished_alloy",
+    "gold_001": "polished_alloy",
+    "brass_001": "polished_alloy",
+    "bronze_001": "cast_alloy",
+    "bronze_002": "cast_alloy",
+    "rubber_001": "kit_rubber_001",
+    "detail_grippyplasticgrain": "kit_detail_grippyplasticgrain",
+    "detail_texturedplastic": "kit_detail_texturedplastic",
+    "detail_heavyclothwrinkles": "kit_detail_heavyclothwrinkles",
+    "detail_knit_02": "kit_detail_knit_02",
+    "fabric_detail_001": "kit_fabric_detail_001",
+    "fabric_detail_002": "kit_fabric_detail_002",
+    "wrinkle_001": "kit_wrinkle_001",
+    "denim_001": "kit_denim_001",
+    "cotton_001": "kit_cotton_001",
+    "ard_cloth_tiling": "kit_ard_cloth_tiling",
+    "detail_leather_02": "kit_detail_leather_02",
+    "detail_softleather_01": "kit_detail_softleather_01",
+    "detail_skinhippo": "kit_detail_skinhippo",
+    "detail_skinrhino_02": "kit_detail_skinrhino_02",
+    "detail_skinreptile_02": "kit_detail_skinreptile_02",
+    "skin_micro_details": "kit_skin_micro_details",
+    "detail_skincrocodile": "kit_detail_skincrocodile",
+    "leaf_surface_001": "leaf_cuticle"
+  }
+}

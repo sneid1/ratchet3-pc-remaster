@@ -1,0 +1,87 @@
+# Rift Apart materials' looks set in the game by the main session (PLAN 9.2), read by scripts/riftapart-pair.py write: the
+# strength of the material's highlight (1 when a material is not listed: as the approved method lights it). The glossy ones
+# (gloss over 0.6 in their _g red) blew out to white on bright surfaces under the game's lights (level 16's walkway, paint_003:
+# white at 1, a soft sheen at 0.15); the others are set alike and checked on the every-level draw.
+# metal (15 November 2026; the player: 'Other metal in the game in the world or enemy/npc models needs to be done similarly with
+# varied levels of metalness roughness and shine'): how much of a metal the material is, 0 to 1 (1 bare and polished; a
+# painted metal's paint is none, its chips some; rust almost none). Its roughness is its own map's gloss; its shine the specular.
+# glass and leaves (15 November 2026): glass a little metal so it reflects its surroundings without the ray tracing (0.2 to 0.3); the derived leaf surfaces a soft sheen (specular 0.5).
+material	specular	metal
+aged_steel_001	1	0.9
+anodized_metal_01	1	0.9
+blz_rusted_paint_ult_trim_001	1	0.1
+blz_rusted_paint_ult_trim_002	1	0.1
+blz_rusted_paint_ult_trim_003	1	0.1
+blz_rusted_paint_ult_trim_004	1	0.1
+brass_001	1	1
+bronze_001	1	1
+bronze_002	1	1
+bronze_patina_001	1	0.4
+brushed_steel_001	0.3	1
+chromium_001	1	1
+concrete_001	0.15	0
+copper_001	1	1
+corrugated_metal_001	1	0.8
+glass_001	1	0.3
+glass_cracked_001	1	0.3
+glb_brass_trim_001	1	1
+glb_bronze_trim_001	1	1
+glb_gold_trim_001	1	1
+gold_001	1	1
+grate_001	1	0.8
+grate_002	1	0.8
+grate_003	1	0.8
+greenmetal_001	1	0.7
+hammer_div_brass_01	1	1
+hammer_div_brass_02	1	1
+kal_metal_trim_01	1	0.4
+kal_metal_trim_02	1	0.4
+kal_metal_trim_03	1	0.4
+kal_metal_trim_bare_01	1	0.9
+kal_metal_trim_bare_02	1	0.9
+kal_metal_trim_bare_03	1	0.9
+leaf_surface_001	0.5	0
+leaf_surface_002	0.5	0
+macro_tech_panels_001	1	0.5
+meg_porus_grate_001	1	0.7
+meg_tech_glass_01	1	0.3
+meg_zoni_txt_paitna_drk_trim_01	1	0.5
+met_gnd_grate_02	1	0.7
+met_metal_roofing_01	1	0.5
+met_prop_manhole_cover_brass_01	1	0.9
+metal_shanty_panels_001	1	0.4
+metal_weive_000	1	0.8
+mol_arch_painted_metal_04	1	0.25
+mol_rusted_paint_ult_trim_001	1	0.1
+mol_rusted_paint_ult_trim_002	1	0.1
+mol_rusted_panel_001	1	0.1
+mol_rusted_ult_trim_001	1	0.1
+mol_rusted_ult_trim_002	1	0.1
+mud_001	0.3	0
+mud_002	0.3	0
+nnc_panel_deco_001	1	0.5
+os_ard_pirate_barge_tiling_gold	1	0.9
+paint_001	0.15	0.15
+paint_003	0.15	0.1
+paint_mtl_panel_002	1	0.25
+perf_metal_001	1	0.9
+rust_001	1	0.1
+rust_002	1	0.1
+rust_tile_001	1	0.1
+sav_arch_painted_metal_trim_02	1	0.25
+sav_ionized_metal_grate_001	1	0.7
+sav_ionized_metal_grate_002	1	0.7
+sav_rusted_metal_ult_trim_005	1	0.1
+silver_001	1	1
+snow_001	0.3	0
+steel_001	1	1
+steel_blued_001	1	1
+steel_carbon_001	1	0.8
+steel_painted_corrugated_001	1	0.25
+steel_painted_panels_002	1	0.25
+steel_parkerized_001	1	0.7
+tech_panel_metal_002	1	0.6
+tech_panel_metal_003	1	0.6
+tech_panel_metal_004	1	0.6
+tech_panel_metal_005	1	0.6
+zur_pub_glass_opaque_001	1	0.2

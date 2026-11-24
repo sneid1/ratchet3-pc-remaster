@@ -1,0 +1,11 @@
+[package]
+name = "catalogue_export"
+version = "0.1.0"
+edition = "2024"
+description = "Offline NPC/enemy catalogue source export: every LEVEL core and SCENE (cutscene) moby class of the story levels, read from the disc. No game run, no renderer."
+
+[dependencies]
+uyafmt = { path = "../../../port/uyafmt" }
+
+[profile.release]
+debug = false

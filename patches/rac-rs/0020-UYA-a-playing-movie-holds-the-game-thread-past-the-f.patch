@@ -1,0 +1,78 @@
+From dcde105ef282cdfa3deaf35002edeed75b03d0d9 Mon Sep 17 00:00:00 2001
+From: sneid1 <sneid1@users.noreply.github.com>
+Date: Fri, 13 Nov 2026 15:40:53 +1100
+Subject: [PATCH] UYA: a playing movie holds the game thread past the frame's
+ spin timeout (the window's movie service plays in real time)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ oracle/src/lib.rs       | 20 ++++++++++++++------
+ oracle/src/rc3/movie.rs | 10 ++++++++++
+ 2 files changed, 24 insertions(+), 6 deletions(-)
+
+diff --git a/oracle/src/lib.rs b/oracle/src/lib.rs
+index 07a37a9..e055a70 100644
+--- a/oracle/src/lib.rs
++++ b/oracle/src/lib.rs
+@@ -350,13 +350,21 @@ impl Machine {
+         if g.lost {
+             return Err("spin: no vblank wait reached".into());
+         }
+-        let r = match g.go.send(()).map(|_| g.done.recv_timeout(FRAME_TIMEOUT)) {
+-            Ok(Ok(r)) => r,
+-            Ok(Err(std::sync::mpsc::RecvTimeoutError::Timeout)) => {
+-                g.lost = true;
+-                return Err(format!("spin: no vblank wait within {}s", FRAME_TIMEOUT.as_secs()));
++        if g.go.send(()).is_err() {
++            return Err("game thread ended".into());
++        }
++        // A movie holds the game thread as long as it plays (the console's player blocks the game too): the timeout counts only
++        // the time outside it.
++        let r = loop {
++            match g.done.recv_timeout(FRAME_TIMEOUT) {
++                Ok(r) => break r,
++                Err(std::sync::mpsc::RecvTimeoutError::Timeout) if rc3::movie::playing() => {}
++                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
++                    g.lost = true;
++                    return Err(format!("spin: no vblank wait within {}s", FRAME_TIMEOUT.as_secs()));
++                }
++                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break Err("game thread ended".into()),
+             }
+-            _ => Err("game thread ended".into()),
+         };
+         if let Err(e) = &r {
+             g.over = Some(e.clone());
+diff --git a/oracle/src/rc3/movie.rs b/oracle/src/rc3/movie.rs
+index 981c02d..2316842 100644
+--- a/oracle/src/rc3/movie.rs
++++ b/oracle/src/rc3/movie.rs
+@@ -7,6 +7,7 @@
+ //! 1, as when Start ends it. That is also what the front end's movie sequence 0x3a8d80 needs to leave for the title
+ //! (0x392f68 stops the sequence on a skip, then 0x3a1258); a 0 would start the next attract movie at once, forever.
+ use crate::cpu::Cpu;
++use std::sync::atomic::{AtomicBool, Ordering};
+ use std::sync::OnceLock;
+ 
+ pub const PLAYER: u32 = 0x3afaa8;
+@@ -34,9 +35,18 @@ pub fn set_service(f: fn(&mut Cpu, [u32; 4]) -> bool) {
+     let _ = SERVICE.set(f);
+ }
+ 
++/// True while the movie service plays a movie: `Machine::frame` then waits for the game thread past its spin timeout.
++static PLAYING: AtomicBool = AtomicBool::new(false);
++
++pub fn playing() -> bool {
++    PLAYING.load(Ordering::SeqCst)
++}
++
+ pub fn player(c: &mut Cpu) -> bool {
+     let args = [c.g(4) as u32, c.g(5) as u32, c.g(7) as u32, c.g(8) as u32];
++    PLAYING.store(true, Ordering::SeqCst);
+     let skipped = SERVICE.get().is_none_or(|f| f(c, args));
++    PLAYING.store(false, Ordering::SeqCst);
+     let flags = c.mem.rd32(FLAGS);
+     c.mem.wr32(FLAGS, flags & !0x80);
+     c.s(2, skipped as u64);
+-- 
+2.51.2.windows.1
+

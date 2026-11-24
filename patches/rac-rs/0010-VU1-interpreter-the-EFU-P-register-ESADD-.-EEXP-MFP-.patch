@@ -1,0 +1,134 @@
+From b70b913de2ff4a37ef6d88df5eb2d47d3de1396d Mon Sep 17 00:00:00 2001
+From: sneid1 <sneid1@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 16:28:11 +1100
+Subject: [PATCH 12/12] VU1 interpreter: the EFU (P register, ESADD .. EEXP,
+ MFP, WAITP)
+
+R&C1's microcode never uses the EFU, so the interpreter had none: UYA's renderers do (ESUM on Marcadia), and every run that met
+one ended with "unknown VU lower" and drew nothing past it (Marcadia's lit buildings and sky came out dark). The EFU ops now put
+their result in P (vi[23]) after the manual's latency, as Q's unit does; WAITP and a following EFU op stall on it; MFP reads it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ rac-rs/src/engine/gsfull/vu1.rs | 53 ++++++++++++++++++++++++++++++++-
+ 1 file changed, 52 insertions(+), 1 deletion(-)
+
+diff --git a/rac-rs/src/engine/gsfull/vu1.rs b/rac-rs/src/engine/gsfull/vu1.rs
+index 3f9de28..f25e432 100644
+--- a/rac-rs/src/engine/gsfull/vu1.rs
++++ b/rac-rs/src/engine/gsfull/vu1.rs
+@@ -174,6 +174,8 @@ pub(crate) struct Pipe {
+     pub cyc: u64,
+     pub ready: [u64; 33],
+     pub q_pend: Option<(u64, u32)>,
++    /// [PC] The EFU's result on its way to P (vi[23]): (ready cycle, value). R&C1's microcode has no EFU op; UYA's has.
++    pub p_pend: Option<(u64, u32)>,
+     /// (ready cycle, kind 0 = MAC (value, status) / 1 = clip (value), value, status bits)
+     pub flags: VecDeque<(u64, u8, u32, u32)>,
+     pub clip_latest: u32,
+@@ -191,6 +193,7 @@ impl Pipe {
+             cyc: 0,
+             ready: [0; 33],
+             q_pend: None,
++            p_pend: None,
+             flags: VecDeque::new(),
+             clip_latest: clip,
+             taken: None,
+@@ -550,6 +553,12 @@ impl Vu1 {
+                     need = need.max(r);
+                 }
+             }
++            // WAITP, and a new EFU op while the last one's result is on its way (the EFU is not pipelined).
++            if lr.waitp || lr.efu {
++                if let Some((r, _)) = p.p_pend {
++                    need = need.max(r);
++                }
++            }
+             p.cyc = need;
+             let cyc = p.cyc;
+             if let Some((r, v)) = p.q_pend {
+@@ -558,6 +567,12 @@ impl Vu1 {
+                     p.q_pend = None;
+                 }
+             }
++            if let Some((r, v)) = p.p_pend {
++                if cyc >= r {
++                    self.vi[23] = v;
++                    p.p_pend = None;
++                }
++            }
+             while let Some(&(r, k, v, st)) = p.flags.front() {
+                 if r > cyc {
+                     break;
+@@ -636,6 +651,9 @@ impl Vu1 {
+         if let Some((_, v)) = p.q_pend.take() {
+             self.vi[22] = v;
+         }
++        if let Some((_, v)) = p.p_pend.take() {
++            self.vi[23] = v;
++        }
+         while let Some((_, k, v, st)) = p.flags.pop_front() {
+             if k == 0 {
+                 self.vi[17] = v;
+@@ -852,6 +870,32 @@ impl Vu1 {
+                             }
+                             0x42 => self.vi[20] = 0x3f80_0000 | (s[fsf] & 0x7f_ffff),
+                             0x43 => self.vi[20] = 0x3f80_0000 | ((self.vi[20] ^ s[fsf]) & 0x7f_ffff),
++                            // MFP: P to every lane in dest.
++                            0x64 => wvf(self, ready, ft, [self.vi[23]; 4], dest),
++                            // The EFU: its result reaches P after the op's latency (EE / VU manual, 7.2), as Q's does.
++                            0x70..=0x76 | 0x78..=0x7a | 0x7c..=0x7e => {
++                                let (x0, y0, z0, w0) = (fin(s[0]), fin(s[1]), fin(s[2]), fin(s[3]));
++                                let e = s[fsf];
++                                let sq = fout(x0 * x0 + y0 * y0 + z0 * z0);
++                                const ONE: u32 = 0x3f80_0000;
++                                let (v, lat) = match x {
++                                    0x70 => (sq, 11),
++                                    0x71 => (fdiv(ONE, sq), 18),
++                                    0x72 => (fsqrt(sq), 18),
++                                    0x73 => (fdiv(ONE, fsqrt(sq)), 24),
++                                    0x74 => (fout((y0 / x0).atan()), 54),
++                                    0x75 => (fout((z0 / x0).atan()), 54),
++                                    0x76 => (fout(x0 + y0 + z0 + w0), 12),
++                                    0x78 => (fsqrt(e), 12),
++                                    0x79 => (fdiv(ONE, fsqrt(e)), 18),
++                                    0x7a => (fdiv(ONE, e), 12),
++                                    0x7c => (fout(fin(e).sin()), 29),
++                                    0x7d => (fout(fin(e).atan()), 54),
++                                    _ => (fout((-fin(e)).exp()), 44),
++                                };
++                                p.p_pend = Some((cyc + lat, v));
++                            }
++                            0x7b => {}
+                             0x68 => self.set_vi(it, top),
+                             0x69 => self.set_vi(it, itop),
+                             0x6c => {
+@@ -876,10 +920,12 @@ struct LowerInfo {
+     reads: [usize; 2],
+     waitq: bool,
+     div: bool,
++    waitp: bool,
++    efu: bool,
+ }
+ 
+ fn lower_info(op: u32) -> LowerInfo {
+-    let mut li = LowerInfo { reads: [NONE; 2], waitq: false, div: false };
++    let mut li = LowerInfo { reads: [NONE; 2], waitq: false, div: false, waitp: false, efu: false };
+     let ft = ((op >> 16) & 31) as usize;
+     let fs = ((op >> 11) & 31) as usize;
+     match op >> 25 {
+@@ -898,6 +944,11 @@ fn lower_info(op: u32) -> LowerInfo {
+                 }
+                 0x3b => li.waitq = true,
+                 0x3c | 0x42 | 0x43 => li.reads[0] = fs,
++                0x70..=0x76 | 0x78..=0x7a | 0x7c..=0x7e => {
++                    li.reads[0] = fs;
++                    li.efu = true;
++                }
++                0x7b => li.waitp = true,
+                 _ => {}
+             }
+         }
+-- 
+2.51.2.windows.1
+

@@ -1,0 +1,28 @@
+[workspace]
+# The game and its own crates. The story levels' code is a library each, in a workspace of its own (translated/uya, written by
+# port/uyatr; built one level at a time by scripts\build-levels.ps1 into this workspace's target folder), loaded by the runtime
+# with the level's overlay (PLAN 0.3). The emulated reference, port/uyaref, is a workspace of its own too (PLAN 0.6): nothing here
+# names it, so cargo never reads rac-rs or generated/uya to build the game.
+members = ["uya", "uyafmt", "uyart", "uycpu"]
+exclude = ["uyaref"]
+resolver = "3"
+
+# wgpu-hal with its one change (vendor/wgpu-hal/README_PORT.txt: no IDXGIFactoryMedia at DirectX 12 start-up, which ReShade's
+# DXGI hook crashes on). Cargo reads [patch] only at the workspace root.
+[patch.crates-io]
+wgpu-hal = { path = "vendor/wgpu-hal" }
+# wgpu-core with its two changes (vendor/wgpu-core/README_PORT.txt: a render bundle keeps each init action once, and a pass
+# registers a bind group's once, so a picture registers hundreds of texture actions, not tens of thousands).
+wgpu-core = { path = "vendor/wgpu-core" }
+
+[profile.release]
+opt-level = 3
+debug = 1
+
+# Every crate that is not the port's own (the translated programs the executable links, wgpu): no line tables. Theirs were most
+# of uya.exe's PDB and of its link time; the port's own crates keep them for profiles and stops (PLAN 5.3).
+[profile.release.package."*"]
+debug = 0
+
+[profile.dev]
+opt-level = 1

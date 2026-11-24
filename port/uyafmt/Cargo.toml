@@ -1,0 +1,12 @@
+[package]
+name = "uyafmt"
+version = "0.1.0"
+edition = "2024"
+description = "Up Your Arsenal's disc and data formats, worked out from R&C3's own data and code. No dependency on any rac-rs crate."
+
+# No dependencies: the disc is read, walked and decompressed by this crate's own code.
+[dependencies]
+
+[[bin]]
+name = "uyafmt"
+path = "src/main.rs"

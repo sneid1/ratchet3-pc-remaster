@@ -1,0 +1,320 @@
+[
+  {
+    "key": "nefarious-1",
+    "stem": "d2edceea6b4eb822-b5523062a676b27-00001dd3",
+    "model": "source_c7662",
+    "relief": [
+      3,
+      2,
+      2,
+      0
+    ],
+    "protect": [
+      [
+        0,
+        24,
+        10,
+        43
+      ]
+    ],
+    "colour_blend": 0.65,
+    "skip_geometry_ao": true,
+    "preserve_metalness": true,
+    "finishes": [
+      "enamel",
+      "polished_alloy",
+      "polished_alloy",
+      "rubber"
+    ],
+    "finish_overrides": {
+      "enamel": {
+        "normal_gain": 0.025,
+        "repeats": 32,
+        "roughness": 0.4,
+        "variation": 0.02,
+        "roughness_range": [
+          0.36,
+          0.44
+        ]
+      },
+      "polished_alloy": {
+        "normal_gain": 0.025,
+        "repeats": 24,
+        "tool_marks": 0.003,
+        "roughness": 0.32,
+        "variation": 0.025,
+        "roughness_range": [
+          0.28,
+          0.37
+        ]
+      }
+    },
+    "notes": "Original Nefarious mechanical UV islands and optical swatches preserved. Independent generated physical height; no new emission inferred."
+  },
+  {
+    "key": "nefarious-2",
+    "stem": "d4c012b63b610012-22acb3a5e506e70d-00001dd3",
+    "model": "source_c7662",
+    "relief": [
+      3,
+      2,
+      2,
+      0
+    ],
+    "protect": [
+      [
+        0,
+        101,
+        128,
+        128
+      ],
+      [
+        13,
+        64,
+        26,
+        80
+      ]
+    ],
+    "colour_blend": 0.65,
+    "skip_geometry_ao": true,
+    "preserve_metalness": true,
+    "finishes": [
+      "enamel",
+      "polished_alloy",
+      null,
+      null
+    ],
+    "finish_overrides": {
+      "enamel": {
+        "normal_gain": 0.025,
+        "repeats": 32,
+        "roughness": 0.4,
+        "variation": 0.02,
+        "roughness_range": [
+          0.36,
+          0.44
+        ]
+      },
+      "polished_alloy": {
+        "normal_gain": 0.025,
+        "repeats": 24,
+        "tool_marks": 0.003,
+        "roughness": 0.32,
+        "variation": 0.025,
+        "roughness_range": [
+          0.28,
+          0.37
+        ]
+      }
+    },
+    "notes": "Original Nefarious mechanical UV islands and optical swatches preserved. Independent generated physical height; no new emission inferred."
+  },
+  {
+    "key": "courtney-1",
+    "stem": "622ca52469c1ef2a-3df6c592c455684a-00001dd3",
+    "model": "source_c7109",
+    "relief": [
+      2.5,
+      2,
+      2,
+      0
+    ],
+    "protect": [
+      [
+        79,
+        31,
+        98,
+        49
+      ]
+    ],
+    "colour_blend": 0.6,
+    "skip_geometry_ao": true,
+    "preserve_metalness": true,
+    "finishes": [
+      "enamel",
+      "polished_alloy",
+      "enamel",
+      null
+    ],
+    "finish_overrides": {
+      "enamel": {
+        "normal_gain": 0.012,
+        "repeats": 40,
+        "roughness": 0.36,
+        "variation": 0.015,
+        "roughness_range": [
+          0.33,
+          0.39
+        ]
+      },
+      "polished_alloy": {
+        "normal_gain": 0.02,
+        "repeats": 24,
+        "tool_marks": 0.002,
+        "roughness": 0.32,
+        "variation": 0.02,
+        "roughness_range": [
+          0.29,
+          0.35
+        ]
+      }
+    },
+    "notes": "Original rose enamel, white ceramic and mechanical hair retained. Exact original faceplate and optical pixels protected; independent shallow technical height."
+  },
+  {
+    "key": "courtney-2",
+    "stem": "781a730ac1e14135-81b5d98b415ce384-00001dd3",
+    "model": "source_c7109",
+    "relief": [
+      2.5,
+      2,
+      2,
+      0
+    ],
+    "protect": [
+      [
+        58,
+        0,
+        128,
+        52
+      ]
+    ],
+    "colour_blend": 0.6,
+    "skip_geometry_ao": true,
+    "preserve_metalness": true,
+    "finishes": [
+      "enamel",
+      "polished_alloy",
+      "enamel",
+      null
+    ],
+    "finish_overrides": {
+      "enamel": {
+        "normal_gain": 0.012,
+        "repeats": 40,
+        "roughness": 0.36,
+        "variation": 0.015,
+        "roughness_range": [
+          0.33,
+          0.39
+        ]
+      },
+      "polished_alloy": {
+        "normal_gain": 0.02,
+        "repeats": 24,
+        "tool_marks": 0.002,
+        "roughness": 0.32,
+        "variation": 0.02,
+        "roughness_range": [
+          0.29,
+          0.35
+        ]
+      }
+    },
+    "notes": "Original rose enamel, white ceramic and mechanical hair retained. Exact original faceplate and optical pixels protected; independent shallow technical height."
+  },
+  {
+    "key": "skrunch-1",
+    "stem": "3ab37baa1db59ac3-ef8b93abbd6ff213-00001dd3",
+    "model": "source_c7969",
+    "relief": [
+      1.5,
+      0.7,
+      0,
+      0
+    ],
+    "protect": [
+      [
+        45,
+        21,
+        87,
+        52
+      ],
+      [
+        80,
+        47,
+        94,
+        59
+      ],
+      [
+        49,
+        64,
+        102,
+        88
+      ],
+      [
+        0,
+        116,
+        31,
+        128
+      ]
+    ],
+    "colour_blend": 0.72,
+    "skip_geometry_ao": true,
+    "finishes": [
+      "soft_skin",
+      "soft_skin",
+      null,
+      null
+    ],
+    "finish_overrides": {
+      "soft_skin": {
+        "normal_gain": 0.025,
+        "repeats": 32,
+        "roughness": 0.72,
+        "variation": 0.025,
+        "roughness_range": [
+          0.68,
+          0.76
+        ]
+      }
+    },
+    "notes": "Fine directional short fur with independently generated micro height. Existing native fur shell assignment and original opacity retained. HD eyes, mouth, nose and ears protected; source bind pose has closed eyelids."
+  },
+  {
+    "key": "skrunch-2",
+    "stem": "74bbfbda61f91eb0-c1aacfefc7eaed43-00001dd3",
+    "model": "source_c7969",
+    "relief": [
+      1.5,
+      0.7,
+      0,
+      0
+    ],
+    "protect": [
+      [
+        0,
+        27,
+        23,
+        59
+      ],
+      [
+        0,
+        54,
+        22,
+        80
+      ]
+    ],
+    "colour_blend": 0.72,
+    "skip_geometry_ao": true,
+    "finishes": [
+      "soft_skin",
+      "soft_skin",
+      null,
+      null
+    ],
+    "finish_overrides": {
+      "soft_skin": {
+        "normal_gain": 0.025,
+        "repeats": 32,
+        "roughness": 0.72,
+        "variation": 0.025,
+        "roughness_range": [
+          0.68,
+          0.76
+        ]
+      }
+    },
+    "notes": "Fine directional short fur with independently generated micro height. Existing native fur shell assignment and original opacity retained. HD eyes, mouth, nose and ears protected; source bind pose has closed eyelids."
+  }
+]

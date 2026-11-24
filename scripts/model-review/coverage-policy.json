@@ -1,0 +1,17 @@
+{
+  "scope": "Every moby in the game, including characters, enemies, NPCs, weapons and moby props; environments, shrubs and static props also remain in scope.",
+  "source_inventory": "Read the original disc and installed asset kit before new modelling. Preserve each level/class/LOD/variant occurrence. Deduplication never means art approval.",
+  "shared_work": [
+    "Physical normal and light-direction convention, linear material channels, GGX lighting and geometry/depth AO",
+    "Correct outward fur shells and captured-level reflection probes",
+    "Conservative refinement of original animated surfaces, with hard edges, unlit overlays, boundaries and UVs preserved",
+    "Explicit physical material families with foreign baked grime removed",
+    "Verified source-atlas aliases inherit material regions; colour and opacity stay independent"
+  ],
+  "individual_work": "Use Blender edits and authored colour/PBR maps where shared fixes do not resolve silhouette, identity, material boundaries or baked lighting. Inspect representative front/rear/detail/animation evidence when the affected behavior requires it.",
+  "acceptance": "Mapped, available, edited, rendered and individually approved are separate states. No class becomes finished merely because shared code can process it.",
+  "geometry_budget": "Blender refinement defaults to selective shared-edge splitting, with a 1.75x source triangle ceiling. Extra geometry must produce a visible shape benefit; blanket subdivision is not a completed model improvement. Preserve accepted constrained layers before reducing their topology.",
+  "ranger_feedback": "V2 lost construction detail and shifted too yellow-green. V3 improves forward with darker colour, fitted relief and separated materials at 2,167 triangles; four matched views inspected, user approval pending. Do not restore the old texture as the solution or equate triangle reduction with art quality.",
+  "verification": "Sandbox-only isolated models and asset groups with captured level lighting. No game launches, in-game reviews, world-view replay reviews, timing runs, benchmarks or gameplay sweeps. Inspect actual output critically; mapping and successful rendering are not quality approval. Repeat only after changes, failures or unresolved visual concerns.",
+  "remaining": "moby-coverage.json and remaining-mobies.tsv include undecoded containers and pending individual passes; the full task is incomplete."
+}

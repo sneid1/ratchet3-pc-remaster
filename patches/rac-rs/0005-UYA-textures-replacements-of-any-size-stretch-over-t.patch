@@ -1,0 +1,76 @@
+From 4a351eb743679d288a252e8c5811145292d407ad Mon Sep 17 00:00:00 2001
+From: sneid1 <sneid1@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 15:39:58 +1100
+Subject: [PATCH] UYA textures: replacements of any size stretch over the
+ texture they replace, as in PCSX2
+
+PCSX2 packs draw some textures on one canvas size whatever the original's (reddyxd's UYA font glyphs are 256x313 for 11-texel-high
+glyphs); refusing another aspect ratio dropped them. Each axis now scales on its own; the software GS picks the level from the mean
+of the two scales, and the kept chain is trimmed by area.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ rac-rs/src/engine/gsfull/gs_raster.rs |  5 +++--
+ rac-rs/src/engine/texpack/live.rs     | 16 +++++-----------
+ 2 files changed, 8 insertions(+), 13 deletions(-)
+
+diff --git a/rac-rs/src/engine/gsfull/gs_raster.rs b/rac-rs/src/engine/gsfull/gs_raster.rs
+index d327c7f..716f3d3 100644
+--- a/rac-rs/src/engine/gsfull/gs_raster.rs
++++ b/rac-rs/src/engine/gsfull/gs_raster.rs
+@@ -306,8 +306,9 @@ unsafe fn repl_level(cx: &Ctx, p: &Prim) -> (*const Level, (f32, f32)) {
+         }
+         _ => 1.0,
+     };
+-    // Texels of level 0 per pixel along one side: sqrt(ratio) original texels times level 0's scale; each level halves it.
+-    let s0 = r.levels[0].w as f32 / rw;
++    // Texels of level 0 per pixel along one side: sqrt(ratio) original texels times level 0's scale (the mean of its two axes, which
++    // a pack may stretch differently); each level halves it.
++    let s0 = (r.levels[0].w as f32 / rw * r.levels[0].h as f32 / rh).sqrt();
+     let lod = (s0 * ratio.sqrt()).max(1e-6).log2().round();
+     let k = (lod.max(0.0) as usize).min(r.levels.len() - 1);
+     let lv = &r.levels[k];
+diff --git a/rac-rs/src/engine/texpack/live.rs b/rac-rs/src/engine/texpack/live.rs
+index 38e51ce..d228fff 100644
+--- a/rac-rs/src/engine/texpack/live.rs
++++ b/rac-rs/src/engine/texpack/live.rs
+@@ -9,9 +9,9 @@
+ //!   first use into a `Repl`: a mip chain of RGBA8 with the file's alpha (GS scale, as PCSX2 packs store it). A renderer maps texel
+ //!   (u, v) of the named rectangle at (x, y, w, h) to level texel ((u - x) * level.w / w, (v - y) * level.h / h). The software GS
+ //!   samples it in `gs_raster::sample_repl`; a GPU renderer uploads `levels` as one texture with the same mapping.
+-//! - Validation: a file that does not decode, is empty or larger than `MAX_SIDE`, has another aspect ratio than the rectangle it
+-//!   replaces, is smaller than it, or does not fit the memory budget is refused with its reason (`Live::outcomes`); the game then
+-//!   draws the original.
++//! - Validation: a file that does not decode, is empty or larger than `MAX_SIDE`, or does not fit the memory budget is refused with
++//!   its reason (`Live::outcomes`); the game then draws the original. Like PCSX2, any size is stretched over the rectangle it
++//!   replaces, each axis on its own (packs draw font glyphs on one canvas size whatever the glyph's width).
+ 
+ use super::dds::Fmt;
+ use super::index::{PackFile, PackIndex};
+@@ -124,12 +124,6 @@ impl Live {
+ 		if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE {
+ 			return Err((format!("{w}x{h} is outside 1..{MAX_SIDE}"), (w, h)));
+ 		}
+-		if u64::from(w) * u64::from(rh) != u64::from(h) * u64::from(rw) {
+-			return Err((format!("aspect {w}x{h} differs from the original's {rw}x{rh}"), (w, h)));
+-		}
+-		if w < rw {
+-			return Err((format!("{w}x{h} is smaller than the original {rw}x{rh}"), (w, h)));
+-		}
+ 		let data = img.levels.into_iter().next().ok_or_else(|| ("no pixel data".to_string(), (w, h)))?;
+ 		let rgba = ReplTex { fmt: img.fmt, mips: vec![Mip { w, h, data }] }.to_rgba8().map_err(|e| (format!("does not decode: {e}"), (w, h)))?;
+ 		let mut top = rgba.mips.into_iter().next().ok_or_else(|| ("no pixel data".to_string(), (w, h)))?;
+@@ -144,8 +138,8 @@ impl Live {
+ 			levels.push(next);
+ 		}
+ 		if let Some(m) = self.max_scale {
+-			// Drop the levels above the largest scale wanted (keep at least one).
+-			let keep_from = levels.iter().position(|l| l.w as f32 <= m * rw as f32).unwrap_or(levels.len() - 1);
++			// Drop the levels above the largest scale wanted, by area (keep at least one).
++			let keep_from = levels.iter().position(|l| (l.w as f32 * l.h as f32) <= m * m * rw as f32 * rh as f32).unwrap_or(levels.len() - 1);
+ 			levels.drain(..keep_from);
+ 		}
+ 		let r = Repl { name: *name, file: f.path.clone(), file_w: w, file_h: h, levels };
+-- 
+2.51.2.windows.1
+

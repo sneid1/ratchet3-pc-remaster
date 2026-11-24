@@ -1,0 +1,12 @@
+[package]
+name = "uyart"
+version = "0.1.0"
+edition = "2024"
+description = "The port's own runtime for Up Your Arsenal's EE code translated ahead of time by uyatr: CPU state, memory, the EE kernel's calls, the hardware the code touches and the IOP's services, all native (plan item 0)."
+
+# The disc through this project's own readers (libcdvd's reads, the IOP's file calls).
+[dependencies]
+uyafmt = { path = "../uyafmt" }
+# What the translated code is compiled against (the CPU state, its inline paths, the table of the runtime's entries): the executable's
+# programs and every level library link it too.
+uycpu = { path = "../uycpu" }

@@ -1,0 +1,244 @@
+[
+  {
+    "id": "q03939",
+    "original_size": [
+      256,
+      256
+    ],
+    "treatment": "uv_atlas",
+    "source_mean": "#605240",
+    "reported_brightness_spread": 107,
+    "source_reference_mode": "RGB",
+    "game_uses_alpha": true,
+    "tiling_axes": "not_asserted_in_supplied_prompt",
+    "input_images": [
+      "q03939-reference.png"
+    ],
+    "variant_included": false,
+    "hard_pixel_reference_included": false,
+    "ready_for_colour_generation": true,
+    "prompt_file": "examples/q03939-prompt-colour.txt",
+    "visual_description": "a character UV texture atlas, catalogued as Captain Qwark, jungle outfit (Florana); irregular tan skin pieces, green costume pieces and small equipment details separated by brown padding. Preserve the original skin markings, facial shapes and each piece boundary",
+    "note": ""
+  },
+  {
+    "id": "q03215",
+    "original_size": [
+      128,
+      128
+    ],
+    "treatment": "uv_atlas",
+    "source_mean": "#432a29",
+    "reported_brightness_spread": 137,
+    "source_reference_mode": "RGB",
+    "game_uses_alpha": false,
+    "tiling_axes": "not_asserted_in_supplied_prompt",
+    "input_images": [
+      "q03215-reference.png"
+    ],
+    "variant_included": false,
+    "hard_pixel_reference_included": false,
+    "ready_for_colour_generation": true,
+    "prompt_file": "examples/q03215-prompt-colour.txt",
+    "visual_description": "a mechanical UV texture atlas, catalogued as engine assembly, Ranger-type legs, red; red armour pieces, silver-grey housings, dark ribs, small slots and fasteners, and a green indicator. Preserve the existing small grille and fastener details and keep the red, silver and green regions distinct",
+    "note": ""
+  },
+  {
+    "id": "q03684",
+    "original_size": [
+      64,
+      64
+    ],
+    "treatment": "flat_graphic",
+    "source_mean": "#8d8369",
+    "reported_brightness_spread": 11,
+    "source_reference_mode": "RGB",
+    "game_uses_alpha": false,
+    "tiling_axes": "not_asserted_in_supplied_prompt",
+    "input_images": [
+      "q03684-reference.png"
+    ],
+    "variant_included": false,
+    "hard_pixel_reference_included": false,
+    "ready_for_colour_generation": true,
+    "prompt_file": "examples/q03684-prompt-colour.txt",
+    "visual_description": "purple and green painted horizontal stripes; a broad purple centre, green upper and lower regions, and narrow alternating stripes near their boundaries. Preserve the strong purple/green hue differences and exact stripe widths",
+    "note": ""
+  },
+  {
+    "id": "q03077",
+    "original_size": [
+      64,
+      64
+    ],
+    "treatment": "soft_effect",
+    "source_mean": "#589275",
+    "reported_brightness_spread": 192,
+    "source_reference_mode": "RGB",
+    "game_uses_alpha": false,
+    "tiling_axes": "not_asserted_in_supplied_prompt",
+    "input_images": [
+      "q03077-reference.png"
+    ],
+    "variant_included": false,
+    "hard_pixel_reference_included": false,
+    "ready_for_colour_generation": true,
+    "prompt_file": "examples/q03077-prompt-colour.txt",
+    "visual_description": "diffuse vertical green light bars with pale broad centres, dark green gaps and soft falloff. Preserve their spacing and the shape of the bright regions; these visible bands are light rather than solid tubes",
+    "note": ""
+  },
+  {
+    "id": "q03998",
+    "original_size": [
+      64,
+      64
+    ],
+    "treatment": "structured",
+    "source_mean": "#b14d4d",
+    "reported_brightness_spread": 115,
+    "source_reference_mode": "RGB",
+    "game_uses_alpha": false,
+    "tiling_axes": "not_asserted_in_supplied_prompt",
+    "input_images": [
+      "q03998-reference.png"
+    ],
+    "variant_included": false,
+    "hard_pixel_reference_included": false,
+    "ready_for_colour_generation": true,
+    "prompt_file": "examples/q03998-prompt-colour.txt",
+    "visual_description": "a red square button texture with a nearly flat coral-red centre, its existing narrow bright rim, dark maroon recess and dark outer surround. Preserve the existing rim and edge shading at their actual widths; add no extra frame, symbols or fasteners",
+    "note": ""
+  },
+  {
+    "id": "q03210",
+    "original_size": [
+      128,
+      128
+    ],
+    "treatment": "soft_effect",
+    "source_mean": "#80beb1",
+    "reported_brightness_spread": 74,
+    "source_reference_mode": "RGB",
+    "game_uses_alpha": false,
+    "tiling_axes": "not_asserted_in_supplied_prompt",
+    "input_images": [
+      "q03210-reference.png"
+    ],
+    "variant_included": false,
+    "hard_pixel_reference_included": false,
+    "ready_for_colour_generation": true,
+    "prompt_file": "examples/q03210-prompt-colour.txt",
+    "visual_description": "a pale aqua and green field with cloudy colour variation and winding bright interconnected bands. Preserve the paths, junctions and soft widths of this visible pattern without inventing a specific material or turning the bands into cracks",
+    "note": ""
+  },
+  {
+    "id": "q04980",
+    "original_size": [
+      128,
+      128
+    ],
+    "treatment": "grain",
+    "source_mean": "#4c422d",
+    "reported_brightness_spread": 38,
+    "source_reference_mode": "RGB",
+    "game_uses_alpha": false,
+    "tiling_axes": "not_asserted_in_supplied_prompt",
+    "input_images": [
+      "q04980-reference.png"
+    ],
+    "variant_included": false,
+    "hard_pixel_reference_included": false,
+    "ready_for_colour_generation": true,
+    "prompt_file": "examples/q04980-prompt-colour.txt",
+    "visual_description": "muted olive-brown elongated vertical forms with pointed or sloping upper boundaries, broad dark vertical divisions and faint internal grain. Preserve this arrangement and its original subdued texture without replacing it with generic bark or cliff detail",
+    "note": ""
+  },
+  {
+    "id": "q05309",
+    "original_size": [
+      128,
+      128
+    ],
+    "treatment": "soft_effect",
+    "source_mean": "#b887fe",
+    "reported_brightness_spread": 61,
+    "source_reference_mode": "RGB",
+    "game_uses_alpha": false,
+    "tiling_axes": "not_asserted_in_supplied_prompt",
+    "input_images": [
+      "q05309-reference.png"
+    ],
+    "variant_included": false,
+    "hard_pixel_reference_included": false,
+    "ready_for_colour_generation": false,
+    "prompt_file": "examples/needs-role-confirmation/q05309-prompt-colour.txt",
+    "visual_description": "a saturated pink-lilac field with blue and purple streaks and blobs radiating from a blue centre. Preserve the exact vivid colours, radial arrangement and soft contours. This prompt is only for use after the asset is confirmed to be a colour texture",
+    "note": "Confirm shader/material role first. If this is encoded material data, do not submit it to the artistic colour redraw workflow."
+  },
+  {
+    "id": "q03408",
+    "original_size": [
+      256,
+      256
+    ],
+    "treatment": "grain",
+    "source_mean": "#445048",
+    "reported_brightness_spread": 27,
+    "source_reference_mode": "RGB",
+    "game_uses_alpha": false,
+    "tiling_axes": "not_asserted_in_supplied_prompt",
+    "input_images": [
+      "q03408-reference.png"
+    ],
+    "variant_included": false,
+    "hard_pixel_reference_included": false,
+    "ready_for_colour_generation": true,
+    "prompt_file": "examples/q03408-prompt-colour.txt",
+    "visual_description": "a muted green-grey stone-like surface with an existing dark irregular crack network and faint background grain. Preserve every crack branch, junction and width, and preserve the grain; do not add branches or deepen the cracks",
+    "note": ""
+  },
+  {
+    "id": "q04334",
+    "original_size": [
+      128,
+      128
+    ],
+    "treatment": "grain",
+    "source_mean": "#8c614a",
+    "reported_brightness_spread": 111,
+    "source_reference_mode": "RGB",
+    "game_uses_alpha": false,
+    "tiling_axes": "not_asserted_in_supplied_prompt",
+    "input_images": [
+      "q04334-reference.png"
+    ],
+    "variant_included": false,
+    "hard_pixel_reference_included": false,
+    "ready_for_colour_generation": true,
+    "prompt_file": "examples/q04334-prompt-colour.txt",
+    "visual_description": "warm orange-brown tree bark with irregular vertical furrows and ridges, rough small chips and dense tan, grey and brown mottling. Preserve the major furrows, the coarse directional grain and its existing contrast",
+    "note": ""
+  },
+  {
+    "id": "q03930",
+    "original_size": [
+      128,
+      128
+    ],
+    "treatment": "soft_effect",
+    "source_mean": "#1f1824",
+    "reported_brightness_spread": 44,
+    "source_reference_mode": "RGB",
+    "game_uses_alpha": true,
+    "tiling_axes": "not_asserted_in_supplied_prompt",
+    "input_images": [
+      "q03930-reference.png"
+    ],
+    "variant_included": false,
+    "hard_pixel_reference_included": false,
+    "ready_for_colour_generation": true,
+    "prompt_file": "examples/q03930-prompt-colour.txt",
+    "visual_description": "two stacked dark rectangular designs separated by a wide dark gap, with distinct unequal subdivisions drawn in soft purple-magenta lines. Preserve both networks, every junction and line path, their soft falloff and the gap between the designs; do not interpret them as raised bricks",
+    "note": ""
+  }
+]

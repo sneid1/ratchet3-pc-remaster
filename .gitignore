@@ -1,0 +1,33 @@
+# The disc image, BIOS and anything extracted or recompiled from them stay on this PC only.
+disc/
+bios/
+extracted/
+captures/
+*.iso
+*.chd
+*.bin
+
+# Third-party sources and tools, fetched by script, never committed.
+extern/
+tools-bin/
+
+# The recompiled EE code (scripts/uya-recgen.py): Rust source made from the disc's code, local to this PC.
+generated/
+
+# Build output
+build/
+target/
+# The port's build (port/target) and run outputs
+port/target/
+
+# Python bytecode of the scripts
+__pycache__/
+
+# The port's own translator's output (port/uyatr): game code made from the player's disc, local to this PC.
+translated/
+
+# The release assembly (scripts/package-release.ps1)
+release/
+
+# The release test assembly (a copy of the release layout for a test run)
+release-test/

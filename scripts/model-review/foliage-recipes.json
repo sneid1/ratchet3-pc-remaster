@@ -1,0 +1,369 @@
+{
+  "size": 1024,
+  "targets": [
+    {
+      "stem": "c039078e7904fabb-a2ca7f2b80de24-00001dd3",
+      "source": "captures\\rift-texture-review\\library\\uya-shrubs-L01\\c039078e7904fabb-a2ca7f2b80de24-00001dd3.png",
+      "finish": "leaf_cuticle",
+      "features": [
+        {
+          "shape": "line",
+          "points": [
+            [
+              128,
+              252
+            ],
+            [
+              126,
+              180
+            ],
+            [
+              125,
+              100
+            ],
+            [
+              124,
+              1
+            ]
+          ],
+          "width": 1.2,
+          "bevel": 0.7,
+          "height": 0.18,
+          "roughness": 0.6
+        },
+        {
+          "shape": "line",
+          "points": [
+            [
+              126,
+              187
+            ],
+            [
+              85,
+              174
+            ],
+            [
+              14,
+              155
+            ]
+          ],
+          "width": 0.75,
+          "bevel": 0.7,
+          "height": 0.1,
+          "roughness": 0.6
+        },
+        {
+          "shape": "line",
+          "points": [
+            [
+              126,
+              187
+            ],
+            [
+              173,
+              174
+            ],
+            [
+              241,
+              155
+            ]
+          ],
+          "width": 0.75,
+          "bevel": 0.7,
+          "height": 0.1,
+          "roughness": 0.6
+        },
+        {
+          "shape": "line",
+          "points": [
+            [
+              126,
+              148
+            ],
+            [
+              89,
+              125
+            ],
+            [
+              22,
+              91
+            ]
+          ],
+          "width": 0.75,
+          "bevel": 0.7,
+          "height": 0.1,
+          "roughness": 0.6
+        },
+        {
+          "shape": "line",
+          "points": [
+            [
+              126,
+              148
+            ],
+            [
+              167,
+              125
+            ],
+            [
+              235,
+              91
+            ]
+          ],
+          "width": 0.75,
+          "bevel": 0.7,
+          "height": 0.1,
+          "roughness": 0.6
+        },
+        {
+          "shape": "line",
+          "points": [
+            [
+              125,
+              105
+            ],
+            [
+              93,
+              79
+            ],
+            [
+              45,
+              29
+            ]
+          ],
+          "width": 0.75,
+          "bevel": 0.7,
+          "height": 0.1,
+          "roughness": 0.6
+        },
+        {
+          "shape": "line",
+          "points": [
+            [
+              125,
+              105
+            ],
+            [
+              160,
+              79
+            ],
+            [
+              208,
+              29
+            ]
+          ],
+          "width": 0.75,
+          "bevel": 0.7,
+          "height": 0.1,
+          "roughness": 0.6
+        },
+        {
+          "shape": "line",
+          "points": [
+            [
+              86,
+              174
+            ],
+            [
+              69,
+              201
+            ],
+            [
+              35,
+              215
+            ]
+          ],
+          "width": 0.75,
+          "bevel": 0.7,
+          "height": 0.1,
+          "roughness": 0.6
+        },
+        {
+          "shape": "line",
+          "points": [
+            [
+              173,
+              174
+            ],
+            [
+              188,
+              199
+            ],
+            [
+              219,
+              215
+            ]
+          ],
+          "width": 0.75,
+          "bevel": 0.7,
+          "height": 0.1,
+          "roughness": 0.6
+        },
+        {
+          "shape": "line",
+          "points": [
+            [
+              89,
+              125
+            ],
+            [
+              54,
+              128
+            ],
+            [
+              5,
+              122
+            ]
+          ],
+          "width": 0.75,
+          "bevel": 0.7,
+          "height": 0.1,
+          "roughness": 0.6
+        },
+        {
+          "shape": "line",
+          "points": [
+            [
+              167,
+              125
+            ],
+            [
+              201,
+              128
+            ],
+            [
+              250,
+              122
+            ]
+          ],
+          "width": 0.75,
+          "bevel": 0.7,
+          "height": 0.1,
+          "roughness": 0.6
+        }
+      ],
+      "evidence": "Vein paths manually fitted to the inspected original leaf design; no luminance-to-height conversion.",
+      "colour_artwork": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\authored\\foliage-c039078e7904fabb-a2ca7f2b80de24-00001dd3.png",
+      "imagegen_source": "C:/Users/<you>/.codex/generated_images/01a1e20e-17a7-7ae3-91fc-5689d7d3af6f/exec-f7eb727c-fdb5-4d1c-9da9-b8ed77cf5518.png"
+    },
+    {
+      "stem": "7e5bdd80b276978f-c54d28b3219cdec1-00001993",
+      "source": "captures\\rift-texture-review\\library\\uya-shrubs-L01\\7e5bdd80b276978f-c54d28b3219cdec1-00001993.png",
+      "finish": "leaf_cuticle",
+      "features": [
+        {
+          "shape": "line",
+          "points": [
+            [
+              128,
+              244
+            ],
+            [
+              127,
+              158
+            ],
+            [
+              127,
+              69
+            ],
+            [
+              127,
+              8
+            ]
+          ],
+          "width": 1.2,
+          "bevel": 0.7,
+          "height": 0.18,
+          "roughness": 0.6
+        },
+        {
+          "shape": "line",
+          "points": [
+            [
+              127,
+              212
+            ],
+            [
+              92,
+              190
+            ],
+            [
+              62,
+              135
+            ]
+          ],
+          "width": 0.75,
+          "bevel": 0.7,
+          "height": 0.1,
+          "roughness": 0.6
+        },
+        {
+          "shape": "line",
+          "points": [
+            [
+              127,
+              212
+            ],
+            [
+              163,
+              190
+            ],
+            [
+              193,
+              135
+            ]
+          ],
+          "width": 0.75,
+          "bevel": 0.7,
+          "height": 0.1,
+          "roughness": 0.6
+        },
+        {
+          "shape": "line",
+          "points": [
+            [
+              127,
+              172
+            ],
+            [
+              104,
+              141
+            ],
+            [
+              81,
+              91
+            ]
+          ],
+          "width": 0.75,
+          "bevel": 0.7,
+          "height": 0.1,
+          "roughness": 0.6
+        },
+        {
+          "shape": "line",
+          "points": [
+            [
+              127,
+              172
+            ],
+            [
+              151,
+              141
+            ],
+            [
+              174,
+              91
+            ]
+          ],
+          "width": 0.75,
+          "bevel": 0.7,
+          "height": 0.1,
+          "roughness": 0.6
+        }
+      ],
+      "evidence": "Vein paths manually fitted to the inspected original leaf design; no luminance-to-height conversion.",
+      "colour_artwork": "C:\\Users\\<you>\\ratchet3-remaster\\captures\\rift-texture-review\\authored\\foliage-7e5bdd80b276978f-c54d28b3219cdec1-00001993.png",
+      "imagegen_source": "C:/Users/<you>/.codex/generated_images/01a1e20e-17a7-7ae3-91fc-5689d7d3af6f/exec-1031c67e-9db3-459b-ad5d-d5ca0f2c813d.png"
+    }
+  ]
+}

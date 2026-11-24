@@ -1,0 +1,163 @@
+From 59fb1796b2e0fa87f588c39e3c20314e8d3a3715 Mon Sep 17 00:00:00 2001
+From: sneid1 <sneid1@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 16:33:46 +1100
+Subject: [PATCH] UYA VU1: native microprogram table behind feature uya-aot
+ (vu1gen --prefix, observed-entry profile)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .gitignore                         |  2 ++
+ rac-rs/crates/engine/Cargo.toml    |  3 +++
+ rac-rs/src/engine/gsfull/vu1aot.rs | 12 +++++++---
+ tools/vu/profile_uya.txt           | 36 ++++++++++++++++++++++++++++++
+ tools/vu/vu1gen.py                 | 15 +++++++------
+ 5 files changed, 58 insertions(+), 10 deletions(-)
+ create mode 100644 tools/vu/profile_uya.txt
+
+diff --git a/.gitignore b/.gitignore
+index d1e6db3..b2c4807 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -14,6 +14,8 @@
+ /oracle/src/skinff_vu.rs
+ /rac-rs/src/engine/gsfull/vu1_prog*.rs
+ /rac-rs/src/engine/gsfull/vu1aot_gen.rs
++/rac-rs/src/engine/gsfull/vu1_uya*.rs
++/rac-rs/src/engine/gsfull/vu1aot_uya_gen.rs
+ /rac-rs/src/rac1/particles/orb_tables.rs
+ # upscaler DLLs (FSR, DLSS): in the release zip (bundled/), never in git
+ /bundled/amd_fidelityfx_*.dll
+diff --git a/rac-rs/crates/engine/Cargo.toml b/rac-rs/crates/engine/Cargo.toml
+index 7c1e3e0..6b4aba5 100644
+--- a/rac-rs/crates/engine/Cargo.toml
++++ b/rac-rs/crates/engine/Cargo.toml
+@@ -45,6 +45,9 @@ libc = "0.2.190"
+ # programs run on the interpreter.
+ default = ["rc1-aot"]
+ rc1-aot = ["ee-oracle/rc1-aot"]
++# Up Your Arsenal's native VU1 microprograms (src/engine/gsfull/vu1_uya*.rs, vu1aot_uya_gen.rs, generated from its disc by
++# the port's scripts/uya_vugen.py). Without the generated files the build fails. Not together with rc1-aot.
++uya-aot = []
+ # The packs' unit tests use this crate's test helpers (`#[cfg(any(test, feature = "test-api"))]`); never in a game build.
+ test-api = ["rac-formats/test-api"]
+ 
+diff --git a/rac-rs/src/engine/gsfull/vu1aot.rs b/rac-rs/src/engine/gsfull/vu1aot.rs
+index 1c4979f..00f4a07 100644
+--- a/rac-rs/src/engine/gsfull/vu1aot.rs
++++ b/rac-rs/src/engine/gsfull/vu1aot.rs
+@@ -12,11 +12,17 @@
+ use crate::gsfull::vu1::{mac_of, st_of, Path1, Pipe, Vu1};
+ use std::arch::x86_64::*;
+ 
+-#[cfg(feature = "rc1-aot")]
++#[cfg(all(feature = "rc1-aot", feature = "uya-aot"))]
++compile_error!("features rc1-aot and uya-aot each select the table of one game's native VU1 programs: enable one");
++#[cfg(all(feature = "rc1-aot", not(feature = "uya-aot")))]
+ #[path = "vu1aot_gen.rs"]
+ mod progs;
+-/// Without the first game's generated programs (feature rc1-aot): no native program, every VU1 run is interpreted.
+-#[cfg(not(feature = "rc1-aot"))]
++/// Up Your Arsenal's generated programs (feature uya-aot, written by the port's scripts/uya_vugen.py).
++#[cfg(feature = "uya-aot")]
++#[path = "vu1aot_uya_gen.rs"]
++mod progs;
++/// Without a game's generated programs: no native program, every VU1 run is interpreted.
++#[cfg(not(any(feature = "rc1-aot", feature = "uya-aot")))]
+ mod progs {
+     pub(crate) static PROGS: [super::Native; 0] = [];
+ }
+diff --git a/tools/vu/profile_uya.txt b/tools/vu/profile_uya.txt
+new file mode 100644
+index 0000000..e745154
+--- /dev/null
++++ b/tools/vu/profile_uya.txt
+@@ -0,0 +1,36 @@
++# Observed VU1 run entries of Up Your Arsenal's microprograms (ids as in scripts/uya_vugen.py), New Game to Veldin, fields 1..2100.
++prog 0 entry 0
++prog 0 entry 50
++prog 0 entry 70
++prog 1 entry 0
++prog 1 entry 30
++prog 1 entry 40
++prog 1 entry 50
++prog 1 entry 70
++prog 1 entry 80
++prog 1 entry a0
++prog 2 entry 0
++prog 2 entry 10
++prog 2 entry 30
++prog 2 entry 40
++prog 2 entry 50
++prog 2 entry 80
++prog 2 entry 90
++prog 2 entry b0
++prog 3 entry 0
++prog 3 entry 10
++prog 3 entry 30
++prog 3 entry 40
++prog 3 entry b0
++prog 4 entry 0
++prog 4 entry 88
++prog 4 entry a8
++prog 4 entry 318
++prog 5 entry 0
++prog 5 entry 88
++prog 5 entry a8
++prog 5 entry 318
++prog 6 entry 0
++prog 6 entry a8
++prog 7 entry 0
++prog 7 entry 10
+diff --git a/tools/vu/vu1gen.py b/tools/vu/vu1gen.py
+index 45a1711..2fb0853 100644
+--- a/tools/vu/vu1gen.py
++++ b/tools/vu/vu1gen.py
+@@ -1033,7 +1033,7 @@ def load_profile(path):
+     return ent, jr
+ 
+ 
+-def gen_prog(n, bins, prof_ent, prof_jr, outdir):
++def gen_prog(n, bins, prof_ent, prof_jr, outdir, prefix='prog'):
+     b = open(os.path.join(bins, 'prog%d.bin' % n), 'rb').read()
+     code = [struct.unpack_from('<Q', b, i)[0] for i in range(0, len(b) - len(b) % 8, 8)]
+     prog = Prog(n, code)
+@@ -1059,7 +1059,7 @@ def gen_prog(n, bins, prof_ent, prof_jr, outdir):
+     gen.build()
+     arms = gen.emit()
+     txt = file_text(prog, gen, arms, ent)
+-    path = os.path.join(outdir, 'vu1_prog%d.rs' % n)
++    path = os.path.join(outdir, 'vu1_%s%d.rs' % (prefix, n))
+     with open(path, 'w', newline='\n') as f:
+         f.write(txt)
+     nb = sum(1 for n_ in order if graph[n_].bail is not None)
+@@ -1078,21 +1078,22 @@ def main():
+     ap.add_argument('--bins', required=True)
+     ap.add_argument('--profile', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'profile.txt'))
+     ap.add_argument('--out', required=True)
++    ap.add_argument('--prefix', default='prog', help="file/module prefix: vu1_<prefix>N.rs; table vu1aot_gen.rs for 'prog', else vu1aot_<prefix>_gen.rs")
+     a = ap.parse_args()
+     pe, pj = load_profile(a.profile)
+     progs = [int(x) for x in a.progs.split(',') if x]
+     for n in progs:
+-        gen_prog(n, a.bins, pe, pj, a.out)
++        gen_prog(n, a.bins, pe, pj, a.out, a.prefix)
+     reg = ['// Generated by rac-rs/tools/vu1aot/vu1gen.py. Do not edit.', '// Native VU1 programs: (id, code, entry).', '']
+     for n in progs:
+-        reg.append('#[path = "vu1_prog%d.rs"]' % n)
+-        reg.append('pub(crate) mod prog%d;' % n)
++        reg.append('#[path = "vu1_%s%d.rs"]' % (a.prefix, n))
++        reg.append('pub(crate) mod %s%d;' % (a.prefix, n))
+     reg.append('')
+     reg.append('pub(crate) static PROGS: &[super::Native] = &[')
+     for n in progs:
+-        reg.append('    super::Native { id: %d, code: &prog%d::CODE, run: prog%d::run },' % (n, n, n))
++        reg.append('    super::Native { id: %d, code: &%s%d::CODE, run: %s%d::run },' % (n, a.prefix, n, a.prefix, n))
+     reg.append('];')
+-    with open(os.path.join(a.out, 'vu1aot_gen.rs'), 'w', newline='\n') as f:
++    with open(os.path.join(a.out, 'vu1aot_gen.rs' if a.prefix == 'prog' else 'vu1aot_%s_gen.rs' % a.prefix), 'w', newline='\n') as f:
+         f.write('\n'.join(reg) + '\n')
+ 
+ 
+-- 
+2.51.2.windows.1
+

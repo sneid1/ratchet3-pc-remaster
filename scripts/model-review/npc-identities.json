@@ -1,0 +1,546 @@
+{
+  "schema": 1,
+  "date": "2026-11-17",
+  "scope": "NPC/story cast, named opponents, companion/costume variants and explicit cutscene gaps. Generic combat enemies are indexed separately; ships are excluded.",
+  "references": [
+    {
+      "id": "cast",
+      "url": "https://ratchetandclank.fandom.com/wiki/Category%3ACharacters_in_Up_Your_Arsenal",
+      "use": "Named cast coverage; not local class IDs."
+    },
+    {
+      "id": "models",
+      "url": "https://models.spriters-resource.com/playstation_3/ratchetclankupyourarsenalhd/",
+      "use": "Named costume/model variants in the HD release; not proof of a PS2 class mapping."
+    },
+    {
+      "id": "script",
+      "url": "https://ratchetandclank.fandom.com/wiki/Up_Your_Arsenal_script",
+      "use": "Roles including Gary, Helen and Scorpio."
+    },
+    {
+      "id": "manual",
+      "url": "https://www.videogamemanual.com/PS2/Ratchet%20%26%20Clank-%20Up%20Your%20Arsenal%20%28USA%29.pdf",
+      "use": "Credits distinguish screen/voice roles from confirmed 3D assets."
+    }
+  ],
+  "entries": [
+    {
+      "id": "nefarious",
+      "name": "Dr. Nefarious - robot",
+      "category": "Story cast",
+      "classes": [
+        7662,
+        6909,
+        7498,
+        7343
+      ],
+      "identity_confidence": "Identified in corrected native source render; exact completed fingerprint recorded in project manifest",
+      "existing_art_keys": [
+        "source_c7662"
+      ],
+      "note": "Standard robot source class7662 art pass complete; vidcomic and other source variants remain separate. Level 20 classes 6909/7498 (full detail) and 7343 (low detail) are further Nefarious models; cutscene fingerprint 88217a44 shares 7662's mesh and texture bindings."
+    },
+    {
+      "id": "nefarious_comic_robot",
+      "name": "Dr. Nefarious - robot, vidcomic",
+      "category": "Vidcomic",
+      "classes": [
+        6609
+      ],
+      "identity_confidence": "visual match; provisional",
+      "existing_art_keys": [],
+      "note": ""
+    },
+    {
+      "id": "nefarious_comic_organic",
+      "name": "Dr. Nefarious - organic, vidcomic",
+      "category": "Vidcomic",
+      "classes": [],
+      "identity_confidence": "Local source unresolved; prior classes 5718/6810/7729 rejected by corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "5718/6810/7729 are robotic pirate ghost crewmen (vid-comic; 7729 is the museum replica), not organic Nefarious."
+    },
+    {
+      "id": "lawrence",
+      "name": "Lawrence - butler",
+      "category": "Story cast",
+      "classes": [],
+      "identity_confidence": "Cutscene-only class 6519 (no LEVEL class), corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "Tall pear-shaped robot butler in a black tailcoat; cutscenes on levels 3/10/16/20/22/27. Class 7066 was rejected earlier (reptilian gunner)."
+    },
+    {
+      "id": "lawrence_bassist",
+      "name": "Lawrence - bassist",
+      "category": "Story cast",
+      "classes": [],
+      "identity_confidence": "Cutscene-only class 7360 (level 20), corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "Lawrence in a purple tailcoat and long blond wig with a red bass guitar. Class 4979 is a museum swordsman."
+    },
+    {
+      "id": "courtney",
+      "name": "Courtney Gears",
+      "category": "Story cast",
+      "classes": [
+        7109,
+        7661
+      ],
+      "identity_confidence": "Identified in corrected native source render; exact completed fingerprint recorded in project manifest",
+      "existing_art_keys": [
+        "source_c7109"
+      ],
+      "note": "Class7109 art pass complete with eye-only emission. Class7661 and its other fingerprints still need comparison/review."
+    },
+    {
+      "id": "skrunch",
+      "name": "Skrunch - standard",
+      "category": "Story cast",
+      "classes": [
+        7969,
+        6816
+      ],
+      "identity_confidence": "Identified in corrected native source render; exact completed fingerprint recorded in project manifest",
+      "existing_art_keys": [
+        "source_c7969"
+      ],
+      "note": "Standard class7969 art pass complete. Q-Force costume remains separate. Source bind pose has closed eyelids; animation is not approved. Class6816 has the identical source fingerprint 8aed6ef72c31c0e3 (existing art reusable unchanged). Cutscene class 7657 is Skrunch too (levels 2/3)."
+    },
+    {
+      "id": "skrunch_qforce",
+      "name": "Skrunch - Q-Force outfit",
+      "category": "Story cast",
+      "classes": [
+        6951,
+        7123,
+        7795
+      ],
+      "identity_confidence": "Visual match in corrected native render 17 November (npc-catalogue/native): Skrunch anatomy, tail and ears in a hooded Q-Force suit with the Q emblem",
+      "existing_art_keys": [],
+      "note": "Three LEVEL classes and cutscene class 7665 share one exported mesh."
+    },
+    {
+      "id": "helga",
+      "name": "Helga von Streissenburgen",
+      "category": "Story cast",
+      "classes": [
+        7014
+      ],
+      "identity_confidence": "Identified by the user 17 November (corrected native render, Starship Phoenix levels 3/6)",
+      "existing_art_keys": [],
+      "note": "Previously mislabelled as President Phyronix."
+    },
+    {
+      "id": "president",
+      "name": "President Phyronix",
+      "category": "Story cast",
+      "classes": [],
+      "identity_confidence": "Cutscene-only class 5885 (levels 1/3/4), corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "Brown-furred cazar in a dark suit with gold trim. Class 7014 is Helga."
+    },
+    {
+      "id": "plumber",
+      "name": "Plumber / Waterworker",
+      "category": "Supporting cast",
+      "classes": [
+        4339
+      ],
+      "identity_confidence": "Visual match in corrected native render 17 November (npc-catalogue/native); level 28 (sewers) only",
+      "existing_art_keys": [],
+      "note": "Bearded alien in work overalls with tool belt and keys."
+    },
+    {
+      "id": "slim",
+      "name": "Slim Cognito",
+      "category": "Supporting cast",
+      "classes": [
+        6866
+      ],
+      "identity_confidence": "Visual match in corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "A pair of eyes only, as Slim is always shown; Aquatos (level 8)."
+    },
+    {
+      "id": "darla",
+      "name": "Darla Gratch",
+      "category": "Supporting cast",
+      "classes": [],
+      "identity_confidence": "Cutscene-only class 5859 (level 9), corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "Channel 64 newsreader: pink jacket, green shirt, metallic skin, black metal hair, '64' badge in her atlases."
+    },
+    {
+      "id": "director",
+      "name": "Director",
+      "category": "Supporting cast",
+      "classes": [
+        7103
+      ],
+      "identity_confidence": "Visual match in corrected native render 17 November (npc-catalogue/native): director chair and megaphone; level 23 only",
+      "existing_art_keys": [],
+      "note": ""
+    },
+    {
+      "id": "fred",
+      "name": "Fred",
+      "category": "Supporting cast",
+      "classes": [],
+      "identity_confidence": "Not found in any of the 1,327 native views (every jointed LEVEL class and every cutscene class), corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "No short cat-eared alien with round glasses and a lab coat exists among the decoded classes; possibly screen-only."
+    },
+    {
+      "id": "taxi",
+      "name": "Taxi Driver",
+      "category": "Supporting cast",
+      "classes": [],
+      "identity_confidence": "named roster; local source not identified",
+      "existing_art_keys": [],
+      "note": "Character and vehicle must be separated; the model index also lists an unused Supernova Taxi Driver, not automatically this character."
+    },
+    {
+      "id": "maxmillian",
+      "name": "Maxmillian",
+      "category": "Named enemies / bosses",
+      "classes": [],
+      "identity_confidence": "named roster; local source not identified",
+      "existing_art_keys": [],
+      "note": "Not positively identified. His robot ninja henchmen are 7111 and 7139 (Holostar level 23)."
+    },
+    {
+      "id": "terror_of_talos",
+      "name": "Terror of Talos",
+      "category": "Named enemies / bosses",
+      "classes": [
+        7129
+      ],
+      "identity_confidence": "Visual match in corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "Winged reptilian film boss with two pairs of arms; Holostar Clank level 23."
+    },
+    {
+      "id": "scorpio",
+      "name": "Scorpio",
+      "category": "Named enemies / bosses",
+      "classes": [
+        6680
+      ],
+      "identity_confidence": "Visual match in corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "Brain in a glass dome, six wheels, saw-tailed scorpion tail; Annihilation Nation."
+    },
+    {
+      "id": "gary",
+      "name": "Gary",
+      "category": "Named enemies / bosses",
+      "classes": [
+        6684
+      ],
+      "identity_confidence": "Visual match in corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "Heavily armoured black and gold robot with missile pods and a huge gun; Annihilation Nation."
+    },
+    {
+      "id": "helen",
+      "name": "Helen",
+      "category": "Named enemies / bosses",
+      "classes": [
+        6687
+      ],
+      "identity_confidence": "Visual match in corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "Horned armoured robot with purple gauntlets and copper trim; Annihilation Nation."
+    },
+    {
+      "id": "klunk",
+      "name": "Klunk - standard",
+      "category": "Named enemies / bosses",
+      "classes": [],
+      "identity_confidence": "Not distinguished, corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "6322 (level 19), Secret Agent Clank 8043 and cutscene class 10's costume 1 share the same dark-suit Clank art; no red-eyed Clank class exists. Cutscene class 8069 is standard Clank."
+    },
+    {
+      "id": "giant_klunk",
+      "name": "Klunk - giant boss",
+      "category": "Named enemies / bosses",
+      "classes": [
+        6666
+      ],
+      "identity_confidence": "Visual match in corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "Giant Clank's mesh, darker body with orange trim; level 16."
+    },
+    {
+      "id": "blackstar",
+      "name": "Captain Blackstar",
+      "category": "Vidcomic",
+      "classes": [
+        6694
+      ],
+      "identity_confidence": "Visual match in corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "Robot pirate captain with peg leg and cutlass, Insomniac Museum exhibit. 4339 is the Plumber; vid-comic skull heads 5736/6582 are his skull spirit."
+    },
+    {
+      "id": "momma",
+      "name": "Momma Tyhrranoid",
+      "category": "Named enemies / bosses",
+      "classes": [
+        6623
+      ],
+      "identity_confidence": "Visual match in corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "Immense eye-stalked Tyhrranoid whose face is its torso; Tyhrranosis (level 9)."
+    },
+    {
+      "id": "biobliterator",
+      "name": "Biobliterator - robot boss / sphere assembly",
+      "category": "Named enemies / bosses",
+      "classes": [
+        6554,
+        6556,
+        6555
+      ],
+      "identity_confidence": "Provisional: corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path); level 20 from the saved tour8 frame",
+      "existing_art_keys": [],
+      "note": "Giant mech legs 6554, gun-armed sphere 6556 and crewed pod 6555, level 20 only."
+    },
+    {
+      "id": "qwark_pajamas",
+      "name": "Captain Qwark - pajamas",
+      "category": "Existing character variants",
+      "classes": [
+        6492
+      ],
+      "identity_confidence": "visual match; provisional",
+      "existing_art_keys": [],
+      "note": ""
+    },
+    {
+      "id": "qwark_comic",
+      "name": "Captain Qwark - vidcomic hero",
+      "category": "Vidcomic",
+      "classes": [
+        4963
+      ],
+      "identity_confidence": "visual match; provisional",
+      "existing_art_keys": [],
+      "note": ""
+    },
+    {
+      "id": "qwark_tutu",
+      "name": "Captain Qwark - vidcomic tutu",
+      "category": "Vidcomic",
+      "classes": [
+        7929
+      ],
+      "identity_confidence": "visual match; provisional",
+      "existing_art_keys": [],
+      "note": ""
+    },
+    {
+      "id": "qwark_hero",
+      "name": "Captain Qwark - hero uniform variants",
+      "category": "Existing character variants",
+      "classes": [
+        7000,
+        5978,
+        6491
+      ],
+      "identity_confidence": "visual match; provisional",
+      "existing_art_keys": [
+        "source_c7000"
+      ],
+      "note": "Class 7000 has detailed layers. 5978 and 6491 (level 20, no native view) share its exported mesh; one binds different atlases."
+    },
+    {
+      "id": "qwark_tribal",
+      "name": "Captain Qwark - tribal/jungle variants",
+      "category": "Existing character variants",
+      "classes": [
+        6468,
+        5835,
+        7063
+      ],
+      "identity_confidence": "visual match; provisional",
+      "existing_art_keys": [
+        "phoenix_crew"
+      ],
+      "note": "Captured phoenix_crew art is finished. Do not automatically transfer completion to all three source classes."
+    },
+    {
+      "id": "skidd",
+      "name": "Skidd McMarx - organic variants",
+      "category": "Existing character variants",
+      "classes": [
+        7012,
+        6499,
+        7122,
+        7209
+      ],
+      "identity_confidence": "visual match; provisional",
+      "existing_art_keys": [
+        "source_c7012"
+      ],
+      "note": "Class 7012 representative has finished art. Check other source classes/fingerprints before extending completion."
+    },
+    {
+      "id": "skidd_robot",
+      "name": "Skidd McMarx - robot",
+      "category": "Existing character variants",
+      "classes": [
+        7186
+      ],
+      "identity_confidence": "visual match; provisional",
+      "existing_art_keys": [],
+      "note": "Cap and costume resemble Skidd. Confirm against named robot reference before authoring."
+    },
+    {
+      "id": "sasha",
+      "name": "Sasha Phyronix - variants",
+      "category": "Existing character variants",
+      "classes": [
+        7013,
+        6642
+      ],
+      "identity_confidence": "visual match; provisional",
+      "existing_art_keys": [
+        "source_c7013"
+      ],
+      "note": "Class 7013 representative already has detailed layers. Other fingerprints need equivalence/review."
+    },
+    {
+      "id": "al",
+      "name": "Big Al - source variants",
+      "category": "Existing character variants",
+      "classes": [
+        6501
+      ],
+      "identity_confidence": "project manifest confirms representative",
+      "existing_art_keys": [
+        "source_c6501"
+      ],
+      "note": "Representative finished; shirt fix requires the edited mesh. Other fingerprints are not automatically covered."
+    },
+    {
+      "id": "al_qforce",
+      "name": "Big Al - Q-Force outfit",
+      "category": "Existing character variants",
+      "classes": [
+        7121
+      ],
+      "identity_confidence": "Visual match in corrected native render 17 November (npc-catalogue/native): Big Al's face, hair and goggles with Q-Force harness and emblem shirt",
+      "existing_art_keys": [],
+      "note": "Starship Phoenix levels 3/6. Cutscene class 8049 has the same 4,483 triangles (no native view)."
+    },
+    {
+      "id": "rangers",
+      "name": "Galactic Rangers - body/leg variants",
+      "category": "Existing character variants",
+      "classes": [
+        5542,
+        6417,
+        5669,
+        6366,
+        6886,
+        6802,
+        7029,
+        5785
+      ],
+      "identity_confidence": "visual match; provisional",
+      "existing_art_keys": [
+        "ranger"
+      ],
+      "note": "Captured Veldin pair 5542 (upper) + 6886 (legs) art pass complete. Other upper/leg classes and colourways listed per class in docs/NPC-ENEMY-CATALOGUE.md."
+    },
+    {
+      "id": "clank_standalone",
+      "name": "Clank - standalone variants",
+      "category": "Existing character variants",
+      "classes": [
+        87
+      ],
+      "identity_confidence": "project manifest confirms class and source slot",
+      "existing_art_keys": [
+        "clank_standalone"
+      ],
+      "note": "L19 slot60 standard configuration is finished. Other source configurations need equivalence checks."
+    },
+    {
+      "id": "clank_giant",
+      "name": "Giant Clank",
+      "category": "Player / companion variants",
+      "classes": [
+        637,
+        6601
+      ],
+      "identity_confidence": "Visual match in corrected native render 17 November (npc-catalogue/native)",
+      "existing_art_keys": [],
+      "note": "Both render with corrected normals; 6601's atlases are pixel copies of 637's (level 23)."
+    },
+    {
+      "id": "clank_family",
+      "name": "Clank-like alternate source models",
+      "category": "Unresolved identity",
+      "classes": [
+        2404
+      ],
+      "identity_confidence": "visual match; provisional",
+      "existing_art_keys": [],
+      "note": "Goggled round robot with a drill tail on the Clank levels 19/23/27. 6322 is the Klunk candidate; 6228 is an arena robot (full catalogue)."
+    },
+    {
+      "id": "agent_clank",
+      "name": "Secret Agent Clank costume",
+      "category": "Player / companion variants",
+      "classes": [
+        8043,
+        6322
+      ],
+      "identity_confidence": "Visual match in corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "8043: Clank in black formal wear with bow tie (Holostar level 23). 6322 (level 19) wears the same atlas art."
+    },
+    {
+      "id": "jeeves",
+      "name": "Jeeves / chauffeur Ratchet",
+      "category": "Player / companion variants",
+      "classes": [],
+      "identity_confidence": "Cutscene-only class 6320 (Holostar film, level 23), corrected native views 17 November (npc-catalogue/native; cutscene classes through the review stage's @scene path)",
+      "existing_art_keys": [],
+      "note": "Ratchet in a chauffeur cap and red-and-black uniform."
+    },
+    {
+      "id": "backup_dancer",
+      "name": "Courtney Gears backup dancer",
+      "category": "Supporting enemy",
+      "classes": [
+        7192
+      ],
+      "identity_confidence": "visual match; provisional",
+      "existing_art_keys": [],
+      "note": "Generic dancer model, not a confirmed individually named character."
+    },
+    {
+      "id": "screen_cast",
+      "name": "Lance / Janice and other screen-only performers",
+      "category": "Screen / cameo audit",
+      "classes": [],
+      "identity_confidence": "named roster; local source not identified",
+      "existing_art_keys": [],
+      "note": "Audit video/texture presentation first. No claim that a separate 3D mesh exists."
+    },
+    {
+      "id": "extras",
+      "name": "Cinema audience / background extras",
+      "category": "Screen / cameo audit",
+      "classes": [],
+      "identity_confidence": "named roster; local source not identified",
+      "existing_art_keys": [],
+      "note": "Cutscene-only sources are not decoded. Preserve this gap rather than invent a complete list of 3D extras."
+    }
+  ]
+}

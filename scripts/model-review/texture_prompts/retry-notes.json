@@ -1,0 +1,8 @@
+{
+  "invented_detail": "In {region}, the source contains {source_feature}. Keep that form at its original width and contrast. Do not add {unwanted_feature} there. Preserve the source's surrounding features.",
+  "missing_detail": "Preserve {feature} in {region}, including its original count, location and outline. Resolve it clearly rather than merging it into the surrounding fill. Do not compensate by inventing detail elsewhere.",
+  "lost_grain": "Restore the original grain in {region}, retaining its recognizable clusters, scale, direction and strength. This grain must remain visible when reduced to the original dimensions. Much finer unrelated noise does not replace it.",
+  "moved_feature": "Keep {feature} in {region} at its exact source position, size and thickness. Preserve its original asymmetry and curvature. Do not straighten, regularise or symmetrise it.",
+  "colour_drift": "Match the source's {region} locally. Preserve its {source_colour_description}; avoid the observed {drift_description}. Keep its internal light/dark relationships. Do not compensate by changing another part of the image.",
+  "hardened_fade": "In {region}, retain the source's soft colour falloff across its full original width. Do not add a hard outline or narrow boundary. Keep the original centre brightness and footprint."
+}

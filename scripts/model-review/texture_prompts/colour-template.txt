@@ -1,0 +1,19 @@
+Redraw Image 1 as the same 2D colour texture at native 1024 x 1024 resolution, retaining the original PS2 game art style. Source: {describe}.
+
+Reconstruct the artwork rather than enlarging its pixel blocks. Remove enlargement blur from genuine hard contours and resolve existing small details clearly at native resolution. Preserve intentional soft shading, painted transitions and glow at their original widths. Different features in the same texture can require different edge treatment.
+
+Keep every visible feature's position, count, shape, size, spacing and orientation. Preserve empty areas and the exact crop. Retain the original grain and mottling, including their recognizable clusters, scale, direction and contrast; do not erase them or replace them with unrelated fine noise. Keep plain regions plain. Additional fine definition must stay within the existing design and must not introduce new features when reduced to the original dimensions.
+
+Match colour locally throughout the image, including each separate atlas piece. Preserve hue, saturation, brightness and all existing painted light and dark variation. The source's whole-image average is {mean}; this is a reference check, not a colour to apply everywhere. Preserve the original lighting without adding new illumination, reflections, contrast enhancement or a vignette.
+
+{treatment}
+
+Copy any existing lettering, numbers and logos as drawn shapes, preserving their strokes, gaps, spacing and placement. Do not retype, correct, translate or guess unclear characters.
+
+{tiling}
+{variant}
+{pixel_reference}
+{alpha}
+{retry_note}
+
+No crop, zoom, rotation, perspective, rearrangement or added decoration. Reduced to the original dimensions, the result should closely reproduce the source's design and colour distribution. Output only the square colour texture, filling the frame, at 1024 x 1024.

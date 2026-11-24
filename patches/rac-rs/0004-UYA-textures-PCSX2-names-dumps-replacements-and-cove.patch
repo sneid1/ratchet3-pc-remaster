@@ -1,0 +1,1110 @@
+From a03f4803016215f9109f94b9dc213723a0333025 Mon Sep 17 00:00:00 2001
+From: sneid1 <sneid1@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 14:42:45 +1100
+Subject: [PATCH] UYA textures: PCSX2 names, dumps, replacements and coverage
+ on the GS-full pipe
+
+The GS front end keeps its own copy of local memory (uploads and local copies in GIF order) and names every texture a prim
+samples the way PCSX2 does (texpack::gsname), without waiting for the rasteriser. Drawn-into blocks are tracked per byte plane
+(low 24 bits, top byte) and per prim's page rows, since UYA keeps T8H / T4HL / T4HH textures in the top byte of its CT24 display
+and Z24 depth buffers and streams textures into the rows a frame does not draw. Per name: a dump as <name>.png (texpack::live::
+Dumper), the replacement from a PCSX2 folder (texpack::live::Live: decoded, validated, mip chain), sampled by the software GS in
+place of the original (gs_raster::sample_repl), and a texture id written with every pixel into a coverage plane that follows
+blits, T8 read-backs and local copies (Gs::cover_ids).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ rac-rs/src/engine/gsfull/gs.rs         |  26 ++
+ rac-rs/src/engine/gsfull/gs/texhook.rs | 345 +++++++++++++++++++++++++
+ rac-rs/src/engine/gsfull/gs_queue.rs   |  38 ++-
+ rac-rs/src/engine/gsfull/gs_raster.rs  | 125 ++++++++-
+ rac-rs/src/engine/texpack/gsname.rs    |  25 ++
+ rac-rs/src/engine/texpack/live.rs      | 274 ++++++++++++++++++++
+ rac-rs/src/engine/texpack/mod.rs       |   1 +
+ 7 files changed, 825 insertions(+), 9 deletions(-)
+ create mode 100644 rac-rs/src/engine/gsfull/gs/texhook.rs
+ create mode 100644 rac-rs/src/engine/texpack/live.rs
+
+diff --git a/rac-rs/src/engine/gsfull/gs.rs b/rac-rs/src/engine/gsfull/gs.rs
+index 6e02f18..4de4a32 100644
+--- a/rac-rs/src/engine/gsfull/gs.rs
++++ b/rac-rs/src/engine/gsfull/gs.rs
+@@ -16,6 +16,8 @@ use super::gs_raster::{Ctx, Prim};
+ use std::collections::HashMap;
+ 
+ mod texname;
++mod texhook;
++pub use texhook::{Seen, TexOpts, RT};
+ #[path = "gs_overlay.rs"]
+ mod overlay;
+ 
+@@ -115,6 +117,8 @@ pub struct Gs {
+     cur: Ctx,
+     cur_tex: Option<(u32, u32)>,
+     rstats: RasterStats,
++    /// [PC] Texture names, dumps, replacements and coverage (gs/texhook.rs; None = off). After `queue`, which is dropped first.
++    tex: Option<Box<texhook::TexHook>>,
+ }
+ 
+ impl Gs {
+@@ -164,6 +168,7 @@ impl Gs {
+             cur: Ctx::default(),
+             cur_tex: None,
+             rstats: RasterStats::default(),
++            tex: None,
+         }
+     }
+ 
+@@ -409,6 +414,9 @@ impl Gs {
+         if self.r[0x53] & 3 != 0 {
+             return;
+         }
++        if self.tex.is_some() {
++            self.tex_image(q);
++        }
+         self.stats.up_qw += 1;
+         if self.deferring {
+             if let Some(p) = self.pend.last_mut() {
+@@ -433,6 +441,9 @@ impl Gs {
+ 
+     fn trx_start(&mut self) {
+         texname::bump();
++        if self.tex.is_some() {
++            self.tex_trx_start();
++        }
+         let (bb, pos, rr) = (self.r[0x50], self.r[0x51], self.r[0x52]);
+         let (dbp, dbw, dpsm) = (((bb >> 32) & 0x3fff) as u32, ((bb >> 48) & 0x3f) as u32, ((bb >> 56) & 0x3f) as u32);
+         let (dx, dy) = (((pos >> 32) & 0x7ff) as u32, ((pos >> 48) & 0x7ff) as u32);
+@@ -553,6 +564,9 @@ impl Gs {
+ 
+     fn local_copy(&mut self) {
+         texname::bump();
++        if self.tex.is_some() {
++            self.tex_copy();
++        }
+         let (bb, pos, rr) = (self.r[0x50], self.r[0x51], self.r[0x52]);
+         self.queue.copy(bb, pos, rr);
+         self.stats.local_copies += 1;
+@@ -801,6 +815,7 @@ impl Gs {
+                 let regs = [self.r[6], self.r[7]];
+                 super::texreq::at_draw(self, regs);
+             }
++            let cx = if self.tex.is_some() { self.tex_resolve(cx, true) } else { cx };
+             if cx != self.cur {
+                 self.cur = cx;
+                 self.queue.new_ctx();
+@@ -815,10 +830,21 @@ impl Gs {
+             }
+             self.pend_seen = self.pend_gen;
+         }
++        if self.tex_stale() {
++            // Local memory changed since the context was resolved: the same registers may name another texture now.
++            let cx = self.tex_resolve(self.cur, false);
++            if cx != self.cur {
++                self.cur = cx;
++                self.queue.new_ctx();
++            }
++        }
+         if self.ovl.skip_hud && self.cur.ovl && !self.cur.ozfx {
+             return; // a HUD prim the GPU capture draws (gs_overlay.rs `set_hud_skip`)
+         }
+         let Some(bb) = bbox(&self.cur, ty, &vs) else { return };
++        if self.tex.is_some() {
++            self.tex_prim(bb);
++        }
+         self.queue.push(&self.cur, Prim { v: vs, ctx: 0, ty: ty as u8, bb }, self.cur_tex);
+     }
+ 
+diff --git a/rac-rs/src/engine/gsfull/gs/texhook.rs b/rac-rs/src/engine/gsfull/gs/texhook.rs
+new file mode 100644
+index 0000000..7e639aa
+--- /dev/null
++++ b/rac-rs/src/engine/gsfull/gs/texhook.rs
+@@ -0,0 +1,345 @@
++//! [PC] Texture packs on the GS-full pipe (`port/uya`; `texpack/live.rs`): every textured prim gets the PCSX2 name of the texture
++//! it samples, its replacement and its id for the coverage plane, all decided on the front end at draw time.
++//!
++//! Naming must not wait for the rasteriser, so the front end keeps its own copy of local memory (`shadow`): host -> local uploads
++//! are written into it as their data arrives and local -> local copies are repeated on it, in GIF order, which is the order the back
++//! end applies them in. What prims draw is not in the copy: the blocks of the frame buffer (and z buffer) page rows each prim's box
++//! touches are marked `dirty`, and a texture on a dirty block (a render target, like PCSX2's) is never named; an upload makes its
++//! blocks clean again, a copy passes dirtiness from source to destination. Dirtiness is kept per byte plane (`planes`): the low 24
++//! bits of each 32-bit word and its top byte, because UYA keeps T8H / T4HL / T4HH textures in the top byte of its CT24 display
++//! buffer and Z24 depth buffer, which drawing there never touches. Marking the whole scissor instead of the rows drawn would be too
++//! much too: UYA streams textures into the parts of its targets a frame's draws leave alone. Each block keeps the stamp of its last
++//! change (`ver`), so a name made earlier stays valid while no block of the texture or its CLUT has changed since (`Entry::built`).
++//!
++//! Per name the hook dumps the texture once (`texpack::live::Dumper`), looks the replacement up (`texpack::live::Live`; not for
++//! region repeat, CLAMP mode 3) and counts the prims drawn with it. With coverage on, every pixel write also stores the prim's
++//! texture id in a plane of one u32 per 2 bytes of local memory (`gs_raster::shade`); `Gs::cover_ids` reads the ids of the shown
++//! picture. A blended write takes a pixel only when it keeps less than half of what was there; a prim drawn from a render target
++//! (UYA draws its scene into one buffer and blits it to the shown one, and reads it back as T8 for colour effects) and a local copy
++//! pass on the ids of the pixels they read, so the shown picture names the textures the scene was drawn with.
++
++use super::super::crtc::Crtc;
++use super::super::gs_mem::{a16, a32, local_copy, luts, put, span, Trx, VRAM_SIZE};
++use super::super::gs_raster::Ctx;
++use super::Gs;
++use crate::texpack::gsname;
++use crate::texpack::live::{Dumper, Live, Repl};
++use crate::texpack::name::TexName;
++use std::collections::HashMap;
++use std::sync::Arc;
++
++/// Blocks of local memory (256 bytes each).
++const BLOCKS: usize = 16384;
++/// Texture id of a prim that samples a render target (a texture on blocks drawn into); its pixels take the ids of what they read.
++pub use super::super::gs_raster::TID_RT as RT;
++/// TEX0 bits a name depends on: TBP0, TBW, PSM, TW, TH and the CLUT fields; not TCC, TFX, CLD.
++const TEX0_MASK: u64 = ((1u64 << 34) - 1) | (((1u64 << 24) - 1) << 37);
++
++/// Byte planes of local memory a format writes or reads: bit 0 the low 24 bits of each 32-bit word, bit 1 its top byte. CT24 and
++/// Z24 leave the top byte alone; T8H, T4HL and T4HH live in it; everything else spans both.
++fn planes(psm: u32) -> u8 {
++    match psm {
++        0x01 | 0x31 => 1,
++        0x1b | 0x24 | 0x2c => 2,
++        _ => 3,
++    }
++}
++
++/// The planes a frame buffer write reaches, with FBMSK (a CT32 target whose top byte or colour bytes are all masked).
++fn fb_planes(fpsm: u32, fbmsk: u32) -> u8 {
++    let mut p = planes(fpsm);
++    if fpsm == 0 && fbmsk & 0xff00_0000 == 0xff00_0000 {
++        p &= !2;
++    }
++    if fpsm == 0 && fbmsk & 0xff_ffff == 0xff_ffff {
++        p &= !1;
++    }
++    p
++}
++
++/// What the hook does; at least one of the three.
++pub struct TexOpts {
++    pub dump: Option<Dumper>,
++    pub live: Option<Live>,
++    pub cover: bool,
++}
++
++/// One texture name the run has drawn (its id is its index + 1).
++pub struct Seen {
++    pub name: TexName,
++    pub stem: String,
++    pub psm: u32,
++    /// Size of the named rectangle in texels.
++    pub w: u32,
++    pub h: u32,
++    /// Prims drawn with it.
++    pub prims: u64,
++    /// The replacement drawn in its place, if any.
++    pub repl: Option<Arc<Repl>>,
++}
++
++type Key = (u64, u64, u64, u64);
++
++struct Entry {
++    built: u64,
++    span: (u32, u32),
++    cspan: (u32, u32),
++    tid: u32,
++    repl: usize,
++    rect: [u32; 4],
++}
++
++pub(super) struct TexHook {
++    shadow: Vec<u8>,
++    trx: Trx,
++    ver: Vec<u64>,
++    /// Drawn-into bits per block, plane 0 (low 24 bits) and plane 1 (top byte).
++    dirty: [Vec<u64>; 2],
++    stamp: u64,
++    /// `stamp` when the current context was last resolved.
++    seen: u64,
++    /// The frame and z buffer spans last marked dirty, their planes and the stamp then (the next prim on the same rows marks
++    /// nothing new).
++    marked: [((u32, u32), u8, u64); 2],
++    cache: HashMap<Key, Entry>,
++    names: Vec<Seen>,
++    by_name: HashMap<TexName, u32>,
++    dump: Option<Dumper>,
++    live: Option<Live>,
++    idp: Option<Box<[u32]>>,
++    pub(super) errors: Vec<String>,
++}
++
++impl TexHook {
++    /// Blocks `lo..hi` changed in `planes`: a new version, and dirty (a copy of drawn data) or clean (an upload).
++    fn bump(&mut self, (lo, hi): (u32, u32), dirty: bool, planes: u8) {
++        self.stamp += 1;
++        for b in (lo as usize).min(BLOCKS)..(hi as usize).min(BLOCKS) {
++            self.ver[b] = self.stamp;
++            let (w, m) = (b / 64, 1u64 << (b % 64));
++            for k in 0..2 {
++                if planes >> k & 1 != 0 {
++                    if dirty {
++                        self.dirty[k][w] |= m;
++                    } else {
++                        self.dirty[k][w] &= !m;
++                    }
++                }
++            }
++        }
++    }
++
++    fn any_dirty(&self, (lo, hi): (u32, u32), planes: u8) -> bool {
++        (0..2).any(|k| planes >> k & 1 != 0 && ((lo as usize).min(BLOCKS)..(hi as usize).min(BLOCKS)).any(|b| self.dirty[k][b / 64] >> (b % 64) & 1 != 0))
++    }
++
++    fn max_ver(&self, (lo, hi): (u32, u32)) -> u64 {
++        self.ver[(lo as usize).min(BLOCKS)..(hi as usize).min(BLOCKS)].iter().copied().max().unwrap_or(0)
++    }
++
++    /// Marks a span drawn into (slot 0 frame buffer, 1 z buffer): its blocks are dirty from now on (stamp bumped only if one was
++    /// clean).
++    fn drawn(&mut self, slot: usize, s: (u32, u32), planes: u8) {
++        if self.marked[slot] == (s, planes, self.stamp) {
++            return;
++        }
++        let (lo, hi) = ((s.0 as usize).min(BLOCKS), (s.1 as usize).min(BLOCKS));
++        for k in 0..2 {
++            if planes >> k & 1 != 0 && (lo..hi).any(|b| self.dirty[k][b / 64] >> (b % 64) & 1 == 0) {
++                self.stamp += 1;
++                for b in lo..hi {
++                    self.dirty[k][b / 64] |= 1 << (b % 64);
++                }
++            }
++        }
++        self.marked[slot] = (s, planes, self.stamp);
++    }
++}
++
++impl Gs {
++    /// Turns the texture hook on (before the first GIF data: the copy of local memory starts as the GS's).
++    pub fn textures(&mut self, o: TexOpts) {
++        self.finish();
++        let idp = o.cover.then(|| vec![0u32; VRAM_SIZE / 2].into_boxed_slice());
++        let mut t = Box::new(TexHook {
++            shadow: self.vram.clone(),
++            trx: Trx::default(),
++            ver: vec![0; BLOCKS],
++            dirty: [vec![0; BLOCKS / 64], vec![0; BLOCKS / 64]],
++            stamp: 1,
++            seen: 0,
++            marked: [((0, 0), 0, 0); 2],
++            cache: HashMap::new(),
++            names: Vec::new(),
++            by_name: HashMap::new(),
++            dump: o.dump,
++            live: o.live,
++            idp,
++            errors: Vec::new(),
++        });
++        self.queue.idp = t.idp.as_mut().map_or(0, |p| p.as_mut_ptr() as usize);
++        self.tex = Some(t);
++    }
++
++    /// The names drawn so far (id = index + 1).
++    pub fn tex_names(&self) -> &[Seen] {
++        self.tex.as_ref().map_or(&[], |t| &t.names[..])
++    }
++
++    /// The replacement folder, if one is loaded.
++    pub fn tex_live(&self) -> Option<&Live> {
++        self.tex.as_ref().and_then(|t| t.live.as_ref())
++    }
++
++    pub fn tex_dumper(&self) -> Option<&Dumper> {
++        self.tex.as_ref().and_then(|t| t.dump.as_ref())
++    }
++
++    /// Problems met so far (dumps that could not be written).
++    pub fn tex_errors(&self) -> &[String] {
++        self.tex.as_ref().map_or(&[], |t| &t.errors[..])
++    }
++
++    /// The texture id of every pixel of the shown picture (one circuit on; None otherwise or with coverage off): width, height and
++    /// the ids in rows. Waits for the rasteriser.
++    pub fn cover_ids(&mut self, c: &Crtc) -> Option<(u32, u32, Vec<u32>)> {
++        let k = match (c.enabled(0), c.enabled(1)) {
++            (true, false) => 0,
++            (false, true) => 1,
++            _ => return None,
++        };
++        let psm = (c.dispfb[k] >> 15 & 0x1f) as u32;
++        let (fbp, fbw, dbx, dby, w, h) = c.shown()?;
++        self.finish();
++        let plane = self.tex.as_ref()?.idp.as_ref()?;
++        let l = luts();
++        let mut out = Vec::with_capacity((w * h) as usize);
++        for y in dby..dby + h {
++            for x in dbx..dbx + w {
++                let a = match psm {
++                    0x00 | 0x01 => a32(l, fbp, fbw, x, y),
++                    0x02 | 0x0a => a16(l, fbp, fbw, x, y),
++                    _ => return None,
++                };
++                out.push(plane[a >> 1]);
++            }
++        }
++        Some((w, h, out))
++    }
++
++    /// TRXDIR = host -> local: the transfer starts; its blocks change.
++    pub(super) fn tex_trx_start(&mut self) {
++        let (bb, pos, rr) = (self.r[0x50], self.r[0x51], self.r[0x52]);
++        if let Some(t) = self.tex.as_deref_mut() {
++            t.trx = Trx::default();
++            t.bump(super::trx_blocks(bb, pos, rr), false, planes(((bb >> 56) & 0x3f) as u32));
++        }
++    }
++
++    /// One quadword of host -> local data.
++    pub(super) fn tex_image(&mut self, q: u128) {
++        let (bb, pos, rr) = (self.r[0x50], self.r[0x51], self.r[0x52]);
++        if let Some(t) = self.tex.as_deref_mut() {
++            unsafe { put(t.shadow.as_mut_ptr(), bb, pos, rr, &mut t.trx, q) };
++        }
++    }
++
++    /// A local -> local copy: repeated on the copy of local memory; the destination is dirty when the source was.
++    pub(super) fn tex_copy(&mut self) {
++        let (bb, pos, rr) = (self.r[0x50], self.r[0x51], self.r[0x52]);
++        let Some(t) = self.tex.as_deref_mut() else { return };
++        let (rw, rh) = ((rr & 0xfff) as u32, ((rr >> 32) & 0xfff) as u32);
++        if rw == 0 || rh == 0 {
++            return;
++        }
++        let (sbp, sbw, spsm) = ((bb & 0x3fff) as u32, ((bb >> 16) & 0x3f) as u32, ((bb >> 24) & 0x3f) as u32);
++        let (sx, sy) = ((pos & 0x7ff) as u32, ((pos >> 16) & 0x7ff) as u32);
++        let src_dirty = t.any_dirty(span(spsm, sbp, sbw, sx, sy, rw, rh), planes(spsm));
++        unsafe { local_copy(t.shadow.as_mut_ptr(), bb, pos, rr) };
++        t.bump(super::trx_blocks(bb, pos, rr), src_dirty, planes(((bb >> 56) & 0x3f) as u32));
++    }
++
++    /// Local memory changed since the current context was resolved.
++    pub(super) fn tex_stale(&self) -> bool {
++        self.tex.as_ref().is_some_and(|t| t.seen != t.stamp)
++    }
++
++    /// A prim with a new context (`fresh`) or after local memory changed: its texture's id and replacement. Returns the context to
++    /// draw with.
++    pub(super) fn tex_resolve(&mut self, mut cx: Ctx, fresh: bool) -> Ctx {
++        let (texa, texclut) = (self.r[0x3b], self.r[0x1c]);
++        let Some(t) = self.tex.as_deref_mut() else { return cx };
++        if !fresh && t.seen == t.stamp {
++            return cx;
++        }
++        t.seen = t.stamp;
++        (cx.tid, cx.repl, cx.repl_rect) = (0, 0, [0; 4]);
++        if !cx.tme || cx.ovl {
++            return cx;
++        }
++        let key = (cx.tex0 & TEX0_MASK, cx.clamp & ((1u64 << 44) - 1), texa, texclut);
++        if let Some(e) = t.cache.get(&key) {
++            if t.max_ver(e.span) <= e.built && t.max_ver(e.cspan) <= e.built && !t.any_dirty(e.span, planes(cx.tpsm)) && !t.any_dirty(e.cspan, 3) {
++                (cx.tid, cx.repl, cx.repl_rect) = (e.tid, e.repl, e.rect);
++                return cx;
++            }
++        }
++        let tex_span = span(cx.tpsm, cx.tbp, cx.tbw, 0, 0, cx.tw, cx.th);
++        let cbp = ((cx.tex0 >> 37) & 0x3fff) as u32;
++        let cspan = if gsname::has_palette(cx.tpsm) { (cbp, cbp + 4) } else { (0, 0) };
++        let mut e = Entry { built: t.stamp, span: tex_span, cspan, tid: 0, repl: 0, rect: [0; 4] };
++        // A texture at its own frame buffer's base in a plane the prim writes is feedback (the prim's own rows are marked after it).
++        let feedback = cx.tbp == cx.fbp && planes(cx.tpsm) & fb_planes(cx.fpsm, cx.fbmsk) != 0;
++        if feedback || t.any_dirty(tex_span, planes(cx.tpsm)) || t.any_dirty(cspan, 3) {
++            e.tid = RT;
++        } else if let Some(n) = gsname::name_for_draw(&t.shadow, cx.tex0, cx.clamp, texa, texclut, false) {
++            let tid = match t.by_name.get(&n.name) {
++                Some(&id) => id,
++                None => {
++                    let stem = n.name.stem(n.palette);
++                    if let Some(d) = t.dump.as_mut() {
++                        if let Err(err) = d.dump(&stem, &t.shadow, cx.tex0, cx.clamp, texa, texclut) {
++                            t.errors.push(err);
++                        }
++                    }
++                    let repl = t.live.as_mut().and_then(|l| l.get(&n.name, n.palette, n.w, n.h));
++                    t.names.push(Seen { name: n.name, stem, psm: n.psm, w: n.w, h: n.h, prims: 0, repl });
++                    let id = t.names.len() as u32;
++                    t.by_name.insert(n.name, id);
++                    id
++                }
++            };
++            e.tid = tid;
++            e.rect = [n.x, n.y, n.w, n.h];
++            // Region repeat (CLAMP mode 3) keeps the original: the named rectangle is not what such a texture repeats.
++            if cx.wms != 3 && cx.wmt != 3 {
++                if let Some(r) = &t.names[tid as usize - 1].repl {
++                    e.repl = Arc::as_ptr(r) as usize;
++                }
++            }
++        }
++        (cx.tid, cx.repl, cx.repl_rect) = (e.tid, e.repl, e.rect);
++        t.cache.insert(key, e);
++        cx
++    }
++
++    /// The prim with pixel box `bb` is queued: it counts against its texture's name, and the page rows of its frame buffer (and z
++    /// buffer, when it writes one: the z planes are not in local memory here, so whatever the copy holds there is stale) it touches
++    /// are drawn into.
++    pub(super) fn tex_prim(&mut self, bb: [i16; 4]) {
++        let cx = self.cur;
++        let zbuf = self.r[0x4e + ((cx.at >> 9) & 1) as usize];
++        let Some(t) = self.tex.as_deref_mut() else { return };
++        if cx.tid != 0 && cx.tid != RT {
++            t.names[cx.tid as usize - 1].prims += 1;
++        }
++        let (y0, y1) = (bb[1].max(0) as u32, bb[3].max(0) as u32);
++        let rows = |base: u32, ph: u32| (base + (y0 / ph) * cx.fbw * 32, base + (y1 / ph + 1) * cx.fbw * 32);
++        t.drawn(0, rows(cx.fbp, if matches!(cx.fpsm, 0x02 | 0x0a) { 64 } else { 32 }), fb_planes(cx.fpsm, cx.fbmsk));
++        if cx.zwrite {
++            // ZBUF PSM 0 / 1 (Z32 / Z24): 32-row pages; 2 / 10 (Z16 / Z16S): 64.
++            let zpsm = (zbuf >> 24) as u32 & 0xf;
++            t.drawn(1, rows((zbuf & 0x1ff) as u32 * 32, if zpsm & 2 != 0 { 64 } else { 32 }), planes(0x30 | zpsm));
++        }
++    }
++}
+diff --git a/rac-rs/src/engine/gsfull/gs_queue.rs b/rac-rs/src/engine/gsfull/gs_queue.rs
+index 2ed08d0..a796f29 100644
+--- a/rac-rs/src/engine/gsfull/gs_queue.rs
++++ b/rac-rs/src/engine/gsfull/gs_queue.rs
+@@ -20,7 +20,7 @@
+ //! - a CLUT load identical to the last one emitted, with no write to its source since, is dropped (the CLUT
+ //!   would not change).
+ use super::gs_mem::{clut_read, local_copy, luts, put_run, trx_advance, Trx};
+-use super::gs_raster::{raster_prim, sprite_inplace, Acc, Ctx, Mem, Prim, TS};
++use super::gs_raster::{id_index, raster_prim, sprite_inplace, Acc, Ctx, Mem, Prim, TS};
+ use std::sync::atomic::{fence, AtomicU32, AtomicUsize, Ordering};
+ use std::sync::mpsc;
+ use std::sync::{Arc, Condvar, Mutex, OnceLock};
+@@ -46,6 +46,8 @@ pub struct Batch {
+     prims: Vec<Prim>,
+     ctxs: Vec<Ctx>,
+     zptrs: Vec<usize>,
++    /// [PC] The texture id plane (`Queue::idp`) when the batch was handed over.
++    idp: usize,
+     /// CLUT snapshots made by the pre commands (read by the prims through `Ctx::clut`).
+     snaps: Vec<[[u8; 4]; 512]>,
+     /// The pre commands touch no block the previous batch's prims read or write (and there is no local copy),
+@@ -55,7 +57,7 @@ pub struct Batch {
+ 
+ impl Batch {
+     fn new() -> Box<Batch> {
+-        Box::new(Batch { serial: false, base_snap: false, pre: Vec::new(), prims: Vec::with_capacity(MAXB), ctxs: Vec::new(), zptrs: Vec::new(), snaps: Vec::new(), overlap: false })
++        Box::new(Batch { serial: false, base_snap: false, pre: Vec::new(), prims: Vec::with_capacity(MAXB), ctxs: Vec::new(), zptrs: Vec::new(), idp: 0, snaps: Vec::new(), overlap: false })
+     }
+     fn clear(&mut self) {
+         self.serial = false;
+@@ -217,6 +219,8 @@ pub struct Queue {
+     up_ok: Option<(u32, u32)>,
+     clut_src: Option<ClutKey>,
+     zptrs: Vec<usize>,
++    /// [PC] The texture id plane every pixel write also stamps (gs/texhook.rs; 0 = coverage off).
++    pub idp: usize,
+     back: Back,
+     free: Vec<Box<Batch>>,
+     pub stats: RasterStats,
+@@ -288,6 +292,7 @@ impl Queue {
+             up_ok: None,
+             clut_src: None,
+             zptrs: Vec::new(),
++            idp: 0,
+             back,
+             free: Vec::new(),
+             stats: RasterStats::default(),
+@@ -327,6 +332,7 @@ impl Queue {
+         let fresh = fresh.or_else(|| self.free.pop()).unwrap_or_else(Batch::new);
+         let mut b = std::mem::replace(&mut self.cur, fresh);
+         b.zptrs.extend_from_slice(&self.zptrs);
++        b.idp = self.idp;
+         b.overlap = !self.pre_copy
+             && self.pre_w.iter().all(|&(lo, hi)| !self.prev_rd.any(lo, hi) && !self.prev_wr.any(lo, hi))
+             && self.pre_r.iter().all(|&(lo, hi)| !self.prev_wr.any(lo, hi));
+@@ -647,6 +653,23 @@ struct Job {
+ unsafe impl Send for Job {}
+ unsafe impl Sync for Job {}
+ 
++/// [PC] Texture coverage (gs/texhook.rs): a local -> local copy carries the texture ids of the pixels it moves.
++unsafe fn copy_ids(idp: *mut u32, bb: u64, pos: u64, rr: u64) {
++    let (sbp, sbw, spsm) = ((bb & 0x3fff) as u32, ((bb >> 16) & 0x3f) as u32, ((bb >> 24) & 0x3f) as u32);
++    let (dbp, dbw, dpsm) = (((bb >> 32) & 0x3fff) as u32, ((bb >> 48) & 0x3f) as u32, ((bb >> 56) & 0x3f) as u32);
++    let (sx, sy, dx, dy) = ((pos & 0x7ff) as u32, ((pos >> 16) & 0x7ff) as u32, ((pos >> 32) & 0x7ff) as u32, ((pos >> 48) & 0x7ff) as u32);
++    let (rw, rh) = ((rr & 0xfff) as u32, ((rr >> 32) & 0xfff) as u32);
++    let l = luts();
++    for y in 0..rh {
++        for x in 0..rw {
++            unsafe {
++                let v = *idp.add(id_index(l, spsm, sbp, sbw, sx + x, sy + y));
++                *idp.add(id_index(l, dpsm, dbp, dbw, dx + x, dy + y)) = v;
++            }
++        }
++    }
++}
++
+ fn clut_for<'a>(c: &Ctx, snaps: &'a [[[u8; 4]; 512]]) -> &'a [[u8; 4]; 512] {
+     if c.paletted() {
+         &snaps[c.clut as usize]
+@@ -815,7 +838,12 @@ impl Exec {
+                         b.snaps.push(*self.clut);
+                     }
+                 }
+-                Pre::Copy { bb, pos, rr } => unsafe { local_copy(m, *bb, *pos, *rr) },
++                Pre::Copy { bb, pos, rr } => unsafe {
++                    local_copy(m, *bb, *pos, *rr);
++                    if b.idp != 0 {
++                        copy_ids(b.idp as *mut u32, *bb, *pos, *rr);
++                    }
++                },
+             }
+         }
+         self.stats.pre_ns += t0.elapsed().as_nanos() as u64;
+@@ -824,7 +852,7 @@ impl Exec {
+     /// Draw a batch to the end on this thread (`threads` 0 or 1, or a serial batch that is a strip pipeline).
+     fn draw_here(&mut self, b: &Batch) {
+         let t1 = Instant::now();
+-        let mem = Mem { vram: self.vram as *mut u8, zp: b.zptrs.as_ptr() as *const *mut u32 };
++        let mem = Mem { vram: self.vram as *mut u8, zp: b.zptrs.as_ptr() as *const *mut u32, idp: b.idp as *mut u32 };
+         let pipe = if b.serial && self.pool.is_some() { self.pipe_plan(b) } else { None };
+         let acc = if let Some(rects) = pipe {
+             self.pipe(b, &mem, &rects)
+@@ -883,7 +911,7 @@ impl Exec {
+                 prims: std::mem::transmute::<&[Prim], &'static [Prim]>(&b.prims[..]),
+                 ctxs: std::mem::transmute::<&[Ctx], &'static [Ctx]>(&b.ctxs[..]),
+                 snaps: std::mem::transmute::<&[[[u8; 4]; 512]], &'static [[[u8; 4]; 512]]>(&b.snaps[..]),
+-                mem: Mem { vram: self.vram as *mut u8, zp: b.zptrs.as_ptr() as *const *mut u32 },
++                mem: Mem { vram: self.vram as *mut u8, zp: b.zptrs.as_ptr() as *const *mut u32, idp: b.idp as *mut u32 },
+                 bins: Shared(self.bins.as_mut_ptr()),
+                 chunk,
+                 nch,
+diff --git a/rac-rs/src/engine/gsfull/gs_raster.rs b/rac-rs/src/engine/gsfull/gs_raster.rs
+index 5051f34..d327c7f 100644
+--- a/rac-rs/src/engine/gsfull/gs_raster.rs
++++ b/rac-rs/src/engine/gsfull/gs_raster.rs
+@@ -9,7 +9,8 @@
+ //! the result depends on it (blending, DATE, FBMSK, alpha-test RGB_ONLY). Ordering between prims is the job
+ //! of `gs_queue`.
+ use super::gs::Vtx;
+-use super::gs_mem::{a32, a8, rd_px, unpack_col, wr_px, Luts};
++use super::gs_mem::{a16, a32, a4, a8, rd_px, unpack_col, wr_px, Luts};
++use crate::texpack::live::{Level, Repl};
+ 
+ /// Tile size (pixels) of the parallel rasteriser; tiles are aligned to whole blocks of every format.
+ pub const TS: i32 = 16;
+@@ -89,6 +90,12 @@ pub struct Ctx {
+     /// (depth-tested against the native picture: the plane keeps the nearest Z) or the HUD's (always in front: u32::MAX).
+     pub(super) oz: usize,
+     pub(super) ozfx: bool,
++    /// [PC] Texture packs (gs/texhook.rs): the id of the texture's PCSX2 name (0 = untextured or unnamed, `texhook::RT` = a render
++    /// target), written to the id plane with every pixel when coverage is on; the replacement (`*const texpack::live::Repl`, 0 =
++    /// none) and the named rectangle it replaces (x, y, w, h in texels).
++    pub tid: u32,
++    pub repl: usize,
++    pub repl_rect: [u32; 4],
+ }
+ 
+ impl Ctx {
+@@ -208,6 +215,8 @@ impl Acc {
+ pub struct Mem {
+     pub vram: *mut u8,
+     pub zp: *const *mut u32,
++    /// [PC] The texture id plane (gs/texhook.rs: one u32 per 2 bytes of local memory; null = coverage off).
++    pub idp: *mut u32,
+ }
+ unsafe impl Send for Mem {}
+ unsafe impl Sync for Mem {}
+@@ -219,7 +228,8 @@ unsafe impl Sync for Mem {}
+ /// prim writes inside `rect` or the texture it reads.
+ pub unsafe fn raster_prim(p: &Prim, cx: &Ctx, clut: &[[u8; 4]; 512], m: &Mem, l: &Luts, rect: [i32; 4], acc: &mut Acc) {
+     let zp = *m.zp.add(cx.zplane as usize);
+-    let d = Dst { cx, clut, l, vram: m.vram, zp };
++    let (rl, rs) = if cx.repl != 0 && cx.tme { repl_level(cx, p) } else { (std::ptr::null(), (0.0, 0.0)) };
++    let d = Dst { cx, clut, l, vram: m.vram, zp, idp: m.idp, rl, rs };
+     match p.ty {
+         6 => sprite(&d, p.v[0], p.v[1], rect, acc),
+         3..=5 => tri(&d, &p.v, rect, acc),
+@@ -243,6 +253,92 @@ struct Dst<'a> {
+     l: &'a Luts,
+     vram: *mut u8,
+     zp: *mut u32,
++    idp: *mut u32,
++    /// [PC] The replacement level this prim samples (null = the original texture) and its texels per original texel.
++    rl: *const Level,
++    rs: (f32, f32),
++}
++
++/// [PC] Texture id of a prim that samples a render target (gs/texhook.rs).
++pub const TID_RT: u32 = u32::MAX;
++
++/// [PC] The id plane index of pixel (x, y) of a buffer in format `psm` (its byte address / 2). A frame buffer read as T8 / T4
++/// (UYA's colour effects read its scene that way) gets the index of the 32-bit pixel the texel's byte belongs to.
++#[inline(always)]
++pub fn id_index(l: &Luts, psm: u32, bp: u32, bw: u32, x: u32, y: u32) -> usize {
++    let a = match psm {
++        0x02 | 0x0a | 0x32 | 0x3a => a16(l, bp, bw, x, y),
++        0x13 => a8(l, bp, bw, x, y) & !3,
++        0x14 => (a4(l, bp, bw, x, y) >> 1) & !3,
++        _ => a32(l, bp, bw, x, y),
++    };
++    a >> 1
++}
++
++/// [PC] The id stored for the render-target texel a pixel reads (nearest texel).
++#[inline(always)]
++unsafe fn rt_source_id(d: &Dst, pu: f32, pv: f32) -> u32 {
++    let cx = d.cx;
++    let x = wrap(cx.wms, ffloor(pu) as i32, cx.tw, cx.minu, cx.maxu);
++    let y = wrap(cx.wmt, ffloor(pv) as i32, cx.th, cx.minv, cx.maxv);
++    unsafe { *d.idp.add(id_index(d.l, cx.tpsm, cx.tbp, cx.tbw, x, y)) }
++}
++
++/// [PC] The level of the prim's replacement whose texels come closest to one per pixel: the prim's footprint (original texels per
++/// pixel, from its texture and screen areas) times the replacement's scale. Lines and points take the level nearest the original's
++/// size.
++unsafe fn repl_level(cx: &Ctx, p: &Prim) -> (*const Level, (f32, f32)) {
++    let r = unsafe { &*(cx.repl as *const Repl) };
++    let (rw, rh) = (cx.repl_rect[2].max(1) as f32, cx.repl_rect[3].max(1) as f32);
++    let px = |v: &Vtx| ((v.x as f32 - cx.ofx as f32) / 16.0, (v.y as f32 - cx.ofy as f32) / 16.0);
++    let ratio = match p.ty {
++        3..=5 => {
++            let (a, b, c) = (px(&p.v[0]), px(&p.v[1]), px(&p.v[2]));
++            let (ta, tb, tc) = (uv_of(cx, &p.v[0]), uv_of(cx, &p.v[1]), uv_of(cx, &p.v[2]));
++            let screen = ((b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)).abs();
++            let tex = ((tb.0 - ta.0) * (tc.1 - ta.1) - (tb.1 - ta.1) * (tc.0 - ta.0)).abs();
++            tex / screen.max(1e-6)
++        }
++        6 => {
++            let (a, b) = (px(&p.v[0]), px(&p.v[1]));
++            let (ta, tb) = (uv_of(cx, &p.v[0]), uv_of(cx, &p.v[1]));
++            ((tb.0 - ta.0) * (tb.1 - ta.1)).abs() / ((b.0 - a.0) * (b.1 - a.1)).abs().max(1e-6)
++        }
++        _ => 1.0,
++    };
++    // Texels of level 0 per pixel along one side: sqrt(ratio) original texels times level 0's scale; each level halves it.
++    let s0 = r.levels[0].w as f32 / rw;
++    let lod = (s0 * ratio.sqrt()).max(1e-6).log2().round();
++    let k = (lod.max(0.0) as usize).min(r.levels.len() - 1);
++    let lv = &r.levels[k];
++    (lv as *const Level, (lv.w as f32 / rw, lv.h as f32 / rh))
++}
++
++/// [PC] Texel of the replacement level at the original's texel coordinates (pu, pv), point or bilinear: the coordinates move into
++/// the named rectangle and scale to the level; repeat (WMS / WMT 0) wraps at the level's size, the clamp modes clamp to it (the
++/// named rectangle is the clamp region; region repeat is never replaced).
++#[inline(always)]
++unsafe fn sample_repl(d: &Dst, pu: f32, pv: f32, bilinear: bool) -> [u8; 4] {
++    let cx = d.cx;
++    let lv = unsafe { &*d.rl };
++    let (w, h) = (lv.w as i32, lv.h as i32);
++    let u = (pu - cx.repl_rect[0] as f32) * d.rs.0;
++    let v = (pv - cx.repl_rect[1] as f32) * d.rs.1;
++    let at = |x: i32, y: i32| -> u32 {
++        let x = if cx.wms == 0 { x.rem_euclid(w) } else { x.clamp(0, w - 1) };
++        let y = if cx.wmt == 0 { y.rem_euclid(h) } else { y.clamp(0, h - 1) };
++        let o = (y * w + x) as usize * 4;
++        u32::from_le_bytes([lv.rgba[o], lv.rgba[o + 1], lv.rgba[o + 2], lv.rgba[o + 3]])
++    };
++    if bilinear {
++        let (u, v) = (u - 0.5, v - 0.5);
++        let (x0, y0) = (ffloor(u), ffloor(v));
++        let (fx, fy) = (((u - x0) * 16.0) as i32, ((v - y0) * 16.0) as i32);
++        let (x0, y0) = (x0 as i32, y0 as i32);
++        bilerp([at(x0, y0), at(x0 + 1, y0), at(x0, y0 + 1), at(x0 + 1, y0 + 1)], fx as u32 & 15, fy as u32 & 15)
++    } else {
++        at(ffloor(u) as i32, ffloor(v) as i32).to_le_bytes()
++    }
+ }
+ 
+ /// Texture coordinates of one vertex in texels (prototype `Px::of`).
+@@ -714,7 +810,7 @@ unsafe fn sample_level(d: &Dst, n: u32, pu: f32, pv: f32, bilinear: bool) -> [u8
+         c.maxv >>= n;
+     }
+     let s = 1.0 / (1u32 << n) as f32;
+-    let dl = Dst { cx: &c, clut: d.clut, l: d.l, vram: d.vram, zp: d.zp };
++    let dl = Dst { cx: &c, clut: d.clut, l: d.l, vram: d.vram, zp: d.zp, idp: d.idp, rl: d.rl, rs: d.rs };
+     sample(&dl, pu * s, pv * s, bilinear)
+ }
+ 
+@@ -754,7 +850,10 @@ unsafe fn shade(d: &Dst, x: u32, y: u32, pos: usize, z: u32, rgba: [f32; 4], pu:
+     let mut c = [clampi(rgba[0] as i32, 0, 255), clampi(rgba[1] as i32, 0, 255), clampi(rgba[2] as i32, 0, 255), clampi(rgba[3] as i32, 0, 255)];
+     let mut probe_lv = (0u32, 0u32, 0u32);
+     if cx.tme {
+-        let t = if cx.lodsel {
++        let t = if !d.rl.is_null() {
++            // [PC] The pack's image (its own levels; filtered when either of the game's filters is).
++            sample_repl(d, pu, pv, cx.bilinear || matches!((cx.tex1 >> 6) & 7, 1 | 4 | 5))
++        } else if cx.lodsel {
+             let (l0, l1, fr, bil) = cx.mip_level(pq);
+             probe_lv = (l0, l1, fr);
+             let t0 = sample_level(d, l0, pu, pv, bil);
+@@ -855,6 +954,8 @@ unsafe fn shade(d: &Dst, x: u32, y: u32, pos: usize, z: u32, rgba: [f32; 4], pu:
+     }
+     let abe = cx.abe && !(cx.pabe && c[3] < 128);
+     let mut out = [c[0], c[1], c[2]];
++    // [PC] Texture coverage: a blended write takes the pixel's id only when it keeps less than half of what was there.
++    let mut own = true;
+     if abe {
+         let dc = unpack_col(fpsm, dst, cx.texa);
+         let da = match fpsm {
+@@ -867,6 +968,7 @@ unsafe fn shade(d: &Dst, x: u32, y: u32, pos: usize, z: u32, rgba: [f32; 4], pu:
+             1 => da,
+             _ => cx.fix,
+         };
++        own = cx.bd != 1 || (cx.ba == 0 && cx.bb == 1 && cf >= 64);
+         let pick = |s: u8, k: usize| match s {
+             0 => c[k],
+             1 => dc[k] as i32,
+@@ -901,6 +1003,21 @@ unsafe fn shade(d: &Dst, x: u32, y: u32, pos: usize, z: u32, rgba: [f32; 4], pu:
+     } else {
+         wr_px(d.vram, d.l, fpsm, cx.fbp, cx.fbw, x, y, v);
+     }
++    if !d.idp.is_null() && own && !cx.ovl && cx.fbmsk & 0xff_ffff != 0xff_ffff {
++        // [PC] Texture coverage (gs/texhook.rs): the id of the texture that wrote this colour, at the pixel's address / 2.
++        let a = match fpsm {
++            0x00 => Some(fa),
++            0x01 => Some(a32(d.l, cx.fbp, cx.fbw, x, y)),
++            0x02 | 0x0a => Some(a16(d.l, cx.fbp, cx.fbw, x, y)),
++            _ => None,
++        };
++        if let Some(a) = a {
++            // A prim drawn from a render target (the game's blit of its scene buffer to the shown one, screen effects) passes on
++            // the ids of the pixels it reads, so the shown picture still names the textures the scene was drawn with.
++            let id = if cx.tid == TID_RT { unsafe { rt_source_id(d, pu, pv) } } else { cx.tid };
++            unsafe { *d.idp.add(a >> 1) = id };
++        }
++    }
+     acc.written += 1;
+ }
+ 
+diff --git a/rac-rs/src/engine/texpack/gsname.rs b/rac-rs/src/engine/texpack/gsname.rs
+index 46708d2..e205524 100644
+--- a/rac-rs/src/engine/texpack/gsname.rs
++++ b/rac-rs/src/engine/texpack/gsname.rs
+@@ -362,6 +362,31 @@ pub fn name_for_draw(v: &[u8], tex0: u64, clamp: u64, texa: u64, texclut: u64, w
+ 	Some(Name { name, psm: t.psm, w: w as u32, h: h as u32, x: rx.max(0) as u32, y: ry.max(0) as u32, palette: pal, raw, sig })
+ }
+ 
++/// The pixels of the rectangle `name_for_draw` names, as PCSX2's `DumpTexture` reads them (`rtx`): RGBA8 rows, the palette
++/// applied, CT24 / CT16 expanded with TEXA, alpha on the GS scale. None for a format that is no texture.
++pub fn rgba_for_draw(v: &[u8], tex0: u64, clamp: u64, texa: u64, texclut: u64) -> Option<(u32, u32, Vec<u8>)> {
++	let t = Tex::from_tex0(tex0);
++	if block_size(t.psm).0 == 0 || v.len() < crate::gsfull::gs_mem::VRAM_SIZE {
++		return None;
++	}
++	let region = Region::create(&t, clamp);
++	let ((rl, rt, _, _), w, h) = rect_of(&t, &region);
++	if w <= 0 || h <= 0 {
++		return None;
++	}
++	let clut = if has_palette(t.psm) { clut_entries(v, &t, texa, texclut) } else { None };
++	let l = luts();
++	let mut out = Vec::with_capacity((w * h * 4) as usize);
++	for y in 0..h {
++		for x in 0..w {
++			let p = texel(v, l, &t, (rl + x) as u32, (rt + y) as u32, texa);
++			let c = clut.as_ref().map_or(p, |c| c[p as usize & (c.len() - 1)]);
++			out.extend_from_slice(&c.to_le_bytes());
++		}
++	}
++	Some((w as u32, h as u32, out))
++}
++
+ #[cfg(test)]
+ mod tests {
+ 	use super::*;
+diff --git a/rac-rs/src/engine/texpack/live.rs b/rac-rs/src/engine/texpack/live.rs
+new file mode 100644
+index 0000000..38e51ce
+--- /dev/null
++++ b/rac-rs/src/engine/texpack/live.rs
+@@ -0,0 +1,274 @@
++//! [PC] Texture packs for a game drawn by the GS-full pipe (Up Your Arsenal's port, `port/uya`): the PCSX2 texture names of what
++//! the game draws, dumps of those textures under the names PCSX2 gives them, and the replacement images of a plain PCSX2 folder.
++//!
++//! - Names: the GS front end (`gsfull/gs/texhook.rs`) names every texture a prim samples with `gsname::name_for_draw`, from its own
++//!   copy of local memory, so naming never waits for the rasteriser.
++//! - Dumps (`Dumper`): one `<stem>.png` per name, RGBA as PCSX2's `DumpTexture` writes it: the named rectangle (the clamp region when
++//!   there is one), palette applied, alpha on the GS scale (0x80 = opaque). An existing file is never overwritten.
++//! - Replacements (`Live`): every png / dds file under one folder whose name parses (`index::PackIndex`, PCSX2's rules), decoded on
++//!   first use into a `Repl`: a mip chain of RGBA8 with the file's alpha (GS scale, as PCSX2 packs store it). A renderer maps texel
++//!   (u, v) of the named rectangle at (x, y, w, h) to level texel ((u - x) * level.w / w, (v - y) * level.h / h). The software GS
++//!   samples it in `gs_raster::sample_repl`; a GPU renderer uploads `levels` as one texture with the same mapping.
++//! - Validation: a file that does not decode, is empty or larger than `MAX_SIDE`, has another aspect ratio than the rectangle it
++//!   replaces, is smaller than it, or does not fit the memory budget is refused with its reason (`Live::outcomes`); the game then
++//!   draws the original.
++
++use super::dds::Fmt;
++use super::index::{PackFile, PackIndex};
++use super::name::TexName;
++use super::chain::{Mip, ReplTex};
++use std::collections::HashMap;
++use std::path::{Path, PathBuf};
++use std::sync::Arc;
++
++/// Largest side of a replacement file in texels.
++pub const MAX_SIDE: u32 = 8192;
++
++/// One level of a replacement: RGBA8, straight alpha on the GS scale (0x80 = opaque).
++pub struct Level {
++	pub w: u32,
++	pub h: u32,
++	pub rgba: Vec<u8>,
++}
++
++/// A decoded replacement.
++pub struct Repl {
++	pub name: TexName,
++	pub file: PathBuf,
++	/// Size of the file's image.
++	pub file_w: u32,
++	pub file_h: u32,
++	/// Level 0 is the largest level kept (`Live::new`'s `max_scale`), then each half the size down to 1 x 1.
++	pub levels: Vec<Level>,
++}
++
++impl Repl {
++	pub fn bytes(&self) -> usize {
++		self.levels.iter().map(|l| l.rgba.len()).sum()
++	}
++}
++
++/// What became of a name the game drew that the folder has a file for.
++#[derive(Clone, Debug)]
++pub struct Outcome {
++	pub stem: String,
++	pub file: PathBuf,
++	/// "ok", or why the file was refused.
++	pub state: String,
++	/// The file's size and the size of the rectangle it replaces.
++	pub file_size: (u32, u32),
++	pub rect_size: (u32, u32),
++}
++
++/// The replacement folder: its index and the images decoded so far.
++pub struct Live {
++	pub dir: PathBuf,
++	index: PackIndex,
++	/// Name -> the decoded image (None: refused).
++	cache: HashMap<TexName, Option<Arc<Repl>>>,
++	outcomes: Vec<Outcome>,
++	/// Levels larger than this many texels per original texel are not kept (None: keep the file's full size).
++	max_scale: Option<f32>,
++	budget: usize,
++	used: usize,
++}
++
++impl Live {
++	/// Indexes every replacement file under `dir` (recursively). `max_scale`: the largest scale over the original texture the kept
++	/// chain starts at (the software GS draws at the original resolution: 2 is enough there); `budget`: bytes of decoded chains.
++	pub fn new(dir: &Path, max_scale: Option<f32>, budget: usize) -> Result<Live, String> {
++		if !dir.is_dir() {
++			return Err(format!("texture replacements: {} is not a folder", dir.display()));
++		}
++		let mut index = PackIndex::new();
++		let st = index.scan_dir(dir, 0);
++		eprintln!("textures: {} replacement names in {} ({} duplicates, {} mip dumps skipped, {} other files)", st.added, dir.display(), st.duplicates, st.mip_dumps, st.other);
++		Ok(Live { dir: dir.to_path_buf(), index, cache: HashMap::new(), outcomes: Vec::new(), max_scale, budget, used: 0 })
++	}
++
++	pub fn len(&self) -> usize {
++		self.index.len()
++	}
++
++	pub fn is_empty(&self) -> bool {
++		self.index.is_empty()
++	}
++
++	/// The pack file for a name, if the folder has one.
++	pub fn file(&self, name: &TexName) -> Option<&PackFile> {
++		self.index.get(name)
++	}
++
++	/// The replacement of `name`, whose original is a `rect_w` x `rect_h` rectangle; decoded and checked on the first call.
++	pub fn get(&mut self, name: &TexName, palette: bool, rect_w: u32, rect_h: u32) -> Option<Arc<Repl>> {
++		if let Some(r) = self.cache.get(name) {
++			return r.clone();
++		}
++		let file = self.index.get(name)?.clone();
++		let res = self.load(name, &file, rect_w, rect_h);
++		let (state, file_size, repl) = match res {
++			Ok(r) => ("ok".to_string(), (r.file_w, r.file_h), Some(Arc::new(r))),
++			Err((why, size)) => (why, size, None),
++		};
++		if state != "ok" {
++			eprintln!("textures: {} refused: {state}", file.path.display());
++		}
++		self.outcomes.push(Outcome { stem: name.stem(palette), file: file.path.clone(), state, file_size, rect_size: (rect_w, rect_h) });
++		self.cache.insert(*name, repl.clone());
++		repl
++	}
++
++	fn load(&mut self, name: &TexName, f: &PackFile, rw: u32, rh: u32) -> Result<Repl, (String, (u32, u32))> {
++		let img = super::repl::load_file(f).map_err(|e| (format!("does not decode: {e}"), (0, 0)))?;
++		let (w, h) = (img.w, img.h);
++		if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE {
++			return Err((format!("{w}x{h} is outside 1..{MAX_SIDE}"), (w, h)));
++		}
++		if u64::from(w) * u64::from(rh) != u64::from(h) * u64::from(rw) {
++			return Err((format!("aspect {w}x{h} differs from the original's {rw}x{rh}"), (w, h)));
++		}
++		if w < rw {
++			return Err((format!("{w}x{h} is smaller than the original {rw}x{rh}"), (w, h)));
++		}
++		let data = img.levels.into_iter().next().ok_or_else(|| ("no pixel data".to_string(), (w, h)))?;
++		let rgba = ReplTex { fmt: img.fmt, mips: vec![Mip { w, h, data }] }.to_rgba8().map_err(|e| (format!("does not decode: {e}"), (w, h)))?;
++		let mut top = rgba.mips.into_iter().next().ok_or_else(|| ("no pixel data".to_string(), (w, h)))?;
++		if top.data.len() != w as usize * h as usize * 4 {
++			return Err((format!("{} bytes for {w}x{h}", top.data.len()), (w, h)));
++		}
++		// The decoders give the engine's alpha scale (min(2a, 255), `dds::engine_alpha`); the GS scale is what the file holds.
++		top.data.chunks_exact_mut(4).for_each(|p| p[3] = (u32::from(p[3]) * 128 / 255) as u8);
++		let mut levels = vec![Level { w, h, rgba: top.data }];
++		while levels.last().is_some_and(|l| l.w > 1 || l.h > 1) {
++			let next = half(levels.last().unwrap());
++			levels.push(next);
++		}
++		if let Some(m) = self.max_scale {
++			// Drop the levels above the largest scale wanted (keep at least one).
++			let keep_from = levels.iter().position(|l| l.w as f32 <= m * rw as f32).unwrap_or(levels.len() - 1);
++			levels.drain(..keep_from);
++		}
++		let r = Repl { name: *name, file: f.path.clone(), file_w: w, file_h: h, levels };
++		if self.used + r.bytes() > self.budget {
++			return Err((format!("over the {} MB budget of decoded replacements", self.budget >> 20), (w, h)));
++		}
++		self.used += r.bytes();
++		Ok(r)
++	}
++
++	/// Every replacement looked up so far, in order of first use.
++	pub fn outcomes(&self) -> &[Outcome] {
++		&self.outcomes
++	}
++
++	/// Bytes of decoded chains held.
++	pub fn used(&self) -> usize {
++		self.used
++	}
++
++	/// The kind of image the file holds (dds format, or RGBA8 for png), without decoding it.
++	pub fn peek(f: &PackFile) -> Option<(u32, u32, Fmt)> {
++		super::repl::peek_file(f)
++	}
++}
++
++/// Half the size (each side rounded up), each texel the mean of the 2 x 2 (fewer at an odd edge) below it.
++fn half(l: &Level) -> Level {
++	let (w, h) = (l.w.div_ceil(2), l.h.div_ceil(2));
++	let mut rgba = Vec::with_capacity((w * h * 4) as usize);
++	for y in 0..h {
++		for x in 0..w {
++			let mut sum = [0u32; 4];
++			let mut n = 0;
++			for (sx, sy) in [(2 * x, 2 * y), (2 * x + 1, 2 * y), (2 * x, 2 * y + 1), (2 * x + 1, 2 * y + 1)] {
++				if sx < l.w && sy < l.h {
++					let o = ((sy * l.w + sx) * 4) as usize;
++					for k in 0..4 {
++						sum[k] += u32::from(l.rgba[o + k]);
++					}
++					n += 1;
++				}
++			}
++			rgba.extend(sum.map(|s| ((s + n / 2) / n) as u8));
++		}
++	}
++	Level { w, h, rgba }
++}
++
++/// Writes each named texture once as `<dir>/<stem>.png`.
++pub struct Dumper {
++	pub dir: PathBuf,
++	pub written: usize,
++	pub kept: usize,
++}
++
++impl Dumper {
++	pub fn new(dir: &Path) -> Result<Dumper, String> {
++		std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
++		Ok(Dumper { dir: dir.to_path_buf(), written: 0, kept: 0 })
++	}
++
++	/// The texture of a draw (the 4 MB local memory `vram` and its registers), unless a file of that name exists already.
++	pub fn dump(&mut self, stem: &str, vram: &[u8], tex0: u64, clamp: u64, texa: u64, texclut: u64) -> Result<(), String> {
++		let path = self.dir.join(format!("{stem}.png"));
++		if path.exists() {
++			self.kept += 1;
++			return Ok(());
++		}
++		let (w, h, rgba) = super::gsname::rgba_for_draw(vram, tex0, clamp, texa, texclut).ok_or_else(|| format!("{stem}: not a texture format"))?;
++		std::fs::write(&path, png_rgba(w, h, &rgba)).map_err(|e| format!("{}: {e}", path.display()))?;
++		self.written += 1;
++		Ok(())
++	}
++}
++
++/// A PNG of RGBA8 pixels (colour type 6, stored deflate blocks).
++pub fn png_rgba(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
++	let row = w as usize * 4;
++	let mut raw = Vec::with_capacity((row + 1) * h as usize);
++	for r in rgba.chunks_exact(row) {
++		raw.push(0);
++		raw.extend_from_slice(r);
++	}
++	let mut z = vec![0x78, 0x01];
++	let blocks: Vec<&[u8]> = raw.chunks(65535).collect();
++	for (i, b) in blocks.iter().enumerate() {
++		z.push((i + 1 == blocks.len()) as u8);
++		z.extend_from_slice(&(b.len() as u16).to_le_bytes());
++		z.extend_from_slice(&(!(b.len() as u16)).to_le_bytes());
++		z.extend_from_slice(b);
++	}
++	let (mut s1, mut s2) = (1u32, 0u32);
++	for &b in &raw {
++		s1 = (s1 + u32::from(b)) % 65521;
++		s2 = (s2 + s1) % 65521;
++	}
++	z.extend_from_slice(&((s2 << 16) | s1).to_be_bytes());
++	let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
++	let mut chunk = |kind: &[u8], payload: &[u8]| {
++		out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
++		let mut body = kind.to_vec();
++		body.extend_from_slice(payload);
++		out.extend_from_slice(&body);
++		out.extend_from_slice(&crc32(&body).to_be_bytes());
++	};
++	let mut ihdr = Vec::with_capacity(13);
++	ihdr.extend_from_slice(&w.to_be_bytes());
++	ihdr.extend_from_slice(&h.to_be_bytes());
++	ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
++	chunk(b"IHDR", &ihdr);
++	chunk(b"IDAT", &z);
++	chunk(b"IEND", &[]);
++	out
++}
++
++fn crc32(data: &[u8]) -> u32 {
++	let mut c = 0xffff_ffffu32;
++	for &b in data {
++		c ^= u32::from(b);
++		for _ in 0..8 {
++			c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
++		}
++	}
++	!c
++}
+diff --git a/rac-rs/src/engine/texpack/mod.rs b/rac-rs/src/engine/texpack/mod.rs
+index c5724d6..e259935 100644
+--- a/rac-rs/src/engine/texpack/mod.rs
++++ b/rac-rs/src/engine/texpack/mod.rs
+@@ -50,6 +50,7 @@ pub mod jobs;
+ pub mod json;
+ pub mod layout;
+ pub mod levelrule;
++pub mod live;
+ pub mod mods;
+ pub use rac_formats::texname as name;
+ pub mod names;
+-- 
+2.51.2.windows.1
+

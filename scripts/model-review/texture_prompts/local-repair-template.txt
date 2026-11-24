@@ -1,0 +1,3 @@
+Image 1 is the current high-resolution colour candidate. Image 2 is the original texture and the authority for the design and colours. Make this limited correction to Image 1: {correction}.
+
+Use Image 2 to recover the specified feature's location, count, shape, width and colours. Preserve Image 1's composition and all correctly reconstructed regions outside {region}. Do not apply a new global style, lighting change or colour grade. Do not add replacement details elsewhere. Output only the corrected 1024 x 1024 colour texture.

@@ -1,0 +1,17 @@
+[package]
+name = "uyatr"
+version = "0.1.0"
+edition = "2024"
+description = "The port's own translator: Up Your Arsenal's EE code (R5900, its FPU, VU0 macro instructions and VU0 microprograms) into Rust for uyart, ahead of time."
+
+# The disc and its programs through this project's own readers.
+[dependencies]
+uyafmt = { path = "../uyafmt" }
+
+# A workspace of its own: the port's workspace depends on what this translator writes (translated/uya), so the translator builds
+# without it (scripts/uyatr.ps1).
+[workspace]
+
+[profile.release]
+opt-level = 3
+debug = 1
