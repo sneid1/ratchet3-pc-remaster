@@ -50,9 +50,9 @@ if ($LASTEXITCODE) { throw "package-release: zipping the game failed" }
 # they extract to. PNG and DDS store no smaller, so the volumes are stored, not compressed.
 $staging = Join-Path $Out 'textures-staging'
 New-Item -ItemType Directory -Force (Join-Path $staging 'texture_replacements') | Out-Null
-robocopy (Join-Path $Textures '0-riftapart') (Join-Path $staging 'updated-textures') /E /MT:12 /NFL /NDL /NJH /NQS
-robocopy (Join-Path $Textures 'reddyxd-uya') (Join-Path $staging 'texture_replacements\reddyxd-uya') /E /MT:12 /NFL /NDL /NJH /NQS
-robocopy (Join-Path $Textures 'texmaster-pal-gapfill') (Join-Path $staging 'texture_replacements\texmaster-pal-gapfill') /E /MT:12 /NFL /NDL /NJH /NQS
+robocopy (Join-Path $Textures '0-riftapart') (Join-Path $staging 'updated-textures') /E /MT:12 /NFL /NDL /NJH /NP
+robocopy (Join-Path $Textures 'reddyxd-uya') (Join-Path $staging 'texture_replacements\reddyxd-uya') /E /MT:12 /NFL /NDL /NJH /NP
+robocopy (Join-Path $Textures 'texmaster-pal-gapfill') (Join-Path $staging 'texture_replacements\texmaster-pal-gapfill') /E /MT:12 /NFL /NDL /NJH /NP
 if ($LASTEXITCODE -ge 8) { throw "package-release: staging the textures failed" }
 & $7z a '-v1900m' '-mx=0' (Join-Path $Out "$name-updated-textures.7z") (Join-Path $staging '*') | Out-Null
 if ($LASTEXITCODE) { throw "package-release: the textures volumes failed" }
