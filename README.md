@@ -1,7 +1,6 @@
 # Ratchet & Clank: Up Your Arsenal PC remaster
 
 [![Verified developer on RecompStore](https://recompstore.com/assets/press/verified-dark.svg)](https://recompstore.com/dev/sneid1)
-[![Get it on RecompLauncher](badges/badge-dark.svg)](https://recomplauncher.com/game/ratchet3-pc-remaster)
 
 A native PC port of Up Your Arsenal (PS2, 2004), built from the game's own code: the disc's machine code is translated ahead of time and runs on this project's own runtime and renderer, with this project's own code where the PS2 had hardware. You bring your own copy of the game, the USA disc (SCUS-97353), and the disc stays in play the whole time, streaming what it streamed on the PlayStation 2.
 
@@ -35,6 +34,8 @@ A native PC port of Up Your Arsenal (PS2, 2004), built from the game's own code:
 - Your own disc image of the USA release (SCUS-97353).
 
 ## Install
+
+[![Get it on RecompLauncher](badges/badge-dark.svg)](https://recomplauncher.com/game/ratchet3-pc-remaster)
 
 With [RecompLauncher](https://github.com/elripalda/RecompLauncher) (recommended): install the game, drop your `.iso` on the setup screen when asked, press Play. The release's updated-textures volumes are optional; download them from the release page and extract them into the game's folder (a README inside each volume says where).
 
