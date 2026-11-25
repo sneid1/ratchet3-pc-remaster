@@ -449,14 +449,13 @@ impl RiftMat {
 }
 
 impl Hd {
-    /// The Rift Apart surface of `n` while the option is on (`enhance::rift_apart`); the option on with no Rift Apart folder
-    /// stops the game, naming it.
+    /// The Rift Apart surface of `n` while the option is on (`enhance::rift_apart`); the option on with no Rift Apart
+    /// folder (a release installed without the textures volume) is drawn without.
     fn surface(&self, n: &TexName) -> Result<Option<&RiftSurface>, String> {
         if !crate::enhance::rift_apart() {
             return Ok(None);
         }
-        let rift = self.rift.as_ref().ok_or_else(|| format!("textures: UPDATED TEXTURES is on and {} is not there", self.rift_dir.display()))?;
-        Ok(rift.get(n))
+        Ok(self.rift.as_ref().and_then(|r| r.get(n)))
     }
 
     /// The relief of `n` while the option is on: its map's key (`material_path`, `relief:FILE`) and strength.
@@ -843,7 +842,8 @@ pub(crate) fn light(t: &uyafmt::core::Texture) -> Result<[f32; 2], String> {
 }
 
 /// The Rift Apart folder's water normal (`water_n.png`: Rift Apart's own tiling water normal, `reflections` ripples the water's
-/// reflection with it) while UPDATED TEXTURES is on; None while it is off. The option on with no such file stops the game.
+/// reflection with it) while UPDATED TEXTURES is on; None while it is off, or while the folder (a release installed without
+/// the textures volume) or the file is not there: the water keeps the game's own.
 pub(crate) fn water_normal(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<Option<wgpu::TextureView>, String> {
     if !crate::enhance::rift_apart() {
         return Ok(None);
@@ -851,6 +851,9 @@ pub(crate) fn water_normal(device: &wgpu::Device, queue: &wgpu::Queue) -> Result
     let dir = HD.lock().map_err(|_| "texnames: the pack folder's lock is poisoned")?.as_ref().map(|hd| hd.rift_dir.clone());
     let Some(dir) = dir else { return Ok(None) };
     let f = dir.join("water_n.png");
+    if !f.is_file() {
+        return Ok(None);
+    }
     Ok(Some(upload_levels(device, queue, "Rift Apart water normal", &decode_map(&f)?)?))
 }
 

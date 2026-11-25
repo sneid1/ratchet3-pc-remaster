@@ -1,4 +1,4 @@
-//! The port's PC settings (plan items 4, 8 and 10): the settings a PC game has and the PS2 game does not, saved in the player's
+//! The port's PC settings (PLAN items 4, 8 and 10): the settings a PC game has and the PS2 game does not, saved in the player's
 //! profile (`settings.txt`) as soon as one changes and applied by `play.rs` at once. They are set in the game's own Options
 //! screen, on the settings page `menus.rs` makes of the game's own option list: a tab per section (`TABS`), a row per
 //! option, the highlighted option's description under the list, a quality preset at the top of GRAPHICS and a reset at the
@@ -122,21 +122,6 @@ pub const OPTIONS: &[Opt] = &[
         default: 0,
         presets: Some([1, 2, 4, 4]),
         about: "Anisotropic: the game's own textures stay sharp on ground seen at a shallow angle. Off is the PS2's filtering. Very low cost.",
-    },
-    // The player: "Draw distance is bad". FAR (`uyart::drawdist`): in play on the story levels the game's tie and moby culls
-    // list what lies nearer than where the frame's fog wholly hides it or the game's own far clip (1024 units), whichever is
-    // nearer, instead of each thing's own distance (most mobies' 64 units, the ties' 960); no level's fog wholly hides
-    // anything, so it is the far clip. The renderer's shrubs go as far (`range.rs`). Their LODs, fog and fades are the game's; what the game's code acts on (a moby's drawn byte)
-    // stays its own. Its cost is the game's: more of its culling, skinning and drawing a field, on the game's thread. Not at Low
-    // or Medium, which keep the game's own amount of work.
-    Opt {
-        key: "draw_distance",
-        tab: Tab::Graphics,
-        name: "DRAW DISTANCE",
-        values: &[("original", "ORIGINAL"), ("far", "FAR")],
-        default: 0,
-        presets: Some([0, 0, 1, 1]),
-        about: "Far: characters, props, buildings and plants stay drawn out to the game's own far limit instead of popping in. Some CPU.",
     },
     Opt {
         key: "ambient_occlusion",
@@ -510,6 +495,12 @@ impl Settings {
         let mut s = Settings::default();
         for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
             let (k, v) = line.split_once('=').map(|(k, v)| (k.trim(), v.trim())).ok_or_else(|| format!("{path}: \"{line}\" is not key = value"))?;
+            if OPTIONS.iter().all(|o| o.key != k) {
+                // A key a previous build wrote and this one no longer has (a removed setting): left at its default, and
+                // gone from the file the next time it is saved.
+                println!("settings: unknown setting \"{k}\" ({path}); left at its default");
+                continue;
+            }
             s.set_named(k, v).map_err(|e| format!("{path}: {e}"))?;
         }
         s.constrain();

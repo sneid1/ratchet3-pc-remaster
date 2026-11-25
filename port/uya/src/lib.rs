@@ -1,6 +1,6 @@
 //! Up Your Arsenal on the PC, the port's own code: the game's EE code as the port's translator (port/uyatr) wrote it, on the port's
 //! own runtime (port/uyart), drawn by the port's own renderer (`native`, wgpu), heard through its own sound engine (`snd`) and movie
-//! decoder (`mpeg`), in its own window (`play`). No emulation and no rac-rs crate (plan item 0). `src/main.rs` is the game's
+//! decoder (`mpeg`), in its own window (`play`). No emulation and no rac-rs crate (PLAN item 0). `src/main.rs` is the game's
 //! command line (`uya play`, `uya native`, ...); the emulated reference, port/uyaref, takes the renderer, the sound engine and the
 //! movie decoder from this library to set them against rac-rs's emulated PS2.
 
@@ -110,7 +110,11 @@ pub fn keep_log(profile: &str, args: &[String]) -> Result<(), String> {
     use windows::Win32::System::Console::{FreeConsole, GetConsoleProcessList, GetStdHandle, SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
     let out = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) }.map_err(|e| format!("play: the console: {e}"))?;
     let mut attached = [0u32; 2];
-    if unsafe { GetFileType(out) } != FILE_TYPE_CHAR || unsafe { GetConsoleProcessList(&mut attached) } != 1 {
+    // Under RecompLauncher (it sets RECOMPLAUNCHER) the output is its pipe and its console is attached, so the checks
+    // below would skip the log; but the launcher's crash report shows the newest .log in the game's folder, and the
+    // game's own last lines are what names a crash: keep the log there anyway.
+    let launcher = std::env::var_os("RECOMPLAUNCHER").is_some();
+    if !launcher && (unsafe { GetFileType(out) } != FILE_TYPE_CHAR || unsafe { GetConsoleProcessList(&mut attached) } != 1) {
         return Ok(());
     }
     let dir = std::path::Path::new(profile);
@@ -124,7 +128,8 @@ pub fn keep_log(profile: &str, args: &[String]) -> Result<(), String> {
     unsafe {
         // Explorer allocated this console solely for the game. Once the log is open, the game window
         // should own the desktop and taskbar entry. Interactive control still reads its console input.
-        if !args.iter().any(|arg| arg == "--control") {
+        // Under the launcher the console is its: leave it attached.
+        if !args.iter().any(|arg| arg == "--control") && std::env::var_os("RECOMPLAUNCHER").is_none() {
             FreeConsole().map_err(|e| format!("play: detach launcher console: {e}"))?;
         }
         SetStdHandle(STD_OUTPUT_HANDLE, handle).map_err(|e| format!("play: the log: {e}"))?;

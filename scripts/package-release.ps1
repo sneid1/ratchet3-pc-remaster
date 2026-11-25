@@ -12,7 +12,9 @@ param(
     [string]$Build = "$env:USERPROFILE\ratchet3-remaster\port\target\release",
     [string]$Textures = "$env:USERPROFILE\Games\Ratchet and Clank 3\texture_replacements",
     [string]$Out = "$env:USERPROFILE\ratchet3-pc-remaster\release",
-    [string]$Version = 'v0.1.0'
+    [string]$Version = 'v0.1.0',
+    # The updated textures only when they changed: a build-only release reuses the last release's volumes.
+    [switch]$NoTextures
 )
 $ErrorActionPreference = 'Stop'
 $7z = 'C:\Program Files\7-Zip\7z.exe'
@@ -45,6 +47,8 @@ original PlayStation 2 textures.
 # The Windows-x64 zip the launcher installs.
 & $7z a -tzip '-mx=7' (Join-Path $Out "$name-Windows-x64.zip") (Join-Path $game '*') | Out-Null
 if ($LASTEXITCODE) { throw "package-release: zipping the game failed" }
+
+if ($NoTextures) { Get-ChildItem $Out -File | Select-Object Name, @{n='MB';e={ [int]($_.Length / 1MB) }}; exit 0 }
 
 # The updated textures as store-mode 7z volumes of 1900 MB (GitHub's 2 GiB a file): a staging folder gives them the layout
 # they extract to. PNG and DDS store no smaller, so the volumes are stored, not compressed.

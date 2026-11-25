@@ -568,6 +568,8 @@ pub fn read(c: &mut Cpu, p: u32, n: u32) -> u64 {
         0x1200_1010 => h.imr,
         0x1200_1040 => h.busdir,
         0x1200_1080 => h.siglblid,
+        // Past the scratchpad the space is unmapped: the console reads nothing, so does the port.
+        0x0200_4000..=0x0fff_ffff => 0,
         _ => unknown(p, n, "read", at),
     };
     let sh = (p & 7) * 8;
@@ -611,6 +613,9 @@ pub fn read128(c: &mut Cpu, p: u32) -> (u64, u64) {
         // VIF1's FIFO read back (a GS -> EE download): the port's GS has no picture in RAM to give.
         0x1000_5000 => (0, 0),
         0x1100_0000..=0x1100_ffff => (read(c, p, 8), read(c, p + 8, 8)),
+        // The unmapped physical space from the scratchpad's end (0x0200_4000) to the devices (0x1000_0000): the console ignores what is written and
+        // reads nothing, so does the port.
+        0x0200_4000..=0x0fff_ffff => (0, 0),
         _ => (read(c, p, 8), read(c, p + 8, 8)),
     }
 }
@@ -638,6 +643,8 @@ pub fn write128(c: &mut Cpu, p: u32, lo: u64, hi: u64) {
             let (d, ra) = (c.mach().hw.dispfb(), c.r[31] as u32);
             c.mach().hw.job(Job::Gif { qs: vec![(hi as u128) << 64 | lo as u128], dispfb: d }, || "the EE's stores into the GIF FIFO".into(), ra);
         }
+        // The unmapped physical space between the scratchpad and the devices: the console ignores what is written there, so does the port.
+        0x0200_4000..=0x0fff_ffff => {}
         _ => panic!("hardware 16-byte write at {p:08x} (ra {:08x}, sp {:08x}): a register the port does not answer", c.r[31] as u32, c.r[29] as u32),
     }
 }
@@ -729,6 +736,8 @@ pub fn write(c: &mut Cpu, p: u32, n: u32, v: u64) {
         0x1200_1010 => m.hw.imr = v,
         0x1200_1040 => m.hw.busdir = v,
         0x1200_1080 => m.hw.siglblid = v,
+        // The unmapped physical space between the scratchpad and the devices: the console ignores what is written there, so does the port.
+        0x0200_4000..=0x0fff_ffff => {}
         _ => {
             unknown(p, n, "write", at);
         }

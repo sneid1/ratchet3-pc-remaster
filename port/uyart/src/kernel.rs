@@ -721,6 +721,8 @@ pub(crate) extern "C-unwind" fn mfc0(c: &mut Cpu, r: u32, sel: u32) -> u32 {
         // cache's lines and write back those whose tag is in their range): the port has no data cache (CACHE is
         // emitted as nothing), every line is empty, its tag 0.
         28 => 0,
+        // Wired: the game's code writes it in the movie-skip path and may read it back; the port has no TLB, so 0.
+        6 => 0,
         _ => panic!("MFC0 ${r} (sel {sel:#x}): a COP0 register the game's code is not expected to read"),
     }
 }
@@ -733,6 +735,9 @@ pub(crate) extern "C-unwind" fn mtc0(c: &mut Cpu, r: u32, sel: u32, v: u32) {
         30 => c.errorepc = v,
         // Count, Compare, the performance counters' setup and values.
         9 | 11 | 25 => {}
+        // Wired (the game's code writes it 0 in the movie-skip path; the port has no TLB, so it is
+        // meaningless here).
+        6 => {}
         _ => panic!("MTC0 ${r} (sel {sel:#x}) = {v:#x}: a COP0 register the game's code is not expected to write"),
     }
 }

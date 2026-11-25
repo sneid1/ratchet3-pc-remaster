@@ -1,4 +1,4 @@
-//! The game thread of `uya play`, on the port's own runtime (plan item 0; the only one since 0.6): the game's code as `port/uyatr`
+//! The game thread of `uya play`, on the port's own runtime (PLAN item 0; the only one since 0.6): the game's code as `port/uyatr`
 //! translated it (`translated/uya`, never committed), on `uyart`'s machine, with no rac-rs crate between. Each field it reads the
 //! input, runs the field (`Machine::field`), and sends the renderer a `Frame`: the field's GS jobs as the DMA kicks handed them over,
 //! with each VIF1 chain's blocks, and the EE RAM they were built from. The game's sound calls go to the port's sound engine
@@ -687,9 +687,8 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
         }
         let playing = menus.in_play(&m.ram[..RAM]);
         let cutscene = menus.game_mode(&m.ram[..RAM]) == Some(CUTSCENE_MODE);
-        // DRAW DISTANCE (`uyart::drawdist`): FAR in play, the game's own distances elsewhere (cutscenes, menus, the vid-comics),
-        // as the field of view; from this field's culls on, and `range` gives the shrubs' reach by it.
-        uyart::drawdist::set(playing && menus.settings.get("draw_distance") == 1);
+        // The culls stand as the game's own (the DRAW DISTANCE setting is gone; the loader skips its stale line), as the
+        // field of view; from this field's culls on, and `range` gives the shrubs' reach by it.
         // The port's ranges this field's culls apply as they read (`range.rs`), and the shrubs' reach its frame is drawn with.
         let far_reach = range.publish(&m.ram[..RAM], playing, cutscene).map_err(|e| format!("play: field {f}: {e}"))?;
         if let Some(s) = crate::scenespace::before() {

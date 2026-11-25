@@ -19,6 +19,10 @@ fn at(a: u32) -> At {
     if p < crate::RAM_SIZE {
         // kseg0 / kseg1 / the uncached mirrors (0x2000_0000 / 0x3000_0000 reach RAM through the TLB the kernel sets up).
         At::Ram(p)
+    } else if p < 0x0200_4000 {
+        // The scratchpad's physical window (0x0200_0000, the game's save code stores there): the same 16 KB its
+        // 0x7000_0000 window reaches.
+        At::Spr(p - 0x0200_0000)
     } else {
         At::Hw(p)
     }
