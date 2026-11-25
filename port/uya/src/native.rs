@@ -1,4 +1,4 @@
-//! The native world renderer (plan item 1.1): this project's own renderer, on wgpu, drawing what this project's R&C3 decoders
+//! The native world renderer (PLAN item 1.1): this project's own renderer, on wgpu, drawing what this project's R&C3 decoders
 //! (`uyafmt`) return, with the game's own camera and per-frame visibility read from EE RAM. No rac-rs renderer code and no
 //! rac-formats type: the scene is uyafmt's data as it comes.
 //!

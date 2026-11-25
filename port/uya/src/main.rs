@@ -31,13 +31,12 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    // The screen recorders' Vulkan layers (OBS Studio's game capture, VK_LAYER_OBS_HOOK; Bandicam's, VK_LAYER_bandicam_helper) are
-    // registered for every Vulkan program on the PC and load whether or not the recorder runs, hooking the commands: on the
-    // player's Crash Site profile (23 November 2026) they took 4 % of the game's CPU, inside the presenter's recording. Each
-    // layer's manifest names the variable that keeps it out of a program; the Vulkan loader reads it when the instance is made.
+    // Bandicam's Vulkan layer (VK_LAYER_bandicam_helper) is registered for every Vulkan program on the PC and loads whether or not
+    // Bandicam runs, hooking the commands: with OBS's it took 4 % of the game's CPU on the player's Crash Site profile (23 November
+    // 2026). Its manifest names the variable that keeps it out of a program; the Vulkan loader reads it when the instance is made.
+    // OBS Studio's layer (VK_LAYER_OBS_HOOK) is let in: its Game Capture records the game through it (25 November 2026).
     // SAFETY: set before any other thread of the program starts.
     unsafe {
-        std::env::set_var("DISABLE_VULKAN_OBS_CAPTURE", "1");
         std::env::set_var("VK_LAYER_bandicam_helper_DEBUG_1", "1");
     }
     let a: Vec<String> = std::env::args().skip(1).collect();

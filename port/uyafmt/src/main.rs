@@ -1,4 +1,4 @@
-//! uyafmt disc DISC.iso [--out the project’s decode notes]: walks the whole disc and writes the decode tracker.
+//! uyafmt disc DISC.iso [--out docs/decode.md]: walks the whole disc and writes the decode tracker.
 
 const HEADER: &str = "Written by `uyafmt disc disc/SCUS_973.53.iso` (port/uyafmt); never edited by hand. One line per structure kind, \
 grouped by file kind. Bytes are disc bytes, except lines marked `unpacked`, which count bytes of a block unpacked from an LZ \
@@ -8,7 +8,7 @@ A line is `mapped` when a decoder in port/uyafmt walked every instance of it on 
 field the decoder reads or padding it requires to be zero, and the line names the game function its fields come from (NTSC-U \
 addresses: `func_XXXXXXXX` in boot_elf, `func_LNN_XXXXXXXX` in level NN's overlay). Mapped is a map: where a structure is and \
 what reads it. A mapped line is `loaded` when its decoder returns the structure's data and the port has used it (drawn, played \
-or shown). A mapped line is `claimed` when its read or skipped marks rest on the partial evidence the project’s plan lists under \
+or shown). A mapped line is `claimed` when its read or skipped marks rest on the partial evidence PLAN.md lists under \
 \"Unproven claims in the map\"; its bytes are counted as claimed, not proven. Anything less than mapped is `not mapped`, with \
 what is missing. `unknown bytes` lines hold the bytes of a file that no structure line claims yet. Code lines (program images) are \
 counted apart and read `recompiled` or `not recompiled`.";
@@ -101,12 +101,12 @@ fn main() {
         return;
     }
     if args.len() < 3 || args[1] != "disc" {
-        eprintln!("usage: uyafmt disc DISC.iso [--out the project’s decode notes]
+        eprintln!("usage: uyafmt disc DISC.iso [--out docs/decode.md]
        uyafmt colours DISC.iso LEVEL RAM.bin");
         std::process::exit(2);
     }
     let iso = &args[2];
-    let out = args.iter().position(|a| a == "--out").and_then(|i| args.get(i + 1)).cloned().unwrap_or("the project’s decode notes".into());
+    let out = args.iter().position(|a| a == "--out").and_then(|i| args.get(i + 1)).cloned().unwrap_or("docs/decode.md".into());
     let t0 = std::time::Instant::now();
     match uyafmt::walk::walk(iso) {
         Ok(w) => {

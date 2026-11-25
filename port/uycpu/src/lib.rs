@@ -1,4 +1,4 @@
-//! uycpu: what the game's translated code is compiled against (plan items 0.3, 5.3). The translated programs are linked two
+//! uycpu: what the game's translated code is compiled against (PLAN items 0.3, 5.3). The translated programs are linked two
 //! ways: the loader, the boot program and both front ends into the game's executable (`uya-game`), and each story level into a
 //! library of its own (`tr_lNN.dll`), which the runtime (`port/uyart`) loads when the game loads that level's overlay. Both
 //! link this crate and nothing else of the runtime, so a library never holds a copy of the runtime's state:

@@ -57,7 +57,7 @@ incremental = false
 panic = \"unwind\"
 ";
 
-/// The story levels (`levels`): the project’s plan, "The disc map" (38 has an AUDIO file only; 39-55 are multiplayer, out of scope).
+/// The story levels (`levels`): PLAN.md, "The disc map" (38 has an AUDIO file only; 39-55 are multiplayer, out of scope).
 const LEVELS: [u32; 34] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36];
 
 /// The game functions the runtime answers natively instead of running their code: the EE's side of the IOP (whose own
@@ -147,7 +147,7 @@ const JOBS: &[(&str, usize, u64, u32)] = &[
 /// the loads' offsets in it): found by its code in every program, the same function in every level and both front ends. The
 /// vertical tangent (+0xB4) is never widened (the view widens at the same vertical view): a quadword load here reads it times
 /// `fov` alone, and its own loads where the view is made are `FOV_LOADS`. Which loads are here and why, and which are not:
-/// PLAN 4.2's notes in the project’s handover notes and docs/widescreen-loads.md.
+/// PLAN 4.2's notes in docs/HANDOVER.md and docs/widescreen-loads.md.
 const VIEW_LOADS: &[(&str, usize, u64, &[u32])] = &[
     // view_projection_setup (frontbin func_003830E8, func_L01_003FFAC8): the loads it makes the frustum from (+0xB8 =
     // 1/cos(atan h) for the frustum quadword +0x1F0, and its guard band factor +0x1F8 from h times +0xA8), its copy of (h, v,

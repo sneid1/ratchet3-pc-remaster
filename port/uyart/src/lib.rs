@@ -1,4 +1,4 @@
-//! uyart: the port's own runtime for Up Your Arsenal (plan item 0, zero emulation). The game's EE code, translated ahead of time
+//! uyart: the port's own runtime for Up Your Arsenal (PLAN item 0, zero emulation). The game's EE code, translated ahead of time
 //! into Rust by `port/uyatr`, runs on it as native code: nothing here interprets an instruction or models the PS2's timing.
 //!
 //! - `Cpu` (`uycpu`, the crate the translated code is compiled against): one EE thread's registers and the machine's memories:

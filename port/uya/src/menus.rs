@@ -1,7 +1,7 @@
 //! The game's menus as a PC game's (`play`): the mouse points at an item and clicks it, the right button goes back, and the
 //! port's PC settings (`settings.rs`) are a page of the game's own option lists, drawn in the game's own look.
 //!
-//! Everything here is the game's own state in its RAM, read and written between fields (the project’s handover notes "Play window and
+//! Everything here is the game's own state in its RAM, read and written between fields (docs/HANDOVER.md "Play window and
 //! controls"):
 //! - The front end's screen showing: the word at 0x306F5C points at its record (main menu 0x1DA1C8, Options 0x1DA1E8). Its list
 //!   panel keeps its rows after Options closes, so it is a list only while Options shows.

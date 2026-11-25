@@ -38,7 +38,7 @@ STATUS = {
     "out_of_scope": "Out of scope",
 }
 OUT_ROLES = {
-    "vidcomic": "Vid-comic levels 30-36 were dropped by the player (the project’s plan 9.2; the project’s handover notes, Rift Apart remaster).",
+    "vidcomic": "Vid-comic levels 30-36 were dropped by the player (PLAN.md 9.2; docs/HANDOVER.md, Rift Apart remaster).",
     "summon": "Created by the player's weapons; a weapon effect, not an NPC or enemy.",
     "player": "Player gear, weapon or armour model; not an NPC or enemy.",
     "vehicle": "Vehicle without a character mesh (enemy craft are catalogued as enemies).",

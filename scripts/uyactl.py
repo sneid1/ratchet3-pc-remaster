@@ -12,7 +12,7 @@ ram ADDR LEN, write ADDR HEX, shot FILE, quit (control.rs says what each does).
 The profile defaults to captures/ctl/profile (made fresh, never the player's own, but for its copy of the player's texture packs,
 made the first time); -v prints the game's own log lines too, and without it a game that ends on its own (a panic, an error:
 exit 1) has its last lines printed with the command it ended on.
-The game runs under the PC's heavy-job rules (scripts/heavy-slot.ps1, the project’s workflow notes "Memory and processes"): it holds one
+The game runs under the PC's heavy-job rules (scripts/heavy-slot.ps1, docs/WORKFLOW.md "Memory and processes"): it holds one
 of the run slots (the `uya-runN-slot` mutexes of the logon session; --exclusive, for a run whose numbers are timings, every build slot
 and every run slot; how many there are comes from the PC, as in heavy-slot.ps1) for its whole length, starts only with that
 script's free RAM, and is stopped if its private memory passes

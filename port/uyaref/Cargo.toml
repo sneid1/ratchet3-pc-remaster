@@ -3,8 +3,8 @@ name = "uyaref"
 version = "0.1.0"
 edition = "2024"
 
-# The emulated reference (plan item 0.6), a tool of its own: rac-rs's PS2 core and the instruments that set the port against it,
-# the way the original game's own pictures, sounds and movies are compared until the PCSX2 reference exists (plan item 11). Not
+# The emulated reference (PLAN item 0.6), a tool of its own: rac-rs's PS2 core and the instruments that set the port against it,
+# the way the original game's own pictures, sounds and movies are compared until the PCSX2 reference exists (PLAN item 11). Not
 # the game: port/'s workspace (the game) neither builds nor reads any of this. Built by `scripts\build.ps1 -Package uyaref`.
 [dependencies]
 # The port's own code as a library: the native renderer, the sound engine, the movie decoder, the jobs and pictures it reads.

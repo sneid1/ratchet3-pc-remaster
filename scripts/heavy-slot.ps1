@@ -1,4 +1,4 @@
-# The PC's heavy-job slots (the project's workflow notes): build slots and run slots (a run: a game, a generator, a
+# The PC's heavy-job slots (docs/WORKFLOW.md, "Memory and processes"): build slots and run slots (a run: a game, a generator, a
 # translator, a Python run over the disc), as many as the PC can take (below). A job holds its slot for its whole length, so
 # sessions working in parallel in their own worktrees take turns: up to two builds at once on a big PC (a long build no longer
 # holds every other session's back; a build started while another runs takes half the CPU, build.ps1), and up to three runs beside them (each run is held under 2 GB by

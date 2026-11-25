@@ -63,7 +63,7 @@
 @group | holostar | Holostar film set | Secret Agent Clank film cast (level 23) | Terror of Talos and Maxmillian's robot ninjas.
 @group | museum | Insomniac Museum exhibits | Insomniac Museum exhibits (level 24) | Prototype/unused character models on display in the bonus museum level; descriptive identities.
 @group | ambient | Ambient creatures | Ambient wildlife | Non-hostile flying creatures (pterosaur-like birds).
-@group | vidcomic | Vid-comic (out of scope) | Vid-comic characters and enemies | Levels 30-36. Out of scope: the player dropped the vid-comic levels (the plan 9.2 and the handover notes).
+@group | vidcomic | Vid-comic (out of scope) | Vid-comic characters and enemies | Levels 30-36. Out of scope: the player dropped the vid-comic levels (PLAN.md 9.2; HANDOVER "Rift Apart remaster of the picture").
 @group | weapon_summons | Weapon effects (out of scope) | Weapon-created creatures | Created by the player's weapons (duck/bird transformations, summoned robots); global classes in every story level.
 @group | player_gear | Player gear (out of scope) | Ratchet's gear, weapons and armour models | Player equipment, weapon parts and pickups; not NPCs.
 @group | vehicles | Vehicles (out of scope) | Vehicles | Driveable or set-dressing vehicles without a character; enemy craft are under ty_ships.

@@ -1,4 +1,4 @@
-"""Makes docs/surfaces.csv (plan item 9.2 step 1): this game's terrain and tie textures by their share of the picture.
+"""Makes docs/surfaces.csv (PLAN item 9.2 step 1): this game's terrain and tie textures by their share of the picture.
 
 Usage:
   python -I scripts/uya-surfaces.py <measure dir> --dumps DIR --kinds textures/uya-surface-kinds.txt --out docs/surfaces.csv

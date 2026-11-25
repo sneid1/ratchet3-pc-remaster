@@ -1,4 +1,4 @@
-//! The emulated reference (plan item 0.6): rac-rs's PS2 core (ee-oracle, rac-engine's GS-full pipeline and SPU2 mixer) running the
+//! The emulated reference (PLAN item 0.6): rac-rs's PS2 core (ee-oracle, rac-engine's GS-full pipeline and SPU2 mixer) running the
 //! game's code as `scripts/uya-recgen.py` recompiled it (generated/uya), and the instruments that set the port against it. The game
 //! (`uya play`, port/uya) has none of this: it runs on the port's own translator and runtime. This tool is built only when asked
 //! for (`scripts\build.ps1 -Package uyaref`; port/Cargo.toml's default-members leave it out) and is deleted once nothing needs it.

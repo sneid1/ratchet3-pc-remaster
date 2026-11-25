@@ -1,5 +1,5 @@
 """Reads Ratchet & Clank: Rift Apart's PC assets (the player's own Steam copy): the toc, the dag and
-the DSAR archives in d/, and its textures as RGBA pictures (plan item 9.2, step 2).
+the DSAR archives in d/, and its textures as RGBA pictures (PLAN item 9.2, step 2).
 
 Nothing this reads is ever committed or uploaded; it is the player's own copy.
 

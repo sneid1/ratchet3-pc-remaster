@@ -1,4 +1,4 @@
-//! The sky in the port's renderer (plan item 1.1): the sky the game's pointer names, read from RAM as its loader left it
+//! The sky in the port's renderer (PLAN item 1.1): the sky the game's pointer names, read from RAM as its loader left it
 //! (`uyafmt::coremisc::sky_in_ram`), drawn as func_L01_004A46C8 draws it each frame, before the world: every mesh in order,
 //! around the eye (the camera's rotation and projection without its translation, the matrix at 0x1E2A00), each turned by its
 //! rotation (func_L01_004A45B0: Rz Ry Rx of its angles, applied to a vertex as a row vector) at the angles the game has advanced

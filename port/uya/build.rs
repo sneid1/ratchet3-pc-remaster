@@ -5,7 +5,7 @@ fn main() {
     // include/sl.h), set like DLSS_SDK.
     println!("cargo:rerun-if-changed=native/streamline.cpp");
     println!("cargo:rerun-if-env-changed=STREAMLINE_SDK");
-    let sdk = env::var("STREAMLINE_SDK").expect("STREAMLINE_SDK is not set (the NVIDIA Streamline SDK folder, the one with include/sl.h; the project’s workflow notes, \"DLSS\")");
+    let sdk = env::var("STREAMLINE_SDK").expect("STREAMLINE_SDK is not set (the NVIDIA Streamline SDK folder, the one with include/sl.h; docs/WORKFLOW.md, \"DLSS\")");
     cc::Build::new().cpp(true).std("c++17").file("native/streamline.cpp").include(PathBuf::from(sdk).join("include")).compile("uya_streamline");
     println!("cargo:rerun-if-changed=assets/portrait.ico");
     println!("cargo:rerun-if-changed=assets/portrait.rc");

@@ -189,7 +189,7 @@ def plan():
         env.remove(n)
         actions[n] = dict(groups=["environment"], roles=["vidcomic"], classes=[], fingerprints=[], size=[0, 0], hd_source=False,
                           named=False, action="excluded", source=None,
-                          reason="only on vid-comic levels 30-36, which the player dropped (the project’s plan 9.2)")
+                          reason="only on vid-comic levels 30-36, which the player dropped (PLAN.md 9.2)")
     for n in [n for n in env if not any((d / (n + ".png")).exists() for d in (DUMPS, EXPORT_TEX))]:
         env.remove(n)
         actions[n] = dict(groups=["environment"], roles=["environment"], classes=[], fingerprints=[], size=[0, 0], hd_source=False,

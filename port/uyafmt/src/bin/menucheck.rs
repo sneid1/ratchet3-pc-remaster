@@ -1,6 +1,6 @@
 //! menucheck DISC.iso [RAMDIR]: prints `uyafmt::menucode::all` for the 34 story levels and checks it.
 //!
-//! The checks: level 1 equals Veldin's addresses as found in Veldin's RAM (play window session, the project’s handover notes "Play window and
+//! The checks: level 1 equals Veldin's addresses as found in Veldin's RAM (play window session, docs/HANDOVER.md "Play window and
 //! controls" and the pause screens' records and cursors, found in Veldin's code); with RAMDIR, every RAM dump there (`uya frames --ram-dir`, `uya play` with UYA_RAM_AT) is read with the menu
 //! globals of the level it is in: the text table pointer must lead to a table of that count whose entry for text 0x509 reads
 //! "PROGRESSIVE SCAN", the save messages' word must be a message number (0 to 11), the mode word and the pause list's count small,

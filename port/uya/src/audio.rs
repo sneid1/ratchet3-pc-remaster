@@ -1,4 +1,4 @@
-//! Live audio for `uya play` (plan item 3.4): the game's sound and its movies' sound through the default output device (cpal).
+//! Live audio for `uya play` (PLAN item 3.4): the game's sound and its movies' sound through the default output device (cpal).
 //!
 //! What the device plays is the port's own sound engine's output (`snd::Engine`, which the runtime that runs the game's code
 //! calls with the game's sound calls: `Audio::engine`) and, while a movie plays, the movie's sound. Each field the engine is pulled

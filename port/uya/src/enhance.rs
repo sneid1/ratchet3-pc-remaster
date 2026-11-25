@@ -1,4 +1,4 @@
-//! The remaster's graphics options (plan item 8) on the renderer's side, process-wide like a game's options: the values of the
+//! The remaster's graphics options (PLAN item 8) on the renderer's side, process-wide like a game's options: the values of the
 //! GRAPHICS tab's options (`settings::OPTIONS`), set by `play` when the player changes them and by `uya native --set`. Each is
 //! off (0) by default, and with every one off the picture is the game's.
 //!

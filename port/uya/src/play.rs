@@ -1,4 +1,4 @@
-//! `uya play <disc.iso>`: the game in a window, played live (plan items 3.1 to 3.3, 4.3 and 4.1's display mode and resolution).
+//! `uya play <disc.iso>`: the game in a window, played live (PLAN items 3.1 to 3.3, 4.3 and 4.1's display mode and resolution).
 //!
 //! Three threads, so that no stage waits on another more than it must:
 //! - the window's (the process's main thread): the window's events, the keyboard and mouse (`input::Kbm`), the cursor (shown and

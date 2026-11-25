@@ -1,4 +1,4 @@
-"""Makes docs/surfaces-objects.csv (plan item 9.2): every texture the gameplay frames draw in the world, the objects' too.
+"""Makes docs/surfaces-objects.csv (PLAN item 9.2): every texture the gameplay frames draw in the world, the objects' too.
 
 Usage:
   python -I scripts/uya-surfaces-objects.py <measure dir> <docs/surfaces.csv> <out.csv>

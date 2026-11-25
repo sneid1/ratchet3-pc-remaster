@@ -1,4 +1,4 @@
-//! Instanced world objects in the port's renderer (plan item 1.1): the shrubs, as func_L01_004A2200 and VU1 programs 4 and 5
+//! Instanced world objects in the port's renderer (PLAN item 1.1): the shrubs, as func_L01_004A2200 and VU1 programs 4 and 5
 //! draw them, and the ties, as func_L01_004AFA28, func_L01_004B0990 and VU1 program 2 draw them (see `Ties`). Each frame the game's own shrub arrays in RAM say which instances are drawn, where (the matrix array) and in
 //! which colours (the per-instance colour blocks its light pass fills); the classes' geometry and textures come from `uyafmt`.
 //!

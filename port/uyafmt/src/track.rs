@@ -1,4 +1,4 @@
-//! The tracker: one line per structure kind, written to the project’s decode notes by `uyafmt disc`.
+//! The tracker: one line per structure kind, written to docs/decode.md by `uyafmt disc`.
 //!
 //! Every sector of the disc is claimed by a file or listed as unassigned. Every byte of a file belongs to a structure instance
 //! (a node with a line) or to its file kind's `unknown bytes` line. A decoder accounts for a structure's bytes by marking them as
@@ -7,7 +7,7 @@
 //! game function its fields come from. Mapped says where a structure is and who reads it, not that its content is understood.
 //! A mapped line is also `loaded` when its decoder returns the structure's data and the port has used that data (drawn,
 //! played or shown it): `LOADED` lists those lines, and a line goes on it only in the commit whose check looked at the result.
-//! A mapped line's bytes are `claimed` rather than proven when its marks rest on the partial evidence the project’s plan lists under
+//! A mapped line's bytes are `claimed` rather than proven when its marks rest on the partial evidence PLAN.md lists under
 //! "Unproven claims in the map" (`CLAIMED`).
 //!
 //! Bytes the game never reads are left out by the player's decision: a decoder that has shown nothing reads some bytes of a
@@ -240,7 +240,7 @@ const LOADED: &[(&str, &str)] = &[
     ("LEVEL gameplay (unpacked)", "+0x04 table: 0x40-byte light-set records"),
 ];
 
-/// Lines whose read or skipped marks rest on partial evidence (the project’s plan "Unproven claims in the map"): (decoder prefix, line name
+/// Lines whose read or skipped marks rest on partial evidence (PLAN.md "Unproven claims in the map"): (decoder prefix, line name
 /// substring, "" for every line of the decoder). Their bytes count as `claimed` until the step that loads the structure proves
 /// them.
 const CLAIMED: &[(&str, &str)] = &[
@@ -613,7 +613,7 @@ impl Tracker {
         })
     }
 
-    /// the project’s decode notes.
+    /// docs/decode.md.
     pub fn report(&self, disc_bytes: u64, overlays: usize, overlays_recompiled: usize, header: &str) -> String {
         let t = self.totals(overlays, overlays_recompiled);
         let mut s = String::new();

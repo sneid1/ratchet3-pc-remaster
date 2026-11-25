@@ -1,4 +1,4 @@
-"""Rift Apart materials on this game's surfaces (plan item 9.2) by the method the player approved, for the port's RIFT APART
+"""Rift Apart materials on this game's surfaces (PLAN item 9.2) by the method the player approved, for the port's RIFT APART
 SURFACES.
 
 Usage:
@@ -29,7 +29,7 @@ Usage:
       and its normal map, named. A detail normal (no albedo or gloss of its own) is a material too: its grain is its cavities.
 
 <matches.tsv> (textures/riftapart-matches.tsv; names only, nothing of Rift Apart's) has a row per texture matched by hand
-(PLAN 9.2, the project’s handover notes "Matching"): stem, shows (what the surface is), material, tile_m (the world size of one tile of
+(PLAN 9.2, docs/HANDOVER.md "Matching"): stem, shows (what the surface is), material, tile_m (the world size of one tile of
 the material in metres, judged from what it shows), grain (the grain's power: 1, Rift Apart's own contrast, as approved),
 normal (the normal map's strength: 1, its own), runner_up, flag (`none` where nothing in Rift Apart fits, `label` where the
 kind label is wrong; a row flagged `none` has no material and is left out). Lines starting with # are notes.
