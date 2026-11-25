@@ -34,7 +34,7 @@ foreach ($f in 'NvLowLatencyVk.dll', 'nvngx_dlss.dll', 'nvngx_dlssg.dll', 'sl.co
 }
 # The prompt atlas the game reads from the profile, and the launcher's file next to the program.
 Copy-Item -Force (Join-Path (Split-Path -Parent $Textures) 'prompts.bin') $game
-Copy-Item -Force (Join-Path $repo 'recomplauncher.json') $game
+Copy-Item -Force (Join-Path $repo 'public\recomplauncher.json') $game
 # The packs folder must exist for the game to start; the community packs arrive with the textures volumes.
 New-Item -ItemType Directory -Force (Join-Path $game 'texture_replacements') | Out-Null
 Set-Content -Encoding utf8 (Join-Path $game 'texture_replacements\README.txt') @'

@@ -14,6 +14,9 @@ wgpu-hal = { path = "vendor/wgpu-hal" }
 # wgpu-core with its two changes (vendor/wgpu-core/README_PORT.txt: a render bundle keeps each init action once, and a pass
 # registers a bind group's once, so a picture registers hundreds of texture actions, not tens of thousands).
 wgpu-core = { path = "vendor/wgpu-core" }
+# dlss_wgpu with its one change (vendor/dlss_wgpu/README_PORT.txt: NGX's answer that DLSS cannot run on this GPU leaves DLSS
+# unsupported instead of failing the device, so the game starts on a GPU without DLSS).
+dlss_wgpu = { path = "vendor/dlss_wgpu" }
 
 [profile.release]
 opt-level = 3

@@ -665,6 +665,7 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
             (at, a) if f.saturating_sub(at) <= 4 => a,
             _ => Vec::new(),
         };
+        menus.offer_load(&mut m.ram[..RAM], m.iop.has_save());
         if let Some(s) = menus.before(&mut m.ram[..RAM], pointer, &mut pad, &answers, &presses, pad_kind) {
             println!("play: field {f}: settings {s:?}");
             s.save(&format!("{profile}/settings.txt"))?;
@@ -687,8 +688,9 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
         }
         let playing = menus.in_play(&m.ram[..RAM]);
         let cutscene = menus.game_mode(&m.ram[..RAM]) == Some(CUTSCENE_MODE);
-        // The culls stand as the game's own (the DRAW DISTANCE setting is gone; the loader skips its stale line), as the
-        // field of view; from this field's culls on, and `range` gives the shrubs' reach by it.
+        // DRAW DISTANCE (`uyart::drawdist`): FAR in play, the game's own distances elsewhere (cutscenes, menus, the vid-comics),
+        // as the field of view; from this field's culls on, and `range` gives the shrubs' reach by it.
+        uyart::drawdist::set(playing && menus.settings.get("draw_distance") == 1);
         // The port's ranges this field's culls apply as they read (`range.rs`), and the shrubs' reach its frame is drawn with.
         let far_reach = range.publish(&m.ram[..RAM], playing, cutscene).map_err(|e| format!("play: field {f}: {e}"))?;
         if let Some(s) = crate::scenespace::before() {

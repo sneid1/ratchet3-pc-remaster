@@ -123,6 +123,23 @@ pub const OPTIONS: &[Opt] = &[
         presets: Some([1, 2, 4, 4]),
         about: "Anisotropic: the game's own textures stay sharp on ground seen at a shallow angle. Off is the PS2's filtering. Very low cost.",
     },
+    // The player: "Draw distance is bad". FAR (`uyart::drawdist`): in play on the story levels the game's tie and moby culls
+    // list what lies nearer than where the frame's fog wholly hides it or the game's own far clip (1024 units), whichever is
+    // nearer, instead of each thing's own distance (most mobies' 64 units, the ties' 960); no level's fog wholly hides
+    // anything, so it is the far clip. The renderer's shrubs go as far (`range.rs`). Their LODs, fog and fades are the game's;
+    // what the game's code acts on (a moby's drawn byte) stays its own. A moby with no class stays at its own distance (drawn,
+    // the game's code ran its chain pointer through all of RAM: the crashes of v0.1.0 in the middle of Veldin), and FAR's extra
+    // mobies stop short of the end of the moby cull's lists (`uyart::mobydraw`, "DRAW DISTANCE FAR"). Its cost is the game's:
+    // more of its culling, skinning and drawing a field, on the game's thread. No preset sets it: the player opts in.
+    Opt {
+        key: "draw_distance",
+        tab: Tab::Graphics,
+        name: "DRAW DISTANCE",
+        values: &[("original", "ORIGINAL"), ("far", "FAR")],
+        default: 0,
+        presets: None,
+        about: "Far: characters, props, buildings and plants stay drawn out to the game's own far limit instead of popping in. Some CPU.",
+    },
     Opt {
         key: "ambient_occlusion",
         tab: Tab::Graphics,
@@ -454,6 +471,10 @@ impl Settings {
     /// the settings ends here (the page's, a preset, a reset, the file's, `--set`), so a ray-traced option chosen with DLSS off
     /// stays off.
     pub fn constrain(&mut self) {
+        // DLSS off where this PC cannot run it (`dlss::unavailable`, known once the renderer has made its device).
+        if crate::dlss::unavailable().is_some() {
+            self.values[index("dlss")] = 0;
+        }
         if self.get("dlss") == 0 {
             self.values[index("frame_generation")] = 0;
             for key in ["ray_traced_lighting", "ray_traced_reflections"] {

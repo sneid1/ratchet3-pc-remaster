@@ -692,6 +692,11 @@ fn render(iso: &str, height: u32, settings: crate::settings::Settings, atlas: &s
     WIDE.store(settings.wide(), Ordering::Relaxed);
     let mut applied = settings;
     let mut native = crate::native::Native::open(iso, height)?;
+    // The options again where this GPU has no DLSS (`dlss::unavailable`, known now the device is made): DLSS off, and with it the
+    // ray-traced options (`Settings::constrain`), whatever the profile's file says (a profile brought from an RTX PC).
+    let mut kept = settings;
+    kept.constrain();
+    crate::enhance::set(&kept);
     native.quiet = true;
     let mut atlas = std::sync::Arc::new(crate::prompts::Atlas::read(atlas)?);
     // The save slots' pictures, from the disc (`uyafmt::wad38::slot_pictures`).
@@ -785,7 +790,8 @@ fn render(iso: &str, height: u32, settings: crate::settings::Settings, atlas: &s
             // The settings changed: the graphics options from the next frame; a new resolution, another texture filtering (the
             // level's materials hold their samplers) or the Rift Apart surfaces turned on or off (the level's replacements are
             // uploaded with it) makes the level's GPU state again.
-            Msg::Settings(s) => {
+            Msg::Settings(mut s) => {
+                s.constrain();
                 crate::enhance::set(&s);
                 WIDE.store(s.wide(), Ordering::Relaxed);
                 if s.height() != applied.height() {

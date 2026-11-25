@@ -775,6 +775,25 @@ impl Menus {
         Menus::front_end(ram) || self.globals(ram).is_some_and(|g| r32(ram, g.mode as usize) == PAUSED || MENU_MODES.contains(&r32(ram, g.current as usize)))
     }
 
+    /// Before a field: LOAD GAME on the front end's main menu (item 0 of `MAIN_TABLE`) offered only while the memory card holds
+    /// the game's save (`saved`, `uyart::Iop::has_save`; the player, 25 November 2026: "Just make it not show load game when theres
+    /// no save file"). With none the game's LOAD GAME checks the card and asks for one that holds a save (memory card message 14:
+    /// text 0x195, "Please insert a Memory Card (PS2) in MEMORY CARD slot 1 that contains Ratchet & Clank: Up Your Arsenal game
+    /// data", with 0x197 "Go back?" on Triangle, frontbin 0x3B8350 and 0x3B8A40), a box `play::MC_HIDDEN` keeps hidden, so the
+    /// menu looked frozen. The item is disabled as the game's menu disables an item (its byte +8 clear: the menu's update, 0x3B4ED8, draws it
+    /// grey, Up and Down pass over it, Cross on it does nothing; the pointer passes over it too, `field`), and the highlight moves
+    /// off it to NEW GAME. The main menu shows only after the game's first calls of the card, which read its folder.
+    pub fn offer_load(&self, ram: &mut [u8], saved: Option<bool>) {
+        if !Menus::front_end(ram) || r32(ram, SCREEN) != MAIN_MENU {
+            return;
+        }
+        let saved = saved.expect("the front end's main menu before the game's first call of the memory card");
+        ram[MAIN_TABLE + 8] = saved as u8;
+        if !saved && r32(ram, MAIN_INDEX) == 0 {
+            ram[MAIN_INDEX..MAIN_INDEX + 4].copy_from_slice(&1u32.to_le_bytes());
+        }
+    }
+
     /// Before a field: the pointer onto the menu showing (the item under it highlighted; a click off every item is no Cross) and
     /// the Display row's and page's buttons; `presses` what the devices pressed since the last field, `pad_kind` the controller the
     /// CONTROLLER tab names. Returns the settings when the player changed them.
@@ -1559,6 +1578,8 @@ impl Menus {
                 Some(Item::Preset) => ("QUALITY PRESET", Some(preset)),
                 // FRAME GENERATION where it cannot run this session (`streamline::status`): said so in place of its value.
                 Some(Item::Opt(i)) if OPTS[i].key == "frame_generation" && matches!(crate::streamline::status(), crate::streamline::Status::Unavailable(_)) => (OPTS[i].name, Some("UNAVAILABLE")),
+                // DLSS where this PC cannot run it (`dlss::unavailable`): kept off (`Settings::constrain`), said so.
+                Some(Item::Opt(i)) if OPTS[i].key == "dlss" && crate::dlss::unavailable().is_some() => (OPTS[i].name, Some("UNAVAILABLE")),
                 Some(Item::Opt(i)) => (OPTS[i].name, Some(OPTS[i].values[s.values[i] as usize].1)),
                 Some(Item::Key(a)) => (bindings::ACTIONS[a].name, None),
                 Some(Item::Pad(b)) => (bindings::PAD[b].1, None),
@@ -1601,6 +1622,8 @@ impl Menus {
                 crate::streamline::Status::Unavailable(why) => format!("Frame generation cannot run on this PC: {why}"),
                 _ => OPTS[i].about.to_string(),
             },
+            // DLSS: why it cannot run on this PC, when it cannot.
+            (None, Item::Opt(i)) if OPTS[i].key == "dlss" && crate::dlss::unavailable().is_some() => format!("DLSS cannot run on this PC: {}.", crate::dlss::unavailable().expect("checked")),
             (None, Item::Opt(i)) => OPTS[i].about.to_string(),
             (None, Item::Key(_)) => "Click a slot, then press the key or mouse button to put there. A key put in a slot leaves the slot it was in.".to_string(),
             (None, Item::Pad(_)) => "Click the button, then press the controller button that is to press this one; the two swap places.".to_string(),

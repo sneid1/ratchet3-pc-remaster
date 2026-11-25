@@ -29,7 +29,19 @@
 //! Veldin, and most mobies' own is 64, the gameplay record's +0x30), r the sphere's radius and z its centre's view depth (both
 //! x 1024), read by the QMFC2 of vf3 and its branch: a moby whose nearest point is past D is culled. With FAR, vf19.y (D x
 //! 1024 - r, the SUB.y after the ITOF0) is at least the reach, unless D is not above 0, so a moby is drawn while its nearest
-//! point is within the reach. The fade over the last 16 units before the limit (0x43EFA0: vf3.y's FTOI0 >> 7, at most 0x80,
+//! point is within the reach. Not for every moby the game's own D culls, though, because the game leans on D where nothing
+//! else would stop its code:
+//! - a moby with no class (+0x24 zero: one with no model, or one being spawned) has a zero sphere, at the world origin, which
+//!   D always culls from where the game is played. Drawn, its LOD table (0x43FBC8) and meshes come from address 0, and the
+//!   mesh loop (0x43F680, until s1 reaches s0) never ends: the chain pointer walks through all of RAM into the hardware
+//!   registers (on Veldin with the camera turned to the origin from the middle of the level). FAR leaves such a moby at D.
+//! - the job list (from 0x1DFBF0's word) has the room up to the second list's entries (gp+0x3344, 60 KB: the cull never
+//!   tests it). FAR's extra mobies stop at 2 KB short of it, room for one more record in each pass; the game's own stay as
+//!   they are, so the list stays inside the frame's buffer.
+//! - the near list's entries with a drop-shadow mark go to 0x21F0E0 at the cull's end (0x43FA90), 48 of them before the
+//!   texture list (0x21F260), which past them the game's code overwrites; with FAR the copy ends there.
+//!
+//! The fade over the last 16 units before the limit (0x43EFA0: vf3.y's FTOI0 >> 7, at most 0x80,
 //! times +0x23) comes with it, and the near list's fades (0x43FD30, 0x43FFB0: +0x32 x 1024 less the depth) read the draw
 //! distance at least the reach (`far_distance`). The drawn byte (+0x31, which the game's code acts on: its targets, the drop
 //! shadows, debris removed off screen) stays the game's own decision (`drawn`), as with the widened view. What is not the far
@@ -715,7 +727,12 @@ fn f438120(c: &mut Cpu, k: F, sp: u32, _ra: u64, wide: bool) {
     }
     let a0 = c.rd32(k.a(c, 0x43_8154, 0x43_8158));
     let a1 = c.rd32(k.gp(c, gp, 0x43_8164));
-    let v0 = { let kk = k.call(c, 0x43_8160, 0x43_ea78); f43ea78(c, kk, a0, a1, u32::MAX, a3, k.pc(0x43_8168) as u64, sp, wide) };
+    // The end of the draw records' room: where the second list's entries go (0x437B48's a0, gp+0x3344), for FAR's bound.
+    let room = {
+        let second = k.call(c, 0x43_8168, 0x43_80c0).call(c, 0x43_80e8, 0x43_7b48);
+        c.rd32(second.gp(c, gp, 0x43_7bfc))
+    };
+    let v0 = { let kk = k.call(c, 0x43_8160, 0x43_ea78); f43ea78(c, kk, a0, a1, u32::MAX, a3, k.pc(0x43_8168) as u64, sp, wide, room) };
     let a = k.gp(c, gp, 0x43_816c);
     c.wr32(a, v0);
     { let kk = k.call(c, 0x43_8168, 0x43_80c0); f4380c0(c, kk, sp, k.pc(0x43_8170) as u64); }
@@ -2312,9 +2329,9 @@ fn add32(a: u64, b: u64) -> u64 {
 /// its registers at scratchpad 0x3FA8, works on 128-bit registers (the high halves of ra, sp, s4 to s7 carry its state), and
 /// builds each drawn moby's draw record in the scratchpad (0x2800 and 0x2C00 in turn, SPR_FROM to the job list) and its VIF1
 /// chain at gp+0x4838. Returns the job list's end (v0). The program's view is widened when `wide` (`VIEW_LOADS` "the moby cull"
-/// +0x214, `DRAWN`).
+/// +0x214, `DRAWN`); `room` is the end of the job list's room, which DRAW DISTANCE FAR keeps its extra mobies inside.
 #[allow(clippy::too_many_arguments)]
-fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u32, wide: bool) -> u32 {
+fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u32, wide: bool, room: u32) -> u32 {
     let gp = c.r[28] as u32;
     let g = |c: &mut Cpu, pc: u32| k.gp(c, gp, pc);
     // The relocated addresses.
@@ -2541,10 +2558,12 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
                 r[A2] = c.rd8(r[A2] as u32 + 0x3800) as u64;
                 vop::<1, 4>(c, 19, 19, bc(c, 1, 3));
                 // DRAW DISTANCE FAR (the module doc): the draw distance less the radius at least the reach, unless the distance
-                // is not above 0 (vf4.y, the PMINW's word times 1024).
+                // is not above 0 (vf4.y, the PMINW's word times 1024), the moby has no class (+0x24) or the job list has no
+                // room left for its record in both passes (1 KB each at most, the scratchpad buffer it is built in).
                 let game_limit = c.vf[19][1];
                 if let Some(d) = far {
-                    if (c.vf[4][1] as i32) > 0 && uycpu::fpu::lt(game_limit, d) {
+                    let drawable = c.rd32(r[FP] as u32 + 0x24) != 0 && r[T9] as u32 + 0x800 <= room;
+                    if (c.vf[4][1] as i32) > 0 && uycpu::fpu::lt(game_limit, d) && drawable {
                         c.vf[19][1] = d;
                     }
                 }
@@ -3379,6 +3398,11 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
                 r[AT] = (SPR + 0x1000) as u64;
                 r[V1] = 0;
                 while r[AT] != r[V0] {
+                    // DRAW DISTANCE FAR: the list ends where the texture list starts (48 entries), however many near mobies
+                    // FAR drew; the game's own never come near it.
+                    if far.is_some() && r[A0] as u32 == tex_list {
+                        break;
+                    }
                     r[A1] = c.rd64(r[AT] as u32);
                     r[AT] = add32(r[AT], 0x10);
                     r[A2] = r[A1] >> 32;

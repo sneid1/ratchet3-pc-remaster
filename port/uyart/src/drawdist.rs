@@ -1,7 +1,8 @@
 //! The DRAW DISTANCE setting's word to the culls (port/uya `settings.rs`): ORIGINAL, every cull as the game made it, or FAR,
 //! each far limit that ends what is drawn raised to the farthest the game's own picture shows (`reach`). The port sets it
 //! before each field (`set`); the units that read it are the tie cull (`tiecull`, 0x4AFA28) and the moby cull (`mobydraw`,
-//! 0x43EA78), the culls whose lists the renderer draws. It lives here and not in `uycpu::Host`, whose layout the level libraries
+//! 0x43EA78), the culls whose lists the renderer draws. The moby cull keeps the game's limit for the mobies the game's code
+//! cannot draw (no class) and where its lists would run out of room (`mobydraw`'s module doc). It lives here and not in `uycpu::Host`, whose layout the level libraries
 //! are built against: no translated code reads it.
 //!
 //! The reach comes from the view struct (the tangents' struct, `uyafmt::levelcode::LevelGlobals::tangents` - 0xB0), the frame's

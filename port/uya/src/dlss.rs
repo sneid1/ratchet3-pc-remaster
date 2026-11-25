@@ -55,9 +55,35 @@ pub(crate) fn instance() -> Result<(wgpu::Instance, dlss_wgpu::FeatureSupport), 
     Ok((instance, support))
 }
 
-/// The device of `adapter` with the device extensions NGX asks for.
+/// The device of `adapter` with the device extensions NGX asks for; on a GPU NGX says has no DLSS (vendor/dlss_wgpu's change:
+/// a GeForce GTX 1650 Ti, a player's report of 25 November 2026), the device without them, and DLSS unavailable for the run
+/// (`unavailable`).
 pub(crate) fn device(adapter: &wgpu::Adapter, desc: &wgpu::DeviceDescriptor, support: &mut dlss_wgpu::FeatureSupport) -> Result<(wgpu::Device, wgpu::Queue), String> {
-    dlss_wgpu::request_device(PROJECT, adapter, desc, support, Some(desc.required_limits.clone())).map_err(|e| format!("native: GPU device with DLSS's extensions: {e}"))
+    let made = dlss_wgpu::request_device(PROJECT, adapter, desc, support, Some(desc.required_limits.clone())).map_err(|e| format!("native: GPU device with DLSS's extensions: {e}"))?;
+    if !support.super_resolution_supported {
+        let name = adapter.get_info().name;
+        let why = match &support.super_resolution_error {
+            Some(e) => format!("NGX: {e}"),
+            None => "the driver lacks the Vulkan extensions NGX asks for".to_string(),
+        };
+        println!("native: DLSS cannot run on {name} ({why}): it stays off, and the ray-traced options that need it");
+        // NGX's OutOfDate: an RTX card whose driver is older than the DLSS library.
+        let remedy = match support.super_resolution_error {
+            Some(dlss_wgpu::DlssError::OutOfDate) => "its NVIDIA driver is too old: updating it brings DLSS",
+            _ => "it needs an NVIDIA RTX card",
+        };
+        UNAVAILABLE.get_or_init(|| format!("the {name} does not offer it ({remedy})"));
+    }
+    Ok(made)
+}
+
+/// Why DLSS cannot run on this PC, once the renderer has made its device and found so (`device`): the settings then keep DLSS
+/// off, and with it the ray-traced options (`settings::Settings::constrain`), and its row on the settings page says why (`menus`).
+static UNAVAILABLE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Why DLSS cannot run on this PC (`UNAVAILABLE`), or None while it can or the renderer has not made its device yet.
+pub(crate) fn unavailable() -> Option<&'static str> {
+    UNAVAILABLE.get().map(String::as_str)
 }
 
 /// NGX on `device` (once a run, when the option is first on): it loads `nvngx_dlss.dll` from beside the executable.

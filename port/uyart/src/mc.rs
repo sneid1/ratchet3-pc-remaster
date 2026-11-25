@@ -44,6 +44,16 @@ const MODE_FILE: u16 = 0x8497;
 const MODE_DIR: u16 = 0x8427;
 /// A directory's ".." entry.
 const MODE_DOTDOT: u16 = 0xa426;
+/// The game's save folder on the card (its four slots and the files beside them).
+const SAVE_DIR: &str = "/BASCUS-97353RATCHET";
+
+impl crate::iop::Iop {
+    /// Whether the memory card holds the game's save folder (`SAVE_DIR`); None until the game first calls the card, when its
+    /// folder is read. The front end offers LOAD GAME only with one (port/uya `menus.rs`, `Menus::offer_load`).
+    pub fn has_save(&self) -> Option<bool> {
+        self.mc.as_ref().map(|mc| mc.files.get(SAVE_DIR).is_some_and(|e| e.dir))
+    }
+}
 
 /// An open file: its path and position, and whether it was written (or made or emptied) since it was opened.
 struct Fd {
@@ -221,6 +231,9 @@ fn reply(rsize: usize, words: &[u32]) -> Vec<u8> {
 }
 
 pub fn serve(c: &mut Cpu, fno: u32, send: &[u8], rsize: usize) -> Vec<u8> {
+    if std::env::var_os("UYA_MC_LOG").is_some() {
+        println!("mc: fno {fno:#x} send {:02x?} rsize {rsize}", &send[..send.len().min(0x30)]);
+    }
     if c.mach().iop.mc.is_none() {
         let path = c.mach().iop.memcard.clone();
         let mc = Mc::load(path).unwrap_or_else(|e| panic!("the memory card: {e}"));
@@ -239,11 +252,17 @@ pub fn serve(c: &mut Cpu, fno: u32, send: &[u8], rsize: usize) -> Vec<u8> {
                     }
                 }
                 crate::iop::ee_write(c, out, &b);
+                if std::env::var_os("UYA_MC_LOG").is_some() {
+                    println!("mc: info port {port} slot {slot} -> -10 (no card)");
+                }
                 return reply(rsize, &[(-10i32) as u32]);
             }
             let mc = c.mach().iop.mc.as_mut().expect("loaded above");
             let r = if mc.seen { 0 } else { (-1i32) as u32 };
             mc.seen = true;
+            if std::env::var_os("UYA_MC_LOG").is_some() {
+                println!("mc: info port {port} slot {slot} -> {r}");
+            }
             let free = CLUSTERS - mc.used();
             let mut b = crate::iop::ee_read(c, out, 0x94);
             if want_type != 0 {
