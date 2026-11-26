@@ -18,6 +18,9 @@
 //!   scene RECORD               the level's in-engine cutscene RECORD (its SCENE record), asked for as the game asks: its own
 //!                              game_mode_request(2, 1, RECORD, 0, 0) between fields; the game fades out and plays it (mode 2),
 //!                              then goes back to play (`until mode 0`)
+//!   ask MODE ARG               the game's mode MODE with ARG, asked for as the level's own code asks: its game_mode_request(MODE,
+//!                              1, ARG, 0, 0) between fields (3 with a screen of the pause's family: the Phoenix's consoles ask
+//!                              for 15, QWARK COMICS, and 17 and 19; 5 with a vendor's page: 0 weapons, 2 ship, 3 armor)
 //!   chunk N                    load the level's terrain and collision chunk N through the game, for a warp within a level
 //!   warp LEVEL                 the game's own level request (the front end's or the level program's): now when the game
 //!                              itself asks for levels (its front end, or a level in play), else at the first field it does
@@ -54,6 +57,7 @@ pub trait Game {
     fn request_level(&mut self, level: u32) -> Result<String, String>;
     /// The game's own cutscene request (`rtgame::request_scene`).
     fn request_scene(&mut self, record: u32) -> Result<String, String>;
+    fn request_mode(&mut self, mode: u32, arg: u32) -> Result<String, String>;
     fn request_chunk(&mut self, loader: u32, chunk: u32) -> Result<(), String>;
     fn loading_chunk(&self) -> bool;
     /// The game's current mode (0 in play, 2 a cutscene; `menus::Menus::game_mode`).
@@ -232,6 +236,7 @@ impl Control {
                 }
                 Some("warp") => s.cpu.request_level(num(1)? as u32).map(|d| Some(format!("ok {d}"))),
                 Some("scene") => s.cpu.request_scene(num(1)? as u32).map(|d| Some(format!("ok {d}"))),
+                Some("ask") => s.cpu.request_mode(num(1)? as u32, num(2)? as u32).map(|d| Some(format!("ok {d}"))),
                 Some("chunk") => {
                     let chunk = num(1)? as u32;
                     let level = s.cpu.rd32(LEVEL_CURRENT);

@@ -68,14 +68,18 @@ pub const OPTIONS: &[Opt] = &[
         presets: None,
         about: "Windowed, or fullscreen borderless on the window's monitor. The picture takes the shape of the window or monitor.",
     },
+    // The heights below 1080 for integrated and older GPUs (a v0.1.3 player on a Ryzen 5 4600G's Radeon graphics: 20 to 22
+    // pictures a second in Veldin at 1080, "nothing I do changes the fact that it stays at 20 fps": no setting was cheaper than
+    // the Original preset at 1080). A picture smaller than the window is brought up to it edge-directed and sharpened
+    // (`play.rs` `Screen::window_copy`), as the movies are.
     Opt {
         key: "resolution",
         tab: Tab::Display,
         name: "RESOLUTION",
-        values: &[("1080", "1080P"), ("1440", "1440P"), ("2160", "2160P (4K)")],
-        default: 0,
+        values: &[("540", "540P"), ("720", "720P"), ("900", "900P"), ("1080", "1080P"), ("1440", "1440P"), ("2160", "2160P (4K)")],
+        default: 3,
         presets: None,
-        about: "The height the world is drawn at; the window shows it scaled. Higher is sharper and costs GPU time.",
+        about: "The height the world is drawn at, scaled to the window. Lower is faster on integrated and older GPUs; higher is sharper.",
     },
     // PLAN 4.2: the picture at the screen's shape (Hor+: more of the world at the sides, the game's own view in the middle), or the
     // game's original 4:3 picture with bars at the sides. The game's own "16:9 (WIDESCREEN)" row (text 0x508, in the front end's
@@ -102,9 +106,10 @@ pub const OPTIONS: &[Opt] = &[
         about: "The pictures shown each second, in the top right corner of the screen.",
     },
     // FRAME PACING (`play.rs` `Timeline`; the player, 24 November 2026: "do the uncapped mode like other games"): UNCAPPED draws
-    // the pictures between the game's frames back to back, each for the refresh it is expected to reach, and shows each once
-    // its GPU work is done, as a game with triple buffering does (any rate up to the display's; a picture may show a refresh
-    // off its time). EVEN keeps a fixed pace, a picture every N refreshes (360, 180, 120 at 360 Hz), each at its own refresh.
+    // the pictures between the game's frames back to back, as many as the GPU keeps up with, each drawn for the refresh it is
+    // presented to and shown there (a picture the GPU cannot finish in time shows a refresh late, and the next is drawn for the
+    // refresh it reaches). EVEN keeps a fixed pace, a picture every N refreshes (360, 180, 120 at 360 Hz), and steps to a slower
+    // one only after the GPU has failed to keep it for a second.
     Opt {
         key: "frame_pacing",
         tab: Tab::Display,
@@ -112,7 +117,7 @@ pub const OPTIONS: &[Opt] = &[
         values: &[("uncapped", "UNCAPPED"), ("even", "EVEN")],
         default: 0,
         presets: None,
-        about: "Uncapped: as many pictures as the PC can draw, like other PC games. Even: a fixed pace that steps between rates.",
+        about: "Uncapped: as many pictures as the PC can draw, like other PC games. Even: a fixed pace that stays on one rate until the PC cannot keep it.",
     },
     Opt {
         key: "texture_filtering",
@@ -376,12 +381,22 @@ pub fn index(key: &str) -> usize {
 }
 
 /// The resolutions offered: the native picture's height (the resolution option's values).
-pub const HEIGHTS: [u32; 3] = [1080, 1440, 2160];
+pub const HEIGHTS: [u32; 6] = [540, 720, 900, 1080, 1440, 2160];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Settings {
     /// Each option's value, by its place in `OPTIONS`.
     pub values: [u8; N],
+}
+
+/// The options as `settings.txt` names them, for the play log (a player's report names what was on).
+impl std::fmt::Display for Settings {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for (k, (o, v)) in OPTIONS.iter().zip(self.values).enumerate() {
+            write!(f, "{}{} {}", if k == 0 { "" } else { ", " }, o.key, o.values[v as usize].0)?;
+        }
+        Ok(())
+    }
 }
 
 impl Default for Settings {

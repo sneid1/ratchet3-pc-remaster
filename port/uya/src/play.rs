@@ -375,7 +375,9 @@ impl App {
             },
         };
         // The player's settings (`settings.rs`): the display mode, and the resolution unless --height names one.
-        let settings = crate::settings::Settings::load(&format!("{}/settings.txt", self.o.profile))?;
+        let file = format!("{}/settings.txt", self.o.profile);
+        NEW_PROFILE.store(!std::path::Path::new(&file).exists() && self.o.height.is_none(), Ordering::Relaxed);
+        let settings = crate::settings::Settings::load(&file)?;
         // The native picture's height; its width is the shape of what it is shown on (PLAN 4.2): the monitor's in fullscreen, and
         // the window, which opens at the monitor's shape, otherwise (`uyart::set_view_k`, every frame).
         let h = self.o.height.unwrap_or(settings.height());
@@ -658,6 +660,15 @@ impl ApplicationHandler<Event> for App {
     }
 }
 
+/// A new profile (no settings.txt when the game started, no --height): once the renderer knows its GPU, an integrated one
+/// starts at 720P (`INTEGRATED_720`, which the game thread applies as the player's own change of the setting would be applied,
+/// saved and shown on the settings page: `rtgame.rs`). 1080 was more than such a GPU draws at 60 (a v0.1.3 player's Ryzen 5
+/// 4600G drew Veldin at 20 to 22 pictures a second at 1080), and the picture is brought up to the window edge-directed
+/// (`Screen::window_copy`). The renderer's own adapter is asked, not one found before it: Streamline must choose the Vulkan
+/// loader before any instance is made (`streamline::load`).
+pub(crate) static NEW_PROFILE: AtomicBool = AtomicBool::new(false);
+pub(crate) static INTEGRATED_720: AtomicBool = AtomicBool::new(false);
+
 /// The renderer thread: each frame drawn and handed to the presenter (`present`), which shows it in the window.
 #[allow(clippy::too_many_arguments)]
 /// The renderer's walk thread: each frame the renderer draws (a field that sends the GS something) walked (`native::Walker`) before
@@ -692,11 +703,17 @@ fn render(iso: &str, height: u32, settings: crate::settings::Settings, atlas: &s
     WIDE.store(settings.wide(), Ordering::Relaxed);
     let mut applied = settings;
     let mut native = crate::native::Native::open(iso, height)?;
+    let gpu = native.gpu().1.get_info();
+    if NEW_PROFILE.load(Ordering::Relaxed) && gpu.device_type == wgpu::DeviceType::IntegratedGpu {
+        println!("play: {} is an integrated GPU: a new profile's RESOLUTION is 720P", gpu.name);
+        INTEGRATED_720.store(true, Ordering::Relaxed);
+    }
     // The options again where this GPU has no DLSS (`dlss::unavailable`, known now the device is made): DLSS off, and with it the
     // ray-traced options (`Settings::constrain`), whatever the profile's file says (a profile brought from an RTX PC).
     let mut kept = settings;
     kept.constrain();
     crate::enhance::set(&kept);
+    println!("play: settings {kept}");
     native.quiet = true;
     let mut atlas = std::sync::Arc::new(crate::prompts::Atlas::read(atlas)?);
     // The save slots' pictures, from the disc (`uyafmt::wad38::slot_pictures`).
@@ -842,9 +859,14 @@ fn render(iso: &str, height: u32, settings: crate::settings::Settings, atlas: &s
         // A front end's frame (its menus, the 3D its VU1 programs draw, a trip's or an arrival's space scene) is drawn natively as
         // a level's is, from its jobs as the GS draws them (`Native::render_screen`; the player, 19 November 2026: "Remove all the
         // old 2D layer/ps2 stuff").
-        // A front end's frame while a level is entered is that level's arrival in space: across the picture's width.
+        // A front end's frame while a level is entered, once the front end shows that level's arrival in space (the load screen,
+        // from the level loader's step 2: `LOAD_STEP`), is drawn across the picture's width. Before it, from the save slot
+        // NEW GAME writes or LOAD GAME reads to the screen's fade to black, the frames are the slot screen's, the level already
+        // named: drawn in the load screen's place and shape they zoomed in (the player: "The load game zoom in issue also shows
+        // up on new game", "the load screen zoom happens too early").
+        let arrival = !matches!(level, 0 | u32::MAX) && crate::load_step(&fr.ram) >= 2;
         let picture = match walked {
-            Ok((fj, w)) if fr.front_end => native.render_screen_walked(&fr.ram, &fj, !matches!(level, 0 | u32::MAX), w),
+            Ok((fj, w)) if fr.front_end => native.render_screen_walked(&fr.ram, &fj, arrival, w),
             Ok((fj, w)) => native.render_walked(&fr.ram, &fj, level, &fr.read_back, w),
             Err(e) => Err(e),
         };
@@ -893,6 +915,7 @@ fn render(iso: &str, height: u32, settings: crate::settings::Settings, atlas: &s
             return Err(stopped(presenter));
         }
         RENDER_BUSY.store(0, Ordering::Relaxed);
+        frame_drawn(t.elapsed().as_nanos() as u64);
         if frame_times() { println!("frame stages: render {} prepare {:.3} send {:.3}", fr.field, prepared_ms, t.elapsed().as_secs_f64() * 1e3 - prepared_ms); }
         ns += t.elapsed().as_nanos() as u64;
         n += 1;
@@ -1169,24 +1192,26 @@ impl Drop for Refreshes {
 ///   Florana with ray tracing; recorded on the presenter's thread, the two followed each other); the next is submitted once the
 ///   first is shown, so the window's copy of a picture never queues behind the next picture's world, and the presenter presents
 ///   only a picture whose GPU work is done (the driver's present waits for it, and blocked every other submission meanwhile).
-/// - The pace (`cadence`): a picture every `step` refreshes, the fastest whose GPU time stays under 85 % of the GPU (each game
+/// - The pace (`cadence`): a picture every `step` refreshes, the fastest whose pictures' 90th percentile GPU time (each game
 ///   frame's first picture traces the frame's lighting; the pictures after it reuse that; the GPU waits through each window's
-///   copy) and whose recording fits; else each of the game's frames shown once as it comes (`own`), however long the GPU takes:
-///   never fewer pictures than the game's frames (the player, 16 November 2026, of a pace below the game's rate in the larger
-///   areas: "unplayably laggy"). Chosen from the recent times every two seconds, and a slower one at once when the GPU falls
-///   behind.
-/// - A picture is drawn for the refresh it can reach (its GPU's recent time and a margin from when the GPU can take it, after
-///   the picture on it is shown, on the display's grid of refreshes: `Refreshes`) and no sooner than the pace's next (`plan`).
-///   It is recorded in time for its world to go on the GPU the moment the picture before is shown, so a picture slow on the GPU
-///   still has the slack before its refresh, and no sooner than the latency allows; presented once done, after the refresh
-///   before its own (it then shows at its own), and never in the refresh the last picture takes (the window shows one picture a
+///   copy) stays under 93 % of the interval and whose recording fits; else each of the game's frames shown once as it comes
+///   (`own`), however long the GPU takes: never fewer pictures than the game's frames (the player, 16 November 2026, of a pace
+///   below the game's rate in the larger areas: "unplayably laggy"). A slower pace is taken once it has failed for a second, a
+///   faster one once it has passed with a quarter to spare for three. UNCAPPED has no pace but the least step.
+/// - A picture is drawn for the refresh it can reach (its GPU's 90th percentile time and a margin from when the GPU can take it,
+///   after the picture on it is shown, on the display's grid of refreshes: `Refreshes`) and no sooner than the pace's next
+///   (`plan`). It is recorded in time for its world to go on the GPU the moment the picture before is shown, and no sooner than
+///   the latency allows; presented the refresh before its own, so it shows at that refresh and the game's time it was drawn for
+///   is the game's time on the display, in every mode (UNCAPPED too: the pictures are as many as the GPU keeps up with, each
+///   at the refresh its time was drawn for), and never in the refresh the last picture takes (the window shows one picture a
 ///   refresh).
-/// - The latency is a field, plus the time most frames (95 in 100) of the last two seconds took from their field's start to the
-///   presenter, plus the longest a picture may be recorded before its refresh (`lead`: its recording's and GPU time, a margin and
-///   a refresh), and 1 ms: the frame a picture shows is there when the picture is recorded. It grows at once and shrinks slowly,
-///   never staying more than two fields above what the frames need.
-/// - The game's time shown moves on by between 0.8 and 1.2 times the refreshes' share of a field toward the time the latency
-///   places at the picture's refresh, never past the newest frame and never back: no picture is shown out of order.
+/// - The game's fields are placed on the wall clock by a line through the last 120 frames' field starts (`fit`): the game's time
+///   advances by the refreshes a picture spans over the line's seconds a field, with a correction of 2 % at most toward the
+///   target the latency places at the picture's refresh (`time_at`), never past the newest frame and never back.
+/// - The latency (`need`, `slew_latency`) is what the frames need: a field (none for each frame shown once), the time 9 in 10
+///   frames took from their field's start on the line to the presenter, the longest a picture may be recorded before its
+///   refresh (`lead`) and 1 ms. It moves only when the need passes it by 3 ms (up: the game's time slows by 2 % at most) or
+///   it passes the need by 8 ms (down, 1 %).
 struct Timeline {
     profile: Option<crate::gpu_profile::Profiler>,
     period: f64,
@@ -1195,8 +1220,20 @@ struct Timeline {
     /// The pace (`cadence`): a picture every `step` refreshes, or each game frame shown once (`own`; the field shown last).
     step: u32,
     own: bool,
-    /// Whether the log last said the pictures are uncapped (`cadence`).
-    uncapped_said: Option<bool>,
+    /// When the current pace began to fail, and when a faster one began to pass (`cadence`): a pace changes only after the
+    /// criterion has held for a while (a second to go slower, three to go faster), and whether the first pace was chosen yet.
+    failing: Option<Instant>,
+    passing: Option<Instant>,
+    settled: bool,
+    /// The game's fields on the wall clock: the recent frames' (time since `t0`, field), their least-squares line (its seconds a
+    /// field, `rate`, and the mean point it passes through), from which the game's time is placed at a refresh (`time_at`).
+    fit: std::collections::VecDeque<(f64, f64)>,
+    rate: f64,
+    fit_mean: (f64, f64),
+    /// Recent GPU times a picture (ms), a frame's first picture's, the pictures after it, and all: the last 120 of each and the
+    /// 90th percentile of each (what a pace and a picture's refresh are chosen from: a picture in ten may take more).
+    gpu_ring: [std::collections::VecDeque<f64>; 3],
+    gpu_p90: [f64; 3],
     shown_own: Option<u64>,
     /// When the timeline was made (the presented pictures' times in the log are from it).
     t0: Instant,
@@ -1370,7 +1407,7 @@ impl Timeline {
         });
         // Until pictures are timed: about what a combat picture takes on this PC.
         let refreshes = vblank.map(Refreshes::start).transpose()?;
-        Ok(Timeline { profile: crate::gpu_profile::Profiler::new(), period: 1.0 / hz, refreshes, step: 1, own: false, uncapped_said: None, shown_own: None, t0: Instant::now(), work: (0.0, 0.0), late: 0, behind: (0.0, 0.0), frames: Default::default(), shown: None, latency: FIELD_S, arrivals: Default::default(), extra: None, counts: [0; 4], since: Instant::now(), capture, gpu: None, staged: None, next: None, presented: None, encode_ms: 5.0, gpu_ms: [12.0, 10.0], display_ms: 1.0, gpu_sum: [0.0; 2], gpu_n: [0; 2], unapplied: Default::default(), recorder: Recorder::start(device.clone(), queue.clone())?, recording: None })
+        Ok(Timeline { profile: crate::gpu_profile::Profiler::new(), period: 1.0 / hz, refreshes, step: 1, own: false, failing: None, passing: None, settled: false, fit: Default::default(), rate: FIELD_S, fit_mean: (0.0, 0.0), gpu_ring: Default::default(), gpu_p90: [12.0, 10.0, 12.0], shown_own: None, t0: Instant::now(), work: (0.0, 0.0), late: 0, behind: (0.0, 0.0), frames: Default::default(), shown: None, latency: FIELD_S, arrivals: Default::default(), extra: None, counts: [0; 4], since: Instant::now(), capture, gpu: None, staged: None, next: None, presented: None, encode_ms: 5.0, gpu_ms: [12.0, 10.0], display_ms: 1.0, gpu_sum: [0.0; 2], gpu_n: [0; 2], unapplied: Default::default(), recorder: Recorder::start(device.clone(), queue.clone())?, recording: None })
     }
 
     /// Whether frames wait to be shown on the timeline.
@@ -1416,7 +1453,7 @@ impl Timeline {
         }
         let mut until = self.refresh_after(now);
         if let Some(p) = &self.gpu {
-            until = until.min(self.show_from(p.at));
+            until = until.min(self.present_from(p.at));
         }
         if self.staged.is_none()
             && self.recording.is_none()
@@ -1465,30 +1502,34 @@ impl Timeline {
     }
 
     /// The next picture's recording time and the refresh it is drawn for (None: none to record, each game frame shown once and
-    /// the newest shown). The refresh: the first its GPU time (a frame's first picture's when its time falls in a frame with no
-    /// picture yet: `first_at`), with a margin, reaches from when the GPU can take it, and no sooner than the pace's next (`step`
-    /// refreshes after the last picture's). The GPU takes it once the picture on it is shown (done, from the refresh before its
-    /// own) and the window has its copy, and once it is recorded (on the recorder's thread, beside the picture on the GPU). It is
-    /// recorded no sooner than the latency allows (`lead`: the frame it shows is there): the slack before its refresh is on the
-    /// GPU's side, so a picture slow on the GPU still makes its refresh, and one quick waits for it.
+    /// the newest shown). The refresh: the first its GPU time (the 90th percentile of the recent times; a frame's first picture's
+    /// when its time falls in a frame with no picture yet: `first_at`) and a margin (a fifth and a millisecond) reach from when
+    /// the GPU can take it, and no sooner than the pace's next (`step` refreshes after the last picture's: UNCAPPED has no pace
+    /// but the least step, a picture at every refresh the GPU keeps up with, and one a refresh further out when it does not). The
+    /// GPU takes it once the picture on it is shown (done, from the refresh before its own) and the window has its copy, and once
+    /// it is recorded (on the recorder's thread, beside the picture on the GPU). It is recorded no sooner than the latency allows
+    /// (`lead`: the frame it shows is there): the slack before its refresh is on the GPU's side, so a picture slow on the GPU
+    /// still makes its refresh, and one quick waits for it. The picture is then presented the refresh before its own
+    /// (`present_from`), so it shows at the refresh its game time was drawn for, in every mode. Each game frame shown once
+    /// (`own`): the newest frame, at the refresh the clock reaches it (its field's time and the latency).
     fn plan(&self, now: Instant) -> Option<(Instant, Instant)> {
         let newest = self.frames.back()?;
         if self.own && self.shown_own == Some(newest.field) {
             return None;
         }
-        if crate::enhance::uncapped() && !self.own {
-            return Some(self.plan_uncapped(now));
-        }
         let ms = |v: f64| Duration::from_secs_f64(v.max(0.0) / 1e3);
         let (encode, display, lead) = (ms(self.encode_ms), ms(self.display_ms), Duration::from_secs_f64(self.lead()));
-        let pace = self.shown.map(|(_, s)| s + Duration::from_secs_f64(self.period * if self.own { 1 } else { self.step } as f64));
+        let step = if self.own { 1 } else { self.step.max(least_step()) };
+        let pace = self.shown.map(|(_, s)| s + Duration::from_secs_f64(self.period * step as f64));
+        let due = self.own.then(|| self.refresh_from(self.field_time(newest.field) + Duration::from_secs_f64(self.latency)));
         let reach = |start: Instant| {
             let at = |gpu_ms: f64| {
                 let at = self.refresh_from(start + ms(gpu_ms) + ms(gpu_ms / 5.0 + 1.0));
-                pace.map_or(at, |p| at.max(p))
+                let at = pace.map_or(at, |p| at.max(p));
+                due.map_or(at, |d| at.max(d))
             };
-            let after = at(self.gpu_ms[1]);
-            if self.first_at(after) { at(self.gpu_ms[0]) } else { after }
+            let after = at(self.gpu_p90[1]);
+            if self.first_at(after) { at(self.gpu_p90[0]) } else { after }
         };
         let Some(p) = &self.gpu else {
             let at = reach(now + encode);
@@ -1499,46 +1540,70 @@ impl Timeline {
         Some((at.checked_sub(lead).unwrap_or(now).max(now), at))
     }
 
-    /// UNCAPPED (`enhance::uncapped`): the next picture goes on the GPU as soon as the one there is done and presented (or now,
-    /// once recorded), and is drawn for the refresh after the moment its recent GPU time finishes it (a frame's first picture's
-    /// when its time falls in a frame with no picture yet), never the refresh of the picture before. No margin: a picture done
-    /// late shows a refresh after its time, as a game with triple buffering shows its frames. Recorded at once (on the recorder's
-    /// thread, beside the picture on the GPU), so it is ready the moment the GPU can take it: timed to finish just then, any
-    /// delay left the GPU idle (186 pictures a second in the arena fight where its times allow about 230).
-    fn plan_uncapped(&self, now: Instant) -> (Instant, Instant) {
-        let ms = |v: f64| Duration::from_secs_f64(v.max(0.0) / 1e3);
-        let (encode, display) = (ms(self.encode_ms), ms(self.display_ms));
-        let start = match &self.gpu {
-            Some(p) => (p.done.unwrap_or_else(|| p.submitted.expect("submitted") + ms(self.gpu_ms[!p.first as usize])).max(now) + display).max(now + encode),
-            None => now + encode,
-        };
-        // Never the refresh of the picture before, nor with frame generation the refreshes its generated frames take.
-        let gap = Duration::from_secs_f64(self.period * least_step() as f64);
-        let after_last = |at: Instant| self.shown.map_or(at, |(_, s)| at.max(s + gap));
-        let at = |gpu_ms: f64| after_last(self.refresh_after(start + ms(gpu_ms)));
-        let after = at(self.gpu_ms[1]);
-        let at = if self.first_at(after) { at(self.gpu_ms[0]) } else { after };
-        (now, at)
-    }
-
     /// How long before its refresh a picture may be recorded (s): its recording's and GPU time as a frame's first picture, with
     /// `plan`'s margin, and a refresh (the refresh a picture reaches is up to one after that).
     fn lead(&self) -> f64 {
-        (self.encode_ms + 1.2 * self.gpu_ms[0] + 1.0) / 1e3 + self.period
+        (self.encode_ms + 1.2 * self.gpu_p90[0] + 1.0) / 1e3 + self.period
     }
 
-    /// The game's time (in fields) a picture at refresh `at` shows: the time the latency places there, moved on from the last
-    /// picture's by between 0.8 and 1.2 times the refreshes' share of a field, and never past the newest frame; each game frame
-    /// shown once (`own`), the newest frame's.
+    /// When field `field` began on the fitted clock (`fit`).
+    fn field_time(&self, field: u64) -> Instant {
+        self.t0 + Duration::from_secs_f64((self.fit_mean.0 + (field as f64 - self.fit_mean.1) * self.rate).max(0.0))
+    }
+
+    /// The latency the frames need (s): the time from a field's start on the fitted clock to the refresh its picture shows at. A
+    /// picture between two frames shows a field behind the newest it needs; each frame shown once (`own`) at the refresh after
+    /// the frame is there. Both: the time most frames (9 in 10: a rare late one holds the picture a refresh) took from their
+    /// field's start to the presenter, and the longest a picture may be recorded before its refresh (`lead`), and 1 ms.
+    fn need(&self) -> f64 {
+        let mut a: Vec<f64> = self.arrivals.iter().copied().collect();
+        a.sort_by(f64::total_cmp);
+        // At most two fields: the timeline keeps three frames (the renderer's frame sets are five), so a frame later than that
+        // is passed by whatever the latency is (a level's first frames, held up for seconds while its pipelines are made).
+        let late = a.get(((a.len() as f64 * 0.9) as usize).min(a.len().saturating_sub(1))).copied().unwrap_or(0.0).clamp(0.0, 2.0 * self.rate);
+        (if self.own { 0.0 } else { self.rate }) + self.lead() + late + 0.001
+    }
+
+    /// The latency moved toward what the frames need, for a picture `at` the refresh: it holds inside a dead band (up when the
+    /// need passes it by 3 ms, at most 2 % of the time since the last picture, so the game's time slows by no more; down when it
+    /// passes the need by 8 ms, at most 1 %): the game's time does not follow the arrivals' noise. At once with no picture before
+    /// it (the first, or after a cut).
+    fn slew_latency(&mut self, at: Instant) {
+        let need = self.need();
+        match self.shown {
+            None => self.latency = need,
+            Some((_, s)) => {
+                let dt = at.saturating_duration_since(s).as_secs_f64();
+                // Never more than two fields above the need: the game's time follows the latency by 2 % at most, so this moves
+                // the target and not the picture.
+                self.latency = self.latency.min(need + 2.0 * self.rate);
+                if need > self.latency + 0.003 {
+                    self.latency += (need - self.latency).min(0.02 * dt);
+                } else if self.latency > need + 0.008 {
+                    self.latency -= (self.latency - need).min(0.01 * dt);
+                }
+            }
+        }
+    }
+
+    /// The game's time (in fields) a picture at refresh `at` shows: the time the latency places there on the fitted clock (the
+    /// target), reached by the clock's own rate from the last picture's, with a correction toward the target of 2 % at most (a
+    /// picture's game time advances by the refreshes it spans, over the game's seconds a field, whatever the frames' arrivals
+    /// do); never past the newest frame and never back: no picture is shown out of order. Each game frame shown once (`own`),
+    /// the newest frame's.
     fn time_at(&self, at: Instant) -> f64 {
         let newest = self.frames.back().expect("running");
-        let target = newest.field as f64 + (at.saturating_duration_since(newest.at).as_secs_f64() - self.latency) / FIELD_S;
+        let top = newest.field as f64;
+        if self.own {
+            return top;
+        }
+        let target = top + (at.saturating_duration_since(self.field_time(newest.field)).as_secs_f64() - self.latency) / self.rate;
         match self.shown {
-            _ if self.own => newest.field as f64,
-            None => newest.field as f64,
+            None => target.min(top),
             Some((g0, s)) => {
-                let step = at.saturating_duration_since(s).as_secs_f64() / FIELD_S;
-                target.clamp(g0 + 0.8 * step, g0 + 1.2 * step).min(newest.field as f64)
+                let step = at.saturating_duration_since(s).as_secs_f64() / self.rate;
+                let g = g0 + step;
+                (g + (target - g).clamp(-0.02 * step, 0.02 * step)).min(top).max(g0)
             }
         }
     }
@@ -1551,52 +1616,65 @@ impl Timeline {
         f.replay.prepared && !f.replay.rendered.load(Ordering::Acquire)
     }
 
-    /// The pace for the recent times (`step`, `own`): the fastest step whose pictures keep the GPU under 85 % (each game frame's
-    /// first picture traces its lighting, the pictures after reuse it; the GPU waits through each window's copy, for the next
-    /// world goes on after it) and whose recording and window's copy fit its interval; a faster one than now only under 80 % (no
-    /// back and forth at the edge); with none, each of the game's frames shown once as it comes, never fewer pictures than the
-    /// game's frames. Chosen so every two seconds (`settle`); between, after each picture, a slower one as soon as the pace's own
-    /// is past 95 % (a fight begun: the GPU falling behind).
-    fn cadence(&mut self, field: u64, settle: bool) {
+    /// The pace for the recent GPU times (`step`, `own`): the fastest step whose pictures' 90th percentile GPU time and the
+    /// window's copy take under 93 % of its interval (and whose recording and copy fit it), as long as its pictures are not
+    /// fewer than the game's frames; with none, each of the game's frames shown once as it comes, never fewer pictures than the
+    /// game's frames. UNCAPPED has no step but the least: it is each game frame shown once only where even a frame's first
+    /// picture would not fit the game's own rate. A slower pace is taken once the criterion has failed for a second, a faster
+    /// one once it has passed with a quarter to spare for three (no back and forth at the edge); the first is chosen at once
+    /// from the first 30 pictures.
+    fn cadence(&mut self, field: u64) {
         let (hz, fps) = (1.0 / self.period, 1.0 / FIELD_S);
-        let load = |pictures: f64| (fps.min(pictures) * self.gpu_ms[0] + (pictures - fps).max(0.0) * self.gpu_ms[1] + pictures * self.display_ms) / 1e3;
-        // UNCAPPED (`plan_uncapped`): no pace; each game frame shown once only while even its own pictures would not fit.
-        if crate::enhance::uncapped() {
-            let was = (self.own, self.step);
-            (self.own, self.step) = (load(fps) > 0.95, least_step());
-            if (self.own, self.step) != was || (settle && self.uncapped_said != Some(true)) {
-                self.uncapped_said = Some(true);
-                println!("play: field {field}: pictures {}", if self.own { "of the game's own frames only, each once as it comes".to_string() } else if self.step > 1 { format!("uncapped at one refresh in {} at most, DLSS frame generation making {} between", self.step, self.step - 1) } else { "uncapped: drawn back to back, each shown once done".to_string() });
-            }
+        if self.gpu_ring[2].len() < 30 {
             return;
         }
-        self.uncapped_said = Some(false);
-        let fits = |pictures: f64, most: f64| load(pictures) <= most && (self.encode_ms + self.display_ms + 0.5) / 1e3 <= 1.0 / pictures;
-        if !settle && (self.own || fits(hz / self.step as f64, 0.95)) {
-            return;
-        }
-        let mut choice = None;
-        for s in least_step()..=8u32 {
-            let pictures = hz / s as f64;
-            if pictures < fps {
-                break;
+        let least = least_step();
+        let copy = |s: f64| (self.encode_ms + self.display_ms + 0.5) / 1e3 <= s;
+        // The step a share `most` of its interval admits (None: none, each frame once).
+        let pick = |most: f64| -> Option<u32> {
+            if crate::enhance::uncapped() {
+                let on = (self.gpu_p90[0] + self.display_ms) / 1e3 * fps <= most && copy(1.0 / fps);
+                return on.then_some(least);
             }
-            if !settle && s <= self.step {
-                continue;
-            }
-            let most = if self.own || s < self.step { 0.80 } else { 0.85 };
-            if fits(pictures, most) {
-                choice = Some(s);
-                break;
-            }
-        }
+            (least..=8u32).take_while(|s| hz / *s as f64 >= fps).find(|s| (self.gpu_p90[2] + self.display_ms) / 1e3 <= most * *s as f64 * self.period && copy(*s as f64 * self.period))
+        };
         let was = (self.own, self.step);
-        match choice {
-            Some(s) => (self.own, self.step) = (false, s),
-            None => self.own = true,
+        let now = Instant::now();
+        if !self.settled {
+            self.settled = true;
+            match pick(0.93) {
+                Some(s) => (self.own, self.step) = (false, s),
+                None => self.own = true,
+            }
+        } else {
+            let (slow, fast) = (pick(0.93), pick(0.75));
+            // The pace now fails: it is not what the criterion admits (a step the least a pace; own never fails).
+            let fails = !self.own && slow.is_none_or(|s| s > self.step);
+            if fails {
+                let since = *self.failing.get_or_insert(now);
+                if now.duration_since(since) >= Duration::from_secs(1) {
+                    match slow {
+                        Some(s) => (self.own, self.step) = (false, s),
+                        None => self.own = true,
+                    }
+                }
+            } else {
+                self.failing = None;
+            }
+            let faster = fast.is_some_and(|f| self.own || f < self.step);
+            if faster {
+                let since = *self.passing.get_or_insert(now);
+                if now.duration_since(since) >= Duration::from_secs(3) {
+                    (self.own, self.step) = (false, fast.expect("checked above"));
+                }
+            } else {
+                self.passing = None;
+            }
         }
+        self.step = self.step.max(least);
         if (self.own, self.step) != was {
-            println!("play: field {field}: pictures {}", if self.own { "of the game's own frames only, each once as it comes".to_string() } else if self.step == 1 { format!("at every refresh ({:.0} a second)", 1.0 / self.period) } else { format!("at one refresh in {} ({:.0} a second)", self.step, 1.0 / (self.period * self.step as f64)) });
+            (self.failing, self.passing, self.next) = (None, None, None);
+            println!("play: field {field}: pictures {}", if self.own { "of the game's own frames only, each once as it comes".to_string() } else if crate::enhance::uncapped() { if self.step > 1 { format!("uncapped at one refresh in {} at most, DLSS frame generation making {} between", self.step, self.step - 1) } else { "uncapped: a picture at every refresh the GPU keeps up with".to_string() } } else if self.step == 1 { format!("at every refresh ({:.0} a second)", 1.0 / self.period) } else { format!("at one refresh in {} ({:.0} a second)", self.step, 1.0 / (self.period * self.step as f64)) });
         }
     }
 
@@ -1616,7 +1694,7 @@ impl Timeline {
                 p.done = Some(Instant::now());
             }
             if let Some(at) = self.gpu.as_ref().filter(|p| p.done.is_some()).map(|p| p.at)
-                && Instant::now() >= self.show_from(at)
+                && Instant::now() >= self.present_from(at)
             {
                 let p = self.gpu.take().expect("checked above");
                 self.show(screen, p)?;
@@ -1659,18 +1737,6 @@ impl Timeline {
         self.gpu = Some(p);
     }
 
-    /// When a picture drawn for refresh `at`, done on the GPU, is presented: UNCAPPED (`enhance::uncapped`) at once, unless the
-    /// last picture presented has not reached its refresh yet (the window would replace that one unseen); EVEN as
-    /// `present_from`.
-    fn show_from(&self, at: Instant) -> Instant {
-        // With frame generation the picture waits for the refresh before its own as EVEN's do: DLSS-G spaces its frames between
-        // two of the presenter's by their presents.
-        if crate::enhance::uncapped() && least_step() == 1 {
-            return self.presented.map_or(self.t0, |t| self.refresh_after(t));
-        }
-        self.present_from(at)
-    }
-
     /// The earliest moment a picture drawn for refresh `at` is presented: after the vertical blank before `at` (it then shows at
     /// `at`), and not before the refresh the last picture presented takes (the window would replace that one unseen).
     fn present_from(&self, at: Instant) -> Instant {
@@ -1685,6 +1751,7 @@ impl Timeline {
     /// time, and its replay drawn there (or the frame's own picture as the renderer drew it). Each game frame shown once (`own`):
     /// the newest frame's own picture.
     fn record(&mut self, screen: &Screen, at: Instant) -> Result<(), String> {
+        self.slew_latency(at);
         let g = self.time_at(at);
         if self.own {
             self.shown_own = self.frames.back().map(|f| f.field);
@@ -1793,6 +1860,18 @@ impl Timeline {
         let gpu_ms = p.done.zip(p.submitted).map_or(0.0, |(d, s)| d.saturating_duration_since(s).as_secs_f64() * 1e3);
         let k = !p.first as usize;
         if p.drawn {
+            for i in [k, 2] {
+                let ring = &mut self.gpu_ring[i];
+                ring.push_back(gpu_ms);
+                if ring.len() > 120 {
+                    ring.pop_front();
+                }
+                if ring.len() >= 8 {
+                    let mut v: Vec<f64> = ring.iter().copied().collect();
+                    v.sort_by(f64::total_cmp);
+                    self.gpu_p90[i] = v[((v.len() as f64 * 0.9) as usize).min(v.len() - 1)];
+                }
+            }
             fold(&mut self.gpu_ms[k], gpu_ms);
             self.gpu_sum[k] += gpu_ms;
             self.gpu_n[k] += 1;
@@ -1800,7 +1879,7 @@ impl Timeline {
         let kind = if p.between { "between" } else { "own" };
         if frame_times() {
             let t = |i: Option<Instant>| i.map_or(-1.0, |i| i.saturating_duration_since(self.t0).as_secs_f64() * 1e3);
-            println!("frame stages: present {} {kind} encode {:.3} GPU {gpu_ms:.3}{} display {display_ms:.3}{} at {:.3} shows {:.3} for {:.3} recorded {:.3} submitted {:.3} done {:.3}", p.field, p.encode_ms, if p.first { " first" } else { "" }, if late { " late" } else { "" }, t(Some(started)), t(Some(shows)), t(Some(p.at)), t(Some(p.recorded)), t(p.submitted), t(p.done));
+            println!("frame stages: present {} {kind} encode {:.3} GPU {gpu_ms:.3}{} display {display_ms:.3}{} at {:.3} shows {:.3} for {:.3} recorded {:.3} submitted {:.3} done {:.3} g {:.5} lat {:.3}", p.field, p.encode_ms, if p.first { " first" } else { "" }, if late { " late" } else { "" }, t(Some(started)), t(Some(shows)), t(Some(p.at)), t(Some(p.recorded)), t(p.submitted), t(p.done), p.g, self.latency * 1e3);
         }
         let work = p.encode_ms + display_ms;
         self.work = (self.work.0 + work, self.work.1.max(work));
@@ -1833,10 +1912,8 @@ impl Timeline {
             self.gpu_sum = [0.0; 2];
             self.gpu_n = [0; 2];
             self.since = started;
-            self.cadence(p.field, true);
-        } else {
-            self.cadence(p.field, false);
         }
+        self.cadence(p.field);
         Ok(())
     }
 
@@ -1911,6 +1988,7 @@ impl Timeline {
         self.frames.clear();
         self.shown = None;
         self.next = None;
+        self.fit.clear();
         Ok(newest)
     }
 
@@ -1918,30 +1996,38 @@ impl Timeline {
     /// (`outbox`): onto the timeline.
     #[allow(clippy::too_many_arguments)]
     fn push(&mut self, field: u64, at: Instant, ready: Instant, pic: wgpu::Texture, shape: (u32, u32), replay: crate::replay::Replay, outbox: crate::native::Outbox) {
-        // A frame that does not follow the last one within a few fields (`replay::MAX_GAP`: fields passed over while the renderer
-        // was busy are spanned) begins the timeline again (the frames passed keep their changes' order).
-        if self.frames.back().is_some_and(|b| field <= b.field || field - b.field > crate::replay::MAX_GAP) {
+        // A cut (the field goes back, or the frames stopped for half a second: a level change, a menu) begins the clock and the
+        // game's time again. A frame that does not follow the last one within a few fields (`replay::MAX_GAP`: fields passed over
+        // while the renderer was busy are spanned) only begins the timeline's frames again (the frames passed keep their changes'
+        // order): the game's time shown goes on across it, as the clock says.
+        let t = at.saturating_duration_since(self.t0).as_secs_f64();
+        let cut = self.fit.back().is_some_and(|&(lt, lf)| (field as f64) <= lf || t - lt > 0.5);
+        if cut {
+            self.fit.clear();
+            self.shown = None;
+        }
+        if self.frames.back().is_some_and(|b| cut || field - b.field > crate::replay::MAX_GAP) {
             for f in self.frames.drain(..) {
                 self.unapplied.extend(f.outbox);
             }
-            self.shown = None;
             self.next = None;
         }
-        self.arrivals.push_back(ready.duration_since(at).as_secs_f64());
+        // The game's fields on the wall clock: the line through the last 120 frames' field starts (a field the game thread began
+        // late is not made up, so its time slips, and the line's slope is the game's real seconds a field).
+        self.fit.push_back((t, field as f64));
+        while self.fit.len() > 120 {
+            self.fit.pop_front();
+        }
+        let n = self.fit.len() as f64;
+        let (tm, fm) = (self.fit.iter().map(|p| p.0).sum::<f64>() / n, self.fit.iter().map(|p| p.1).sum::<f64>() / n);
+        let (cov, var) = self.fit.iter().fold((0.0, 0.0), |(c, v), &(t, f)| (c + (f - fm) * (t - tm), v + (f - fm) * (f - fm)));
+        self.fit_mean = (tm, fm);
+        self.rate = if self.fit.len() >= 16 && var > 0.0 { (cov / var).clamp(FIELD_S, 1.4 * FIELD_S) } else { FIELD_S };
+        // How late the frame is on that clock: the time from its field's start on the line to the presenter.
+        self.arrivals.push_back(ready.saturating_duration_since(self.field_time(field)).as_secs_f64());
         while self.arrivals.len() > 120 {
             self.arrivals.pop_front();
         }
-        // The frame a picture shows must be there when the picture is recorded, up to `lead` before its refresh; most frames (95 in
-        // 100: a rare late one shows a picture again rather than holding every picture back) are there.
-        let picture = self.lead();
-        let mut arrivals: Vec<f64> = self.arrivals.iter().copied().collect();
-        arrivals.sort_by(f64::total_cmp);
-        let most = arrivals[((arrivals.len() as f64 * 0.95) as usize).min(arrivals.len() - 1)];
-        let need = FIELD_S + picture + most + 0.001;
-        // It shrinks slowly, but never stays more than two fields above the need: frames held up by a stall (a level's first frames
-        // while its pipelines are made) leave the 95 in 100 once it is over, and the pictures come back to the frames' pace then,
-        // not seconds later.
-        self.latency = if need > self.latency { need } else { (self.latency - (self.latency - need) * 0.01).min(need + 2.0 * FIELD_S) };
         self.frames.push_back(TimelineFrame { field, at, pic, shape, replay: Arc::new(replay), outbox: (!outbox.is_empty()).then_some(outbox) });
         // The presenter behind by more than two frames: the oldest are passed.
         while self.frames.len() > 3 {
@@ -2010,8 +2096,14 @@ struct Screen {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    /// The picture's texture, its bind group and size.
+    /// The presenter's own copy of a picture (a movie's, or a native picture the window could not show when it came), its bind
+    /// group and size.
     frame: Option<(wgpu::Texture, wgpu::BindGroup, (u32, u32))>,
+    /// The native pictures sampled where they are (`window_copy`): a bind group by texture, the newest last (the frame sets'
+    /// pictures, the timeline's, the display buffer; at most `PICTURE_GROUPS`).
+    pictures: Vec<(wgpu::Texture, wgpu::BindGroup)>,
+    /// What the window showed last, its bind group and size (`shot`).
+    last: Option<(wgpu::BindGroup, (u32, u32))>,
     /// Where the picture is in the window, for the mouse (`Kbm::viewport`).
     kbm: Arc<Mutex<crate::input::Kbm>>,
     /// A movie's upscale: the edge-directed pass (the movie to the picture's size in the window, into `up`) and the sharpening
@@ -2026,6 +2118,10 @@ struct Screen {
     /// The settings page's tab bar (`TabBar`).
     tab_bar: TabBar,
 }
+
+/// The most native pictures the window keeps a bind group for (`Screen::picture_group`): the frame sets', the timeline's and the
+/// display buffer's.
+const PICTURE_GROUPS: usize = 16;
 
 /// The FPS counter's figures as drawn in its atlas: their cap height in pixels.
 const FPS_CAP: f32 = 48.0;
@@ -2543,7 +2639,7 @@ impl Screen {
         });
         let fps = Fps::new(&device, native.gpu().3, format)?;
         let tab_bar = TabBar::new(&device, native.gpu().3, format)?;
-        Ok(Screen { device: device.clone(), queue: native.gpu().3.clone(), window, surface, config, pipeline, layout, sampler, frame: None, kbm, easu, rcas, up: None, pointer, fps, tab_bar })
+        Ok(Screen { device: device.clone(), queue: native.gpu().3.clone(), window, surface, config, pipeline, layout, sampler, frame: None, pictures: Vec::new(), last: None, kbm, easu, rcas, up: None, pointer, fps, tab_bar })
     }
 
     /// The shape `shown` is shown at, the native picture's height high (`size`: the native picture's size when the frame was
@@ -2585,14 +2681,11 @@ impl Screen {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            let blit = |pass: &mut wgpu::RenderPass, frame: &Option<(wgpu::Texture, wgpu::BindGroup, (u32, u32))>| {
-                if let Some((_, bg, _)) = frame {
-                    pass.set_pipeline(&self.pipeline);
-                    pass.set_bind_group(0, bg, &[]);
-                    pass.draw(0..3, 0..1);
-                }
-            };
-            blit(&mut pass, &self.frame);
+            if let Some((bg, _)) = &self.last {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, bg, &[]);
+                pass.draw(0..3, 0..1);
+            }
         }
         self.pointer(&mut enc, &view, [0.0, 0.0, w as f32, h as f32], (w, h));
         let tabs = self.kbm.lock().expect("input lock").tab_bar.clone();
@@ -2708,6 +2801,28 @@ impl Screen {
         if frame_times() { println!("frame stages: screen present {:.3}", presenting.elapsed().as_secs_f64() * 1e3); }
     }
 
+    /// The bind group that samples native picture `t` where it is, made once per texture and kept while pictures are of its size
+    /// (the newest last, at most `PICTURE_GROUPS`).
+    fn picture_group(&mut self, t: &wgpu::Texture) -> wgpu::BindGroup {
+        if let Some(k) = self.pictures.iter().position(|(p, _)| p == t) {
+            let kept = self.pictures.remove(k);
+            let bg = kept.1.clone();
+            self.pictures.push(kept);
+            return bg;
+        }
+        self.pictures.retain(|(p, _)| (p.width(), p.height()) == (t.width(), t.height()));
+        if self.pictures.len() == PICTURE_GROUPS {
+            self.pictures.remove(0);
+        }
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("native picture"),
+            layout: &self.layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&t.create_view(&Default::default())) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) }],
+        });
+        self.pictures.push((t.clone(), bg.clone()));
+        bg
+    }
+
     /// `present_to`'s copy of the picture into the window's image `out`, submitted; the image, not yet presented, returned (None
     /// without one: the picture is taken in for the next present).
     fn window_copy(&mut self, out: Option<wgpu::SurfaceTexture>, shown: &Shown, native_size: (u32, u32)) -> Result<Option<wgpu::SurfaceTexture>, String> {
@@ -2717,7 +2832,15 @@ impl Screen {
             Shown::Gpu(t) => (t.width(), t.height()),
             Shown::Picture(p) => (p.w, p.h),
         };
-        {
+        // A native picture the window shows now is sampled where it is (`picture_group`); a movie's picture, and a native one the
+        // window cannot show now, are copied into the presenter's own `frame` first (a native picture goes back to the renderer once
+        // shown, and would be drawn over before the window could show it). The copy was a whole picture's read and write at every
+        // present: on an integrated GPU's shared memory some 16 MB a picture at 1080 lines.
+        let direct = match (shown, out.is_some()) {
+            (Shown::Gpu(t), true) => Some(self.picture_group(t)),
+            _ => None,
+        };
+        if direct.is_none() {
             if self.frame.as_ref().is_none_or(|f| f.2 != size) {
                 let tex = device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("window picture"),
@@ -2752,6 +2875,11 @@ impl Screen {
                 ),
             }
         }
+        let source = match direct {
+            Some(bg) => bg,
+            None => self.frame.as_ref().expect("made for the picture above").1.clone(),
+        };
+        self.last = Some((source.clone(), size));
         // The window's image (none now: the picture is taken in, and shown by the next present).
         let Some(out) = out else {
             queue.submit([enc.finish()]);
@@ -2767,8 +2895,10 @@ impl Screen {
         let (vw, vh) = ((shape.0 as f32 * s).round().max(1.0), (shape.1 as f32 * s).round().max(1.0));
         let (vx, vy) = (((ww - vw) / 2.0).floor(), ((wh - vh) / 2.0).floor());
         self.kbm.lock().expect("input lock").viewport = [vx, vy, vw, vh];
-        // A movie's picture brought to that size, edge-directed, into `up`.
-        if let Shown::Picture(_) = shown {
+        // A movie's picture, or a native picture smaller than its place in the window (a RESOLUTION below the window's height:
+        // 540 to 900 for an integrated GPU), brought to that size, edge-directed, into `up`, and sharpened into the window.
+        let upscaled = matches!(shown, Shown::Picture(_)) || vh > size.1 as f32;
+        if upscaled {
             let size = (vw as u32, vh as u32);
             if self.up.as_ref().is_none_or(|u| u.2 != size) {
                 let t = device.create_texture(&wgpu::TextureDescriptor {
@@ -2798,9 +2928,8 @@ impl Screen {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            let (_, bg, _) = self.frame.as_ref().expect("made for the picture above");
             pass.set_pipeline(&self.easu);
-            pass.set_bind_group(0, bg, &[]);
+            pass.set_bind_group(0, &source, &[]);
             pass.draw(0..3, 0..1);
         }
         let view = out.texture.create_view(&Default::default());
@@ -2814,19 +2943,15 @@ impl Screen {
                 multiview_mask: None,
             });
             pass.set_viewport(vx, vy, vw, vh, 0.0, 1.0);
-            match shown {
-                Shown::Picture(_) => {
-                    let (_, bg, _) = self.up.as_ref().expect("upscaled above");
-                    pass.set_pipeline(&self.rcas);
-                    pass.set_bind_group(0, bg, &[]);
-                    pass.draw(0..3, 0..1);
-                }
-                Shown::Gpu(_) => {
-                    let (_, bg, _) = self.frame.as_ref().expect("made for the picture above");
-                    pass.set_pipeline(&self.pipeline);
-                    pass.set_bind_group(0, bg, &[]);
-                    pass.draw(0..3, 0..1);
-                }
+            if upscaled {
+                let (_, bg, _) = self.up.as_ref().expect("upscaled above");
+                pass.set_pipeline(&self.rcas);
+                pass.set_bind_group(0, bg, &[]);
+                pass.draw(0..3, 0..1);
+            } else {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &source, &[]);
+                pass.draw(0..3, 0..1);
             }
         }
         self.pointer(&mut enc, &view, [vx, vy, vw, vh], (win.width, win.height));
@@ -2851,11 +2976,25 @@ fn clock() -> u64 {
     START.get_or_init(Instant::now).elapsed().as_nanos() as u64 + 1
 }
 
-/// Whether the renderer has been on one frame for more than two fields: a level's load or another long build, not a frame a
-/// little late. The game thread waits for it then (as on a loading screen) rather than running on undrawn (`rtgame.rs`).
+/// The renderer's usual time for a frame (nanoseconds): an average of its frames, each counted at most `USUAL_CAP` so that a
+/// level's load does not raise it.
+static RENDER_USUAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+const USUAL_CAP: u64 = 100_000_000;
+
+/// A frame drawn in `ns` nanoseconds, into the renderer's usual time (`renderer_held`).
+fn frame_drawn(ns: u64) {
+    let usual = RENDER_USUAL.load(Ordering::Relaxed);
+    RENDER_USUAL.store(if usual == 0 { ns.min(USUAL_CAP) } else { usual - usual / 8 + ns.min(USUAL_CAP) / 8 }, Ordering::Relaxed);
+}
+
+/// Whether the renderer has been on one frame for more than two fields and more than three of its usual frames: a level's load
+/// or another long build, not a frame a little late. The game thread waits for it then (as on a loading screen) rather than
+/// running on undrawn (`rtgame.rs`). Two fields alone held a GPU that takes longer than that for every frame: the game ran in
+/// slow motion as well as at its few pictures a second (a v0.1.3 player on a Ryzen 5 4600G's Radeon graphics: 42 ms a frame
+/// in Veldin, the game at 44.5 fields a second, 74 % of its speed); it now drops pictures there, not game time.
 pub(crate) fn renderer_held() -> bool {
     let since = RENDER_BUSY.load(Ordering::Relaxed);
-    since != 0 && clock().saturating_sub(since) > (2.0 * FIELD_S * 1e9) as u64
+    since != 0 && clock().saturating_sub(since) > ((2.0 * FIELD_S * 1e9) as u64).max(3 * RENDER_USUAL.load(Ordering::Relaxed))
 }
 
 /// Whole-frame scheduling diagnostic, separate from GPU timestamp readback (which would serialize the workload).

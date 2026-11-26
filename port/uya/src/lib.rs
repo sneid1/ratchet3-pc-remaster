@@ -43,6 +43,8 @@ pub mod replay;
 pub mod sampler;
 pub mod seen;
 pub mod settings;
+#[cfg(windows)]
+pub mod setup;
 pub mod shadows;
 pub mod shafts;
 pub mod sky;
@@ -69,6 +71,20 @@ pub const LEVEL_LEFT: u32 = 0x1D_4CF0;
 /// `level_current` in RAM `ram`: for a front end's frame, the level being entered (0 or -1: none).
 pub fn level_current(ram: &[u8]) -> u32 {
     u32::from_le_bytes(ram[LEVEL_CURRENT as usize..][..4].try_into().expect("4 bytes"))
+}
+
+/// The level loader's step, 0 to 5: the loader (the front end's function at 0x39A4A8, Veldin's at 0x428518, one copy in each
+/// program) reads the next level a part at a time, indexing its jump table (the front end's at 0x31C1A0) by this word and
+/// advancing it as each part is read. The front end names the level it enters (`level_current`) and puts the step back to 0 in
+/// one place (0x3BD610); its space scene of the level's arrival, the load screen, shows from step 2 on (its main loop keeps
+/// `step >= 2` in the byte at gp - 0x3BB0, 0x3BD870, for the screen it draws the field after). NEW GAME into Veldin: step 0
+/// from the save slot written (field 767) through the slot screen's fade to black, 2 from the load screen's first picture (823),
+/// 5 from 1119 until Veldin's own picture (1268).
+pub const LOAD_STEP: u32 = 0x1D_4B48;
+
+/// `LOAD_STEP` in RAM `ram`.
+pub fn load_step(ram: &[u8]) -> i32 {
+    i32::from_le_bytes(ram[LOAD_STEP as usize..][..4].try_into().expect("4 bytes"))
 }
 
 /// The pad buttons of every press whose fields include field `f` (`--press FIELD:BUTTONS:FIELDS`).

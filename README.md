@@ -4,6 +4,10 @@
 
 A native PC port of Up Your Arsenal (PS2, 2004), built from the game's own code: the disc's machine code is translated ahead of time and runs on this project's own runtime and renderer, with this project's own code where the PS2 had hardware. You bring your own copy of the game, the USA disc (SCUS-97353), and the disc stays in play the whole time, streaming what it streamed on the PlayStation 2.
 
+## Trailer
+
+[![The trailer on YouTube: the PS2 original and the PC remaster side by side, then gameplay](docs/trailer.jpg)](https://youtu.be/ZR9O042GjWg)
+
 ## What it looks like
 
 <p float="left">
@@ -39,13 +43,9 @@ A native PC port of Up Your Arsenal (PS2, 2004), built from the game's own code:
 
 With [RecompLauncher](https://github.com/elripalda/RecompLauncher) (recommended): install the game, drop your `.iso` on the setup screen when asked, press Play. The release's updated-textures volumes are optional; download them from the release page and extract them into the game's folder (a README inside each volume says where).
 
-By hand: download `ratchet3-pc-remaster-<version>-Windows-x64.zip` from [Releases](https://github.com/sneid1/ratchet3-pc-remaster/releases), extract it anywhere, and run `uya.exe`:
+By hand: download `ratchet3-pc-remaster-<version>-Windows-x64.zip` from [Releases](https://github.com/sneid1/ratchet3-pc-remaster/releases), extract it anywhere, and double-click `uya.exe`. The first time, it asks for your disc image (or takes an `.iso` you put next to it), checks that it is the USA disc and remembers it; after that it starts straight away. From a command line, `uya.exe play C:\path\to\SCUS_973.53.iso` plays a given image.
 
-```
-uya.exe play C:\path\to\SCUS_973.53.iso
-```
-
-Without the textures volumes the game plays with its own textures; with them, it finds them beside the program. Saves, settings and logs are written next to the program by default; `--profile DIR` moves them.
+Without the textures volumes the game plays with its own textures; with them, it finds them beside the program. Started by a double-click, as through RecompLauncher, the game keeps its saves, settings, log and remembered disc in its own folder; `uya.exe play` from a command line keeps them in `%USERPROFILE%\Games\Ratchet and Clank 3` unless `--profile DIR` names another folder.
 
 ## Building from source
 

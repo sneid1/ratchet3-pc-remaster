@@ -291,6 +291,8 @@ const MAIN_W: usize = 0x1D89A4;
 const MAIN_Y: usize = 0x1D89B0;
 const MAIN_H: usize = 0x1D89C8;
 const MAIN_ITEMS: usize = 5;
+/// The main menu's MULTIPLAYER item (`Menus::main_menu_items`).
+const MAIN_MULTIPLAYER: usize = 2;
 
 const PAUSED: u32 = 1;
 /// The pause list's record's word set while the pause list itself takes the input (`MenuGlobals::pause_record`).
@@ -783,12 +785,17 @@ impl Menus {
     /// menu looked frozen. The item is disabled as the game's menu disables an item (its byte +8 clear: the menu's update, 0x3B4ED8, draws it
     /// grey, Up and Down pass over it, Cross on it does nothing; the pointer passes over it too, `field`), and the highlight moves
     /// off it to NEW GAME. The main menu shows only after the game's first calls of the card, which read its folder.
-    pub fn offer_load(&self, ram: &mut [u8], saved: Option<bool>) {
+    /// MULTIPLAYER (item 2) is disabled the same way, always: the port leaves multiplayer out (PLAN 4, "Scope left out": its menu
+    /// and maps, levels 39 to 55, are not translated). Chosen, the game set up the EE's TLB for the multiplayer program (the SDK's
+    /// InitTLB: Wired 0, then syscall 0x56, SetTLBEntry, for each entry of its table, from 0x124640), which the port's kernel does
+    /// not answer, and the game stopped.
+    pub fn main_menu_items(&self, ram: &mut [u8], saved: Option<bool>) {
         if !Menus::front_end(ram) || r32(ram, SCREEN) != MAIN_MENU {
             return;
         }
         let saved = saved.expect("the front end's main menu before the game's first call of the memory card");
         ram[MAIN_TABLE + 8] = saved as u8;
+        ram[MAIN_TABLE + 16 * MAIN_MULTIPLAYER + 8] = 0;
         if !saved && r32(ram, MAIN_INDEX) == 0 {
             ram[MAIN_INDEX..MAIN_INDEX + 4].copy_from_slice(&1u32.to_le_bytes());
         }

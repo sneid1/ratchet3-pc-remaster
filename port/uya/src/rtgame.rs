@@ -113,6 +113,13 @@ impl crate::control::Game for RtGame<'_> {
     fn request_scene(&mut self, record: u32) -> Result<String, String> {
         request_scene(self.0, record)
     }
+    fn request_mode(&mut self, mode: u32, arg: u32) -> Result<String, String> {
+        let f = level_function(self.0, "game_mode_request", |m, a| (0..3).all(|k| rd32(&m.ram, a + 4 * k) == MODE_REQUEST_SIG[k as usize]))?;
+        match self.0.call_between(f, &[mode, 1, arg, 0, 0])? as i32 {
+            0 => Ok(format!("level {}'s mode {mode} with {arg} asked for", rd32(&self.0.ram, crate::LEVEL_CURRENT))),
+            r => Err(format!("ask {mode} {arg}: game_mode_request at {f:#x} returned {r}")),
+        }
+    }
     fn request_chunk(&mut self, loader: u32, chunk: u32) -> Result<(), String> {
         if self.game_mode() != Some(0) { return Err("chunk: the level must be in play".into()); }
         // The LEVEL header in the game's table of contents. Blocks 4..6 hold the three chunks.
@@ -665,9 +672,16 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
             (at, a) if f.saturating_sub(at) <= 4 => a,
             _ => Vec::new(),
         };
-        menus.offer_load(&mut m.ram[..RAM], m.iop.has_save());
-        if let Some(s) = menus.before(&mut m.ram[..RAM], pointer, &mut pad, &answers, &presses, pad_kind) {
-            println!("play: field {f}: settings {s:?}");
+        menus.main_menu_items(&mut m.ram[..RAM], m.iop.has_save());
+        // A new profile on an integrated GPU: RESOLUTION 720P, as the player's change would be (`play::INTEGRATED_720`).
+        let integrated = crate::play::INTEGRATED_720.swap(false, Ordering::Relaxed).then(|| {
+            let mut s = menus.settings;
+            s.values[crate::settings::index("resolution")] = crate::settings::HEIGHTS.iter().position(|&h| h == 720).expect("720 among the heights") as u8;
+            menus.settings = s;
+            s
+        });
+        if let Some(s) = menus.before(&mut m.ram[..RAM], pointer, &mut pad, &answers, &presses, pad_kind).or(integrated) {
+            println!("play: field {f}: settings {s}");
             s.save(&format!("{profile}/settings.txt"))?;
             audio.set_hq(s.get("audio_mixing") == 1);
             audio.set_clean_reverb(s.get("reverb") == 1);
@@ -812,8 +826,12 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
             None => false,
         };
         // The memory card messages, the front end's and a pause's SAVE screen's while it checks the card: answered for the player
-        // and never shown (`play::MC_MESSAGE`).
-        let front_end = matches!(rd32(&m.ram, crate::LEVEL_CURRENT), 0 | u32::MAX);
+        // and never shown (`play::MC_MESSAGE`). A message hidden in the front end stays the front end's until it goes, while the
+        // front end's program is in RAM: LOAD GAME's "Loading Data" (23) is still up when the save it reads names its level
+        // (level_current, some 110 fields before the box goes), and those fields' frames were shown, the box over the slots, in
+        // the place and shape of the arrival's space scene that a level being entered gives a front end's frame (`play.rs`,
+        // `render_screen_walked`'s fill): the whole screen zoomed in for some two seconds after a save was clicked.
+        let front_end = matches!(rd32(&m.ram, crate::LEVEL_CURRENT), 0 | u32::MAX) || (m.front_end() && MC_HIDDEN.contains(&message));
         let now = if front_end || menus.save_state(&m.ram[..RAM]).is_some_and(|s| s >= SAVE_CARD) {
             rd32(&m.ram, MC_MESSAGE)
         } else {

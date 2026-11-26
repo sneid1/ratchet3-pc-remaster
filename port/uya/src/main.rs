@@ -5,6 +5,11 @@
 //!   uya play <disc.iso> [options]
 //!       the game in a window (src/play.rs says what each option does): boot, the front end, NEW GAME and every story level.
 //!
+//!   uya (nothing after it: a double-click)
+//!       `uya play` as RecompLauncher runs it (the program's folder the profile, its updated-textures the --rift), with the disc
+//!       image played last, else one beside the program, else one picked in Windows' open dialog, checked to be the USA disc and
+//!       remembered (src/setup.rs).
+//!
 //!   uya native <disc.iso> <ram.bin>[,<ram.bin>...] <level> <out.png> [--height H] [--hd DIR [--rift DIR]] [--preset NAME] [--set KEY=VALUE,...] [--prompts DEVICE [--profile DIR]] [--frames-dir DIR]
 //!       draws the native picture (896 pixels high) of a RAM dump that `play` (UYA_RAM_AT) or the reference's `uyaref frames
 //!       --ram-dir` wrote while level `level` was played, with the jobs file beside it; several dumps (consecutive fields) are drawn
@@ -39,7 +44,28 @@ fn main() -> ExitCode {
     unsafe {
         std::env::set_var("VK_LAYER_bandicam_helper_DEBUG_1", "1");
     }
-    let a: Vec<String> = std::env::args().skip(1).collect();
+    let mut a: Vec<String> = std::env::args().skip(1).collect();
+    // Started with nothing after it (a double-click): the disc image played last, beside the program, or asked for (`setup.rs`),
+    // played as RecompLauncher starts the game (public/recomplauncher.json): the profile the program's own folder, where the
+    // release keeps its texture_replacements and its saves go, the updated textures its updated-textures folder; what stops the
+    // game then is said in a message box. A profile of its own elsewhere stopped at once: it had no texture_replacements.
+    let bare = a.is_empty();
+    let program_dir = || -> String {
+        let exe = std::env::current_exe().expect("the program's path");
+        exe.parent().expect("the program's folder").to_string_lossy().into_owned()
+    };
+    #[cfg(windows)]
+    if bare {
+        let dir = program_dir();
+        match uya::setup::disc(&dir) {
+            Ok(Some(iso)) => a = vec!["play".to_string(), iso, "--profile".to_string(), dir.clone(), "--rift".to_string(), format!("{dir}/updated-textures")],
+            Ok(None) => return ExitCode::SUCCESS,
+            Err(e) => {
+                uya::setup::stopped(&e, &format!("{dir}/play.log"));
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     // The batch commands run below normal priority (`uya play` sets its own back to normal).
     #[cfg(windows)]
     uya::lower_priority();
@@ -87,6 +113,10 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("{e}");
+            #[cfg(windows)]
+            if bare {
+                uya::setup::stopped(&e, &format!("{}/play.log", program_dir()));
+            }
             ExitCode::FAILURE
         }
     }

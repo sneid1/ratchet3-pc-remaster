@@ -1520,6 +1520,15 @@ impl Materials {
         self.views.len() as u32 - 1
     }
 
+    /// Texture `index` (a frame buffer `push_view` added) is `view`, `size` its pixels, from now on: the frame buffer made again
+    /// at the picture's new size (`eedraw::EeTextures::resize`). The bind groups made for it go; `get` makes them again.
+    pub fn replace_view(&mut self, index: u32, view: wgpu::TextureView, size: (u32, u32)) {
+        let t = index as usize;
+        self.views[t] = view;
+        self.sizes[t] = (size.0 as usize, size.1 as usize);
+        self.keys.retain(|k, _| k.0 != index);
+    }
+
     fn min_alpha(t: &uyafmt::core::Texture) -> u8 {
         t.levels.iter().flat_map(|l| l.iter()).map(|p| p[3]).min().expect("a nonempty texture")
     }

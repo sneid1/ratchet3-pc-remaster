@@ -154,6 +154,9 @@ pub(crate) struct EeTextures {
     pub grab: wgpu::Texture,
     grab_index: u32,
     pub grabbed: std::collections::HashSet<u32>,
+    /// The grab as it was made, and its size, once the picture's size has changed since (`resize` brings it over from this one,
+    /// never from a copy of a copy); None again when the next grab is made.
+    pub grab_original: Option<(wgpu::Texture, (u32, u32))>,
     /// The native picture's size.
     size: (u32, u32),
     /// The HUD's tables and banks; this frame's GS blocks of its textures and palettes (from the header's copy in RAM) and the
@@ -246,7 +249,8 @@ impl EeTextures {
         let main_snap = target_texture(device, "native picture copy", size, true);
         let main_dst = target_texture(device, "native picture copy for a GS blend", size, false);
         let main_snap_index = base.push_view(main_snap.create_view(&Default::default()), size, &mut []);
-        let grab = target_texture(device, "grabbed frame", size, false);
+        // Drawn into when the picture's size changes (`resize`), and copied from into the level's state made again (`reload`).
+        let grab = target_texture(device, "grabbed frame", size, true);
         let grab_index = base.push_view(grab.create_view(&Default::default()), size, &mut []);
         let main_gs = target_texture(device, "main frame at the GS's size", MAIN_GS, true);
         let main_gs_index = base.push_view(main_gs.create_view(&Default::default()), MAIN_GS, &mut []);
@@ -257,7 +261,7 @@ impl EeTextures {
         sizes.push((size.0 as usize, size.1 as usize));
         sizes.push((MAIN_GS.0 as usize, MAIN_GS.1 as usize));
         sizes.push((DISPLAY_GS.0 as usize, DISPLAY_GS.1 as usize));
-        let mut t = EeTextures { base, by_aref: HashMap::new(), offsets, cluts, sizes, white, region, loaded: HashMap::new(), ram_made: HashMap::new(), menu, menu_at: None, streams, streamed: Vec::new(), stream_bytes: HashMap::new(), targets: HashMap::new(), main_snap, main_snap_index, main_dst, main_gs, main_gs_index, main_gs_map: [0.0; 4], display_gs, display_gs_index, grab, grab_index, grabbed: std::collections::HashSet::new(), size, hud, hud_tex: HashMap::new(), hud_pal: HashMap::new(), hud_bases: [0; 5], hud_made: HashMap::new(), ring_tabs: std::collections::HashSet::new(), ring_tab_icon: None, gs_ram, gs_base: 0, gs_made: HashMap::new(), gsm: crate::gsmem::GsMemory::new(), gsm_cache: HashMap::new(), gsm_made: HashMap::new(), prompts: Default::default(), frame: Vec::new(), pre: Vec::new() };
+        let mut t = EeTextures { base, by_aref: HashMap::new(), offsets, cluts, sizes, white, region, loaded: HashMap::new(), ram_made: HashMap::new(), menu, menu_at: None, streams, streamed: Vec::new(), stream_bytes: HashMap::new(), targets: HashMap::new(), main_snap, main_snap_index, main_dst, main_gs, main_gs_index, main_gs_map: [0.0; 4], display_gs, display_gs_index, grab, grab_index, grabbed: std::collections::HashSet::new(), grab_original: None, size, hud, hud_tex: HashMap::new(), hud_pal: HashMap::new(), hud_bases: [0; 5], hud_made: HashMap::new(), ring_tabs: std::collections::HashSet::new(), ring_tab_icon: None, gs_ram, gs_base: 0, gs_made: HashMap::new(), gsm: crate::gsmem::GsMemory::new(), gsm_cache: HashMap::new(), gsm_made: HashMap::new(), prompts: Default::default(), frame: Vec::new(), pre: Vec::new() };
         // The display buffer, which each frame's picture is copied into.
         t.target(device, DISPLAY, MAIN_GS.1)?;
         Ok(t)
@@ -597,18 +601,7 @@ impl EeTextures {
         }
         let tex = target_texture(device, "EE target", size, true);
         let snap = target_texture(device, "EE target copy", size, false);
-        let depth = device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("EE target depth"),
-                size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: crate::native::DEPTH,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            })
-            .create_view(&Default::default());
+        let depth = target_depth(device, size);
         let EeTextures { base, by_aref, sizes, .. } = &mut *self;
         let mut others: Vec<&mut Materials> = by_aref.values_mut().collect();
         let index = base.push_view(tex.create_view(&Default::default()), size, &mut others);
@@ -619,6 +612,75 @@ impl EeTextures {
         self.targets.insert(key, Target { gs, size, tex, view, depth, snap, index, snap_index });
         Ok(&self.targets[&key])
     }
+
+    /// The native picture `size` from now on (the game's view at another shape, the window's: PLAN 4.2; another RESOLUTION):
+    /// the textures of the picture's size made again at it, in `enc`. The copies a frame makes before it reads them (`main_snap`,
+    /// `main_dst`) start empty; the grabbed frame (a paused level's background) and the display buffer (the picture shown, which
+    /// a fade and the next grab start from) keep what they hold, at the same scale and centred, the grab always from the frame
+    /// as it was grabbed (`grab_original`), so a drag of the window's edge does not wear it away. A change of shape made the
+    /// level's whole GPU state again before (half a second on an integrated GPU, at every width a drag passed through), the grab
+    /// with it, and a paused level then drew its background from the game's RAM, where the port's GS leaves no picture (the
+    /// player, v0.1.3: "Visual glitches occur when attempting to manually resize the window; the entire screen bugs out and
+    /// becomes pixelated").
+    pub fn resize(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, pipes: &Pipelines, size: (u32, u32)) {
+        if size == self.size {
+            return;
+        }
+        // Where pixel (x, y) of a picture of `size` lies in a picture of `from`'s size (`Pipelines::downsample`'s map): the
+        // same scale both ways, by the heights, their middles together on whole pixels (a width change alone copies texel for
+        // texel).
+        let map = |from: (u32, u32)| {
+            let s = from.1 as f32 / size.1 as f32;
+            [s, ((from.0 as f32 - s * size.0 as f32) / 2.0).round(), s, 0.0]
+        };
+        let old = self.size;
+        let EeTextures { base, by_aref, sizes, targets, main_snap, main_snap_index, main_dst, grab, grab_index, grab_original, size: now, .. } = &mut *self;
+        // A frame buffer's texture in every material set, at its new size.
+        let mut replace = |index: u32, tex: &wgpu::Texture, at: (u32, u32)| {
+            base.replace_view(index, tex.create_view(&Default::default()), at);
+            for m in by_aref.values_mut() {
+                m.replace_view(index, tex.create_view(&Default::default()), at);
+            }
+            sizes[index as usize] = (at.0 as usize, at.1 as usize);
+        };
+        *main_snap = target_texture(device, "native picture copy", size, true);
+        replace(*main_snap_index, main_snap, size);
+        *main_dst = target_texture(device, "native picture copy for a GS blend", size, false);
+        let (from, from_size) = grab_original.get_or_insert_with(|| (grab.clone(), old)).clone();
+        *grab = target_texture(device, "grabbed frame", size, true);
+        pipes.downsample(device, enc, &from, grab, map(from_size));
+        replace(*grab_index, grab, size);
+        // The display buffer: the picture's size (`target`).
+        if let Some(t) = targets.get_mut(&DISPLAY) {
+            let at = ((t.gs.0 * size.0).div_ceil(MAIN_GS.0), (t.gs.1 * size.1).div_ceil(MAIN_GS.1));
+            let tex = target_texture(device, "EE target", at, true);
+            pipes.downsample(device, enc, &t.tex, &tex, map(t.size));
+            t.snap = target_texture(device, "EE target copy", at, false);
+            t.depth = target_depth(device, at);
+            t.view = tex.create_view(&Default::default());
+            replace(t.index, &tex, at);
+            replace(t.snap_index, &t.snap, at);
+            t.tex = tex;
+            t.size = at;
+        }
+        *now = size;
+    }
+}
+
+/// A frame buffer's depth (`EeTextures::target`): the game's shadow volumes count in its stencil.
+fn target_depth(device: &wgpu::Device, size: (u32, u32)) -> wgpu::TextureView {
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("EE target depth"),
+            size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: crate::native::DEPTH,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+        .create_view(&Default::default())
 }
 
 /// A texture a frame buffer is drawn into (`render`) or copied into, of the native picture's format.
@@ -863,7 +925,13 @@ fn full_width(prims: &[(usize, EePrim)]) -> Vec<bool> {
             hi = s[1];
             j += 1;
         }
-        let f = first[0] <= 1.0 && hi >= MAIN_GS.0 as f64 - 1.0;
+        // A row within a narrower scissor is clipped to a box of the 2D layer, not a pass over the whole picture: the MAP's and
+        // the GALACTIC MAP's backgrounds are drawn from x -11 to 529 inside their panel's scissor (46 to 464), and stretched
+        // across the wide picture with their scissor they showed past the panel, to the right and the left (the player: "some
+        // sub menus the picture ... seem to stretch outside the box to the right").
+        let sc = p.scissor;
+        let scissor_full = (sc & 0x7ff) as f64 <= 1.0 && (sc >> 16 & 0x7ff) as f64 + 1.0 >= MAIN_GS.0 as f64 - 1.0;
+        let f = first[0] <= 1.0 && hi >= MAIN_GS.0 as f64 - 1.0 && scissor_full;
         full[i..j].fill(f);
         i = j;
     }

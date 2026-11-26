@@ -694,6 +694,8 @@ pub struct Native {
     boot: std::sync::Arc<uyafmt::boot::Boot>,
     /// The loaded level and its GPU scene.
     level: Option<(u32, Gpu)>,
+    /// The level's GPU state is made again at the next level frame (`reload`), what it shows brought over.
+    reload_level: bool,
     /// The frames' walks (`Walker`), made here unless `play`'s walk thread has taken it (`take_walker`).
     walker: Option<Walker>,
     /// The ambient occlusion option's passes (`ao.rs`; shared with the frame's replays).
@@ -984,7 +986,7 @@ impl Native {
         println!("native: ray tracing: {}", if rays { "hardware ray queries (EXPERIMENTAL_RAY_QUERY)" } else { "none on this GPU" });
         println!("native: pipelines made in {:.0} ms", made.elapsed().as_secs_f64() * 1000.0);
         let lighting = std::sync::Arc::new(crate::lighting::Lighting::new(&device, &terrain, &view_layout, &mat_layout, blend, DEPTH));
-        Ok(Native { no_view: false, gsm: crate::gsmem::GsMemory::new(), gsm_pending: Vec::new(), gsm_settled: Vec::new(), broken: None, instance, adapter, quiet: false, prompts: None, device, queue, pass, fail, objects, shadow_pipes, view_layout, mat_layout, size: (width, height), k: 1.0, iso: iso.to_string(), globals, pool: std::sync::Arc::new(Pool::new(POOL_THREADS)?), fx_micro, boot, level: None, walker: Some(walker), ao, lighting, sky_pipes, reflections, shafts, light_shadows, rt, ee_spare: Vec::new(), moby_spare: Vec::new(), moby_prev_spare: Vec::new(), moby_lit_spare: Vec::new(), fx_spare: Vec::new(), fx_prev_spare: Vec::new(), fx_lit_spare: Vec::new(), fx_draw_spare: Vec::new(), light_spare: Vec::new(), moby_draw_spare: Vec::new(), run_spare: Vec::new(), rec_spare: Vec::new(), rec_cap: 0, shrub_spare: (Vec::new(), Vec::new()), sets: (0..SETS).map(|_| FrameSet::default()).collect(), ee_vert_spare: Vec::new(), water_spare: Vec::new(), replays: false, defer_world: false, outbox: Outbox::default(), raster: None, dlss_skipped: false, replay: None, set_held: None, depth: None, last_stale: None, last_world: None, dlss_offered: dlss_support.super_resolution_supported, dlss_sdk: None, dlss_pipes, upscaler: None, screen_tex: None, said: Default::default(), gpu_passes: crate::gpu_profile::Profiler::new() })
+        Ok(Native { no_view: false, gsm: crate::gsmem::GsMemory::new(), gsm_pending: Vec::new(), gsm_settled: Vec::new(), broken: None, instance, adapter, quiet: false, prompts: None, device, queue, pass, fail, objects, shadow_pipes, view_layout, mat_layout, size: (width, height), k: 1.0, iso: iso.to_string(), globals, pool: std::sync::Arc::new(Pool::new(POOL_THREADS)?), fx_micro, boot, level: None, reload_level: false, walker: Some(walker), ao, lighting, sky_pipes, reflections, shafts, light_shadows, rt, ee_spare: Vec::new(), moby_spare: Vec::new(), moby_prev_spare: Vec::new(), moby_lit_spare: Vec::new(), fx_spare: Vec::new(), fx_prev_spare: Vec::new(), fx_lit_spare: Vec::new(), fx_draw_spare: Vec::new(), light_spare: Vec::new(), moby_draw_spare: Vec::new(), run_spare: Vec::new(), rec_spare: Vec::new(), rec_cap: 0, shrub_spare: (Vec::new(), Vec::new()), sets: (0..SETS).map(|_| FrameSet::default()).collect(), ee_vert_spare: Vec::new(), water_spare: Vec::new(), replays: false, defer_world: false, outbox: Outbox::default(), raster: None, dlss_skipped: false, replay: None, set_held: None, depth: None, last_stale: None, last_world: None, dlss_offered: dlss_support.super_resolution_supported, dlss_sdk: None, dlss_pipes, upscaler: None, screen_tex: None, said: Default::default(), gpu_passes: crate::gpu_profile::Profiler::new() })
     }
 
     /// Level `level`'s scene on the GPU: its vertices and indices, each terrain texture with its mip levels, and per GS register
@@ -1223,11 +1225,33 @@ impl Native {
     }
 
     /// Pictures `height` pixels high from now on (the play window's resolution setting), at the shape the last frame was drawn
-    /// at: the level's GPU state, which holds the size, is made again at the next frame.
+    /// at (`reshape`).
     pub fn resize(&mut self, height: u32) {
-        self.size = (width(height, self.k), height);
-        self.level = None;
-        self.screen_tex = None;
+        self.reshape((width(height, self.k), height));
+    }
+
+    /// Pictures of `size` from now on (the game's view at another shape: the window's, PLAN 4.2; another RESOLUTION): the
+    /// level's and the front end's EE textures follow (`EeTextures::resize`, in the next frame's commands: in order with the
+    /// frames before when a presenter applies them), the other textures of the picture's size are made at it when next asked
+    /// for, the level stays loaded, and the next world frame begins a shot (no picture between two frames of two sizes). A change
+    /// of shape made the level's whole GPU state again before, and the front end's only when the front end saw it: a level
+    /// frame's change left the front end's EE textures at the old width, and the next menu frame's scissors were that width in
+    /// a picture of the new one (the player's v0.1.3 crash on quitting to the main menu after going fullscreen: "Scissor Rect {
+    /// x: 0, y: 0, w: 2039, h: 1080 } is not contained in the render target (1920, 1080, 1)").
+    fn reshape(&mut self, size: (u32, u32)) {
+        if size == self.size {
+            return;
+        }
+        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("native picture size") });
+        if let Some((_, g)) = self.level.as_mut() {
+            g.ee_textures.resize(&self.device, &mut enc, &self.shadow_pipes, size);
+        }
+        if let Some(t) = self.screen_tex.as_mut() {
+            t.resize(&self.device, &mut enc, &self.shadow_pipes, size);
+        }
+        self.outbox.commands.push(enc.finish());
+        self.size = size;
+        self.last_world = None;
     }
 
     /// DLSS at the option's mode for the picture's size (`dlss.rs`): made when the option is turned on or the size changes,
@@ -1254,10 +1278,11 @@ impl Native {
         Ok(())
     }
 
-    /// The level's GPU state made again at the next frame (the texture filtering option changed: its materials hold the samplers).
+    /// The level's GPU state made again at the next level frame (the texture filtering option changed: its materials hold the
+    /// samplers), with what its display buffer and grab hold brought over (`render_walked`).
     pub fn reload(&mut self) {
         self.last_world = None;
-        self.level = None;
+        self.reload_level = true;
     }
 
     /// Draws the world of the level being played with the game's camera and zone record in `ram` and returns the picture.
@@ -1376,16 +1401,12 @@ impl Native {
             }
         };
         let g = *self.globals(level)?;
-        // The picture at the shape the game's view was made at this frame (PLAN 4.2): a change of shape makes the level's GPU
-        // state, which holds the size, again (as `resize`).
+        // The picture at the shape the game's view was made at this frame (PLAN 4.2; `reshape`).
         self.k = cam.k;
-        if width(self.size.1, cam.k) != self.size.0 {
-            self.size.0 = width(self.size.1, cam.k);
-            self.level = None;
-        }
+        self.reshape((width(self.size.1, cam.k), self.size.1));
         // The terrain in the game's terrain buffer: the core's until a level chunk loads, then level chunk N's.
         let chunk = u32::from_le_bytes(ram[g.level_chunk as usize..g.level_chunk as usize + 4].try_into().expect("4 bytes"));
-        if self.level.as_ref().map(|l| l.0) != Some(level) {
+        if self.reload_level || self.level.as_ref().map(|l| l.0) != Some(level) {
             // The display buffer is GS memory, which a level change leaves as it was: the picture the TV shows until a frame
             // copies another into it. The level's GPU state made again holds a display buffer of its own, so it starts with the
             // one the level before left. Made empty, a trip between planets lost its last picture as the next level's code
@@ -1393,21 +1414,30 @@ impl Native {
             // sending nothing, then fades that picture out from the display buffer (Veldin to Florana in the emulated game,
             // fields 2814 to 2880), and the fade and every field drawing nothing after the next level's load showed the empty
             // buffer, black (the player, 24 November 2026: "the planet disappears for a few seconds at the end of the loading
-            // screen ship flight while the loading screen is still up"). The level before has this picture's shape: a change of
-            // shape makes the GPU state again above, the display buffer with it.
+            // screen ship flight while the loading screen is still up"). The level before has this picture's size (`reshape`).
+            // The same level made again (`reload`: a texture filtering or UPDATED TEXTURES change, made in a pause's options)
+            // keeps its grab too, the pages it holds with it: the paused level's background, which the game puts back each pause
+            // field and which the port's GS leaves nowhere else (made empty, the pause showed the game's RAM there instead).
+            let same = self.level.as_ref().is_some_and(|l| l.0 == level);
+            self.reload_level = false;
             let display = self.level.as_ref().map(|(_, g)| [g.ee_textures.targets[&crate::eedraw::DISPLAY].tex.clone(), g.ee_textures.display_gs.clone()]);
+            let grab = self.level.as_ref().filter(|_| same).map(|(_, g)| (g.ee_textures.grab.clone(), g.ee_textures.grabbed.clone()));
             if let Err(e) = self.load(ram, level) {
                 self.broken = Some(e.clone());
                 return Err(e);
             }
+            let ee = &mut self.level.as_mut().expect("loaded above").1.ee_textures;
+            let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("display buffer across a level change") });
             if let Some(display) = display {
-                let ee = &self.level.as_ref().expect("loaded above").1.ee_textures;
-                let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("display buffer across a level change") });
                 for (from, to) in display.iter().zip([&ee.targets[&crate::eedraw::DISPLAY].tex, &ee.display_gs]) {
                     enc.copy_texture_to_texture(from.as_image_copy(), to.as_image_copy(), from.size());
                 }
-                self.queue.submit([enc.finish()]);
             }
+            if let Some((tex, pages)) = grab {
+                enc.copy_texture_to_texture(tex.as_image_copy(), ee.grab.as_image_copy(), tex.size());
+                ee.grabbed = pages;
+            }
+            self.queue.submit([enc.finish()]);
         }
         self.update_upscaler()?;
         // GS memory as the transfers of the fields before leave it is the level's EE textures' for the frame (`take_uploads`).
@@ -1636,11 +1666,7 @@ impl Native {
         crate::mobies::dump_field(jobs.field);
         self.no_view = false;
         let k = uyart::view_k();
-        if width(self.size.1, k) != self.size.0 {
-            self.size.0 = width(self.size.1, k);
-            self.level = None;
-            self.screen_tex = None;
-        }
+        self.reshape((width(self.size.1, k), self.size.1));
         self.k = k;
         // The view at the picture's shape; the PS2's frame spans tangents 0.62 and 0.4805.
         let tan = if fill { [0.62, 0.4805 / k] } else { [0.62 * k, 0.4805] };
@@ -1881,6 +1907,10 @@ impl Native {
             let pages = t.main_pages()?;
             self.level.as_mut().expect("loaded above").1.ee_textures.grabbed.extend(pages);
             grab_now = true;
+        }
+        if grab_now {
+            // The grab made below is the one a change of the picture's size brings over from now on (`EeTextures::resize`).
+            self.level.as_mut().expect("loaded above").1.ee_textures.grab_original = None;
         }
         // The world layers whose programs ran this frame (terrain 1 and 7, ties 2 and 3, shrubs 4 and 5, effects 6).
         let ran = walk.ran;
