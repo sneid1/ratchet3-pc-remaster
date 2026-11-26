@@ -447,7 +447,7 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
     // The GS's PMODE as last seen (logged when it changes: the display's own blend of the picture with the background).
     let mut pmode_was = u64::MAX;
     // A RAM buffer kept back from a frame the renderer was not ready for (the field not drawn), and the fields drawn.
-    let (mut spare, mut drawn): (Option<uyart::RamCopy>, u64) = (None, 0);
+    let (mut spare, mut drawn): (Vec<uyart::RamCopy>, u64) = (Vec::new(), 0);
     // The image transfers into GS memory of the fields and frames the renderer did not get since the last it did, oldest first
     // (`Frame::uploads_before`): a level's load sends the GS what the space scene samples while the renderer takes few of its
     // fields (fast loading runs it unpaced).
@@ -459,9 +459,31 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
     };
     // The main program (the moby walk's), for the control channel's `until pause`.
     // The main program, for walking jobs the renderer does not get (`read_back`) and for the control channel's `until pause`.
-    let boot = uyafmt::boot::boot(iso)?;
+    let boot = Arc::new(uyafmt::boot::boot(iso)?);
+    // A frame the renderer was too busy to take is walked for its read-back (`main_read_back`) on a thread of its own, not on the
+    // game's core: the walk of a frame (Florana with DRAW DISTANCE FAR, 6.5 ms on this PC with the other cores busy) made a field
+    // with a dropped picture overrun its 16.7 ms, so a renderer that fell behind slowed the game as well (the v0.1.4 player's
+    // i7-13700K: a fifth to a third of the pictures dropped and 53 to 57 fields a second). It takes the frame's jobs and RAM
+    // buffer and gives back the pages and the buffer; the game thread takes what it gave back each field, and all of it before it
+    // hands the renderer its next frame, which carries those pages (`read_back`).
+    let (to_read_back, read_back_rx) = std::sync::mpsc::channel::<(crate::jobs::Kicked, uyart::RamCopy)>();
+    let (read_back_tx, read_backs) = std::sync::mpsc::channel::<(Result<Vec<u32>, String>, uyart::RamCopy)>();
+    let walker_boot = boot.clone();
+    std::thread::Builder::new()
+        .name("uya read-back".into())
+        .spawn(move || {
+            for (jobs, ram) in read_back_rx {
+                let pages = jobs.into_frame(&ram).map(|fj| main_read_back(&fj, &walker_boot));
+                if read_back_tx.send((pages, ram)).is_err() {
+                    break;
+                }
+            }
+        })
+        .map_err(|e| format!("play: the read-back thread: {e}"))?;
+    // The frames with the read-back thread.
+    let mut reading_back = 0usize;
     let ctl_boot = match control {
-        Some(_) => Some(&boot),
+        Some(_) => Some(&*boot),
         None => None,
     };
     // Cutscene skip (PLAN 10): every level's scene state (its SCENE record's word), the profile's seen cutscenes, and the
@@ -906,11 +928,17 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
             next = Instant::now();
             continue;
         }
+        // The read-back thread's finished walks: their pages for the next frame drawn, their buffers spare.
+        while let Ok((pages, ram)) = read_backs.try_recv() {
+            read_back.extend(pages?);
+            spare.push(ram);
+            reading_back -= 1;
+        }
         // A free RAM buffer for the frame: only one at hand, paced or not (the renderer busy: the field is not drawn, and the game
         // does not wait for a renderer a frame late: it drops a picture, not game time). The game waits for a renderer held on one
         // frame for more than two fields (a level's load, a long build: `play::renderer_held`), as on a loading screen, and a
         // control command's last field waits: its answer comes once its frame is drawn.
-        let buffer = match spare.take() {
+        let buffer = match spare.pop() {
             Some(b) => Some(b),
             None if settle || crate::play::renderer_held() => match back.recv() {
                 Ok(b) => Some(b),
@@ -930,6 +958,13 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
                 before_set = true;
             }
             Some(mut now) => {
+                // The pages of the frames the read-back thread still holds go with this one.
+                while reading_back > 0 {
+                    let (pages, ram) = read_backs.recv().map_err(|_| "play: the read-back thread stopped")?;
+                    read_back.extend(pages?);
+                    spare.push(ram);
+                    reading_back -= 1;
+                }
                 // The next field's start, needed only if it kicks no frame (`before_set`).
                 before_set = !out.kicked;
                 if before_set {
@@ -949,8 +984,8 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
                         }
                         Err(std::sync::mpsc::TrySendError::Full(Msg::Field(fr))) => {
                             read_back = fr.read_back;
-                            read_back.extend(main_read_back(&fr.jobs.into_frame(&fr.ram)?, &boot));
-                            spare = Some(fr.ram);
+                            to_read_back.send((fr.jobs, fr.ram)).map_err(|_| "play: the read-back thread stopped")?;
+                            reading_back += 1;
                             pending = fr.uploads_before;
                             pending.extend(fr.uploads);
                         }

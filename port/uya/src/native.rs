@@ -3167,6 +3167,28 @@ pub(crate) fn private_mb() -> f64 {
     m.rest[6] as f64 / (1 << 20) as f64
 }
 
+/// UYA_MEM_LOG: the GPU memory wgpu's allocator holds beside the process's private commit (this PC's driver charges the GPU's
+/// memory blocks to it), its allocations summed by name (a resource's label) and the largest names first, for the render
+/// thread's report every 300 fields (`play.rs`). None without the variable.
+pub(crate) fn mem_log(device: &wgpu::Device) -> Option<String> {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("UYA_MEM_LOG").is_some()) {
+        return None;
+    }
+    let r = device.generate_allocator_report().expect("UYA_MEM_LOG: Vulkan's allocator gives a report");
+    let mut by_name: HashMap<&str, (u64, u32)> = HashMap::new();
+    for a in &r.allocations {
+        let e = by_name.entry(a.name.as_str()).or_default();
+        e.0 += a.size;
+        e.1 += 1;
+    }
+    let mut names: Vec<_> = by_name.into_iter().collect();
+    names.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(b.0)));
+    let mb = |b: u64| b as f64 / (1 << 20) as f64;
+    let top = names.iter().take(16).map(|(n, (s, c))| format!("{n} {:.1} MB x{c}", mb(*s))).collect::<Vec<_>>().join(", ");
+    Some(format!("mem: private {:.0} MB; GPU {} blocks, {:.0} MB reserved, {} allocations of {:.0} MB: {top}", private_mb(), r.blocks.len(), mb(r.total_reserved_bytes), r.allocations.len(), mb(r.total_allocated_bytes)))
+}
+
 /// The process's user and kernel CPU time (100 ns units) and its page faults so far (`Times::report`).
 fn process_counters() -> [u64; 3] {
     #[repr(C)]

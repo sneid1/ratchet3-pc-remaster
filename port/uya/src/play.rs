@@ -317,6 +317,11 @@ const ENDING: Duration = Duration::from_secs(10);
 #[cfg(windows)]
 static GAME_CORE: std::sync::OnceLock<Vec<u32>> = std::sync::OnceLock::new();
 
+/// How many cores of the fastest class besides the game's a PC with slower cores needs for the other threads to keep to them
+/// (`keep_game_core`): the frame builder, its walk thread, the presenter and the crew's four.
+#[cfg(windows)]
+const FAST_CORES: usize = 4;
+
 /// Keeps a core for the game's threads (Windows' CPU sets): the PC's last core of its fastest class, both its logical
 /// processors, for the host's field loop and the game's own threads (`uyart::kernel::THREAD_START`), which take turns, one
 /// running at a time. Every other thread of the process (the frame builder, the command encoders, the crew, the presenter, the
@@ -327,6 +332,12 @@ static GAME_CORE: std::sync::OnceLock<Vec<u32>> = std::sync::OnceLock::new();
 /// kept, two runs each way (23 November 2026): fields over 16.7 ms 24 and 26 before, 12 and 11 after; the game's frames dropped
 /// 23 and 24, then 14 and 13; the presenter's pictures as they were. Raising the game's priority instead made it worse (452
 /// such fields): it waits on the others.
+///
+/// On a PC with cores of two classes (Intel's performance and efficiency cores), the other threads take the fastest class's
+/// other cores alone when it has `FAST_CORES` of them, leaving the slower cores to the rest of the PC: the frame builder and its
+/// helpers each wait on the slowest of them, and the v0.1.4 player's i7-13700K (8 performance cores, 8 efficiency cores) built a
+/// Florana frame with DRAW DISTANCE FAR in 15 to 26 ms where this PC's one class of cores takes 8 to 10, every picture after
+/// the GPU late with it. A PC with fewer such cores keeps them all, as one with one class does.
 #[cfg(windows)]
 fn keep_game_core() -> Result<(), String> {
     use windows::Win32::System::SystemInformation::{CpuSetInformation, GetSystemCpuSetInformation, SYSTEM_CPU_SET_INFORMATION};
@@ -355,10 +366,23 @@ fn keep_game_core() -> Result<(), String> {
     if rest.is_empty() {
         return Err("play: the PC has one core: none to keep for the game's threads".into());
     }
-    let (own, rest): (Vec<u32>, Vec<u32>) = (own.iter().map(|s| s.3).collect(), rest.iter().map(|s| s.3).collect());
+    // The fastest class's other cores, when the PC has a slower class and enough of them (`FAST_CORES`).
+    let fast: Vec<&(u8, u16, u8, u32)> = rest.iter().copied().filter(|s| s.0 == class).collect();
+    let mut fast_cores: Vec<(u16, u8)> = fast.iter().map(|s| (s.1, s.2)).collect();
+    fast_cores.sort_unstable();
+    fast_cores.dedup();
+    let slower = rest.len() - fast.len();
+    let others = if slower > 0 && fast_cores.len() >= FAST_CORES { &fast } else { &rest };
+    let own: Vec<u32> = own.iter().map(|s| s.3).collect();
+    let others: Vec<u32> = others.iter().map(|s| s.3).collect();
     // SAFETY: the process's own handle and CPU set ids the system listed.
-    unsafe { SetProcessDefaultCpuSets(GetCurrentProcess(), Some(&rest)) }.ok().map_err(|e| format!("play: the process's CPU sets: {e}"))?;
-    println!("play: the game's threads have core {core} (CPU sets {own:?}) to themselves; the other threads the other {} logical processors", rest.len());
+    unsafe { SetProcessDefaultCpuSets(GetCurrentProcess(), Some(&others)) }.ok().map_err(|e| format!("play: the process's CPU sets: {e}"))?;
+    let of = match others.len() < rest.len() {
+        true => format!(" of its fastest cores ({slower} of slower cores left to the rest of the PC)"),
+        false if slower > 0 => format!(" ({slower} of them of slower cores: {} faster cores besides the game's, fewer than {FAST_CORES})", fast_cores.len()),
+        false => String::new(),
+    };
+    println!("play: the game's threads have core {core} (CPU sets {own:?}) to themselves; the other threads the other {} logical processors{of}", others.len());
     GAME_CORE.set(own).map_err(|_| "play: the game's core kept twice")?;
     uyart::kernel::THREAD_START.set(enter_game_core).map_err(|_| "play: the game threads' start set twice".into())
 }
@@ -447,7 +471,8 @@ impl App {
         // the one before, as this channel held it before the walk had a thread of its own.
         let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(0);
         let (back_tx, back_rx) = std::sync::mpsc::channel::<uyart::RamCopy>();
-        for _ in 0..3 {
+        // Four: the renderer's, its walk thread's, the game thread's spare, and one with the game's read-back thread (`rtgame`).
+        for _ in 0..4 {
             back_tx.send(uyart::RamCopy::new()).expect("the channel is open");
         }
         let (iso, height, proxy, kbm) = (self.iso.clone(), h, self.proxy.clone(), input.lock().expect("input lock").kbm.clone());
@@ -973,6 +998,9 @@ fn render(iso: &str, height: u32, settings: crate::settings::Settings, atlas: &s
         if fr.field % 300 == 0 {
             let ee = native.ee_census().map_or(String::new(), |c| format!("; the level's EE draws {c}"));
             println!("play: field {}, {:.1} s: drawn in {:.1} ms a frame{ee}", fr.field, t0.elapsed().as_secs_f64(), ns as f64 / 1e6 / n as f64);
+            if let Some(m) = crate::native::mem_log(native.gpu().2) {
+                println!("play: field {}: {m}", fr.field);
+            }
             (ns, n) = (0, 0);
         }
     }

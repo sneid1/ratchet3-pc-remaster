@@ -2909,8 +2909,29 @@ impl Mobies {
         if let Some(t) = mesh_time {
             println!("native: moby CPU: skin {:.3} ms, geometry/light/materials {:.3} ms, {} corners, {} draws", skin_ms, t.elapsed().as_secs_f64() * 1e3, out.len(), draws.len());
         }
+        free_later(runs);
         Ok((drawn, skipped, ee))
     }
+}
+
+/// A frame's moby runs freed on a thread of their own once the frame is built (`Mobies::frame`): their UNPACKs' words and their
+/// positions are thousands of allocations a frame, and freeing them took the frame builder a tenth of its time (Florana with DRAW
+/// DISTANCE FAR and the v0.1.4 player's settings: `drop_in_place<Vec<Run>>` 5.8 % and the UNPACK lists' 4.8 % of its samples).
+fn free_later(runs: Vec<Run>) {
+    static FREE: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Sender<Vec<Run>>>> = std::sync::OnceLock::new();
+    let tx = FREE.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<Run>>();
+        std::thread::Builder::new()
+            .name("uya free".into())
+            .spawn(move || {
+                for runs in rx {
+                    drop(runs);
+                }
+            })
+            .expect("the moby runs' freeing thread starts");
+        std::sync::Mutex::new(tx)
+    });
+    tx.lock().expect("the moby runs' freeing channel").send(runs).expect("the moby runs' freeing thread runs");
 }
 
 /// The address a frame's GS data that has none of the EE's is given: a PATH3 transfer's and a VU1 program's packets (their bytes
