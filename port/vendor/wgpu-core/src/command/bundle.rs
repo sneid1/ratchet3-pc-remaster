@@ -365,6 +365,10 @@ impl RenderBundleEncoder {
             commands: Vec::new(),
             buffer_memory_init_actions: Vec::new(),
             texture_memory_init_actions: Vec::new(),
+            scoped_groups: Default::default(),
+            registered_groups: Default::default(),
+            seen_buffer_actions: Default::default(),
+            seen_texture_actions: Default::default(),
             next_dynamic_offset: 0,
             binder: Binder::new(),
             immediate_slots_set: Default::default(),
@@ -544,34 +548,10 @@ impl RenderBundleEncoder {
             flat_dynamic_offsets,
             device,
             commands,
-            mut buffer_memory_init_actions,
-            mut texture_memory_init_actions,
+            buffer_memory_init_actions,
+            texture_memory_init_actions,
             ..
         } = state;
-
-        // PORT CHANGE (README_PORT.txt): every bind group set in the bundle appended all of its init actions, so a bundle that
-        // switches between a few groups held each group's actions once per switch, and every execution of the bundle registers
-        // every one of them (a lock and a check each). The same action twice does nothing the first did not, so only the
-        // first of each is kept, in order.
-        {
-            let mut seen = crate::FastHashSet::default();
-            texture_memory_init_actions.retain(|a| {
-                seen.insert((
-                    Arc::as_ptr(&a.texture) as usize,
-                    a.range.mip_range.clone(),
-                    a.range.layer_range.clone(),
-                    matches!(a.kind, MemoryInitKind::NeedsInitializedMemory),
-                ))
-            });
-            let mut seen = crate::FastHashSet::default();
-            buffer_memory_init_actions.retain(|a| {
-                seen.insert((
-                    Arc::as_ptr(&a.buffer) as usize,
-                    a.range.clone(),
-                    matches!(a.kind, MemoryInitKind::NeedsInitializedMemory),
-                ))
-            });
-        }
 
         let tracker_indices = device.tracker_indices.bundles.clone();
         let discard_hal_labels = device
@@ -844,12 +824,19 @@ fn set_bind_group(
         bind_group.same_device(&state.device)?;
         bind_group.validate_dynamic_bindings(index, offsets)?;
 
-        unsafe { state.trackers.merge_bind_group(&bind_group.used)? };
-        let bind_group = state.trackers.bind_groups.insert_single(bind_group);
+        // PORT CHANGE (README_PORT.txt): a bind group already in the bundle's scope has had its usages merged and has been
+        // kept alive by the scope, so merging it again changes nothing and its second entry in the scope holds nothing new.
+        if state
+            .scoped_groups
+            .insert(Arc::as_ptr(&bind_group) as usize)
+        {
+            unsafe { state.trackers.merge_bind_group(&bind_group.used)? };
+            state.trackers.bind_groups.insert_single(bind_group.clone());
+        }
 
         state
             .binder
-            .assign_group(index as usize, bind_group, offsets);
+            .assign_group(index as usize, &bind_group, offsets);
     } else {
         if !offsets.is_empty() {
             return Err(RenderBundleErrorInner::Bind(
@@ -1652,6 +1639,13 @@ struct State {
     commands: Vec<ArcRenderCommand>,
     buffer_memory_init_actions: Vec<BufferInitTrackerAction>,
     texture_memory_init_actions: Vec<TextureInitTrackerAction>,
+    /// The bind groups (by address) already merged into `trackers`; see `set_bind_group`.
+    scoped_groups: crate::FastHashSet<usize>,
+    /// The bind groups (by address) whose init actions are already in the two lists above; see `flush_bindings`.
+    registered_groups: crate::FastHashSet<usize>,
+    /// The keys of the actions in the two lists above (the dedup `finish` used to do with `retain`).
+    seen_buffer_actions: crate::FastHashSet<(usize, Range<wgt::BufferAddress>, bool)>,
+    seen_texture_actions: crate::FastHashSet<(usize, Range<u32>, Range<u32>, bool)>,
     next_dynamic_offset: usize,
     binder: Binder,
     /// A bitmask, tracking which 4-byte slots have been written via `set_immediates`.
@@ -1758,10 +1752,31 @@ impl State {
 
         self.commands
             .extend(entries.map(|(i, bind_group, dynamic_offsets)| {
-                self.buffer_memory_init_actions
-                    .extend_from_slice(&bind_group.buffer_init_actions);
-                self.texture_memory_init_actions
-                    .extend_from_slice(&bind_group.texture_init_actions);
+                // PORT CHANGE (README_PORT.txt): a group's init actions join the bundle the first time it is bound, not at
+                // every rebind, and an action already in the bundle (a texture two groups share) is not added again: the
+                // first of each (same buffer or texture, same range, same kind) stays, in order. The same action twice does
+                // nothing the first did not, and every execution of the bundle registers every one it holds.
+                if self.registered_groups.insert(Arc::as_ptr(bind_group) as usize) {
+                    for a in &bind_group.buffer_init_actions {
+                        if self.seen_buffer_actions.insert((
+                            Arc::as_ptr(&a.buffer) as usize,
+                            a.range.clone(),
+                            matches!(a.kind, MemoryInitKind::NeedsInitializedMemory),
+                        )) {
+                            self.buffer_memory_init_actions.push(a.clone());
+                        }
+                    }
+                    for a in &bind_group.texture_init_actions {
+                        if self.seen_texture_actions.insert((
+                            Arc::as_ptr(&a.texture) as usize,
+                            a.range.mip_range.clone(),
+                            a.range.layer_range.clone(),
+                            matches!(a.kind, MemoryInitKind::NeedsInitializedMemory),
+                        )) {
+                            self.texture_memory_init_actions.push(a.clone());
+                        }
+                    }
+                }
 
                 self.flat_dynamic_offsets.extend_from_slice(dynamic_offsets);
 

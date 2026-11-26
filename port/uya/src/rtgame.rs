@@ -201,6 +201,13 @@ const CAMERA_SETTING: u32 = 0x14_39F4;
 /// fps_cam's yaw and pitch (radians; the pitch positive looking down).
 const FPS_YAW: u32 = 0x1A_6160;
 const FPS_PITCH: u32 = 0x1A_6180;
+/// fps_cam's target tracking gains, yaw then pitch (+0x74, +0x78: 0.666 and 0.85, set when the camera starts). fps_cam_update's
+/// strafe tracking (Veldin 0x411110-0x4112C4, every story level's copy alike) turns the camera after a target the hero moves
+/// across, by the movement across the view over the target's distance times the target's weight times these, up to 0.026
+/// radians a field: the pull a mouse turn away from a target fights. LOCK-ON CAMERA PULL writes them each field in a level as
+/// the game's own times its factor (`Settings::lock_pull`); the game sets them only as its camera starts (a value written in
+/// Veldin stayed 300 fields), so a value that is not the one written last is the game's own, taken again.
+const FPS_TRACK: u32 = 0x1A_6194;
 /// The turn per mouse count at the mouse's camera speed 100 (radians: 0.11 degrees; 800 counts an inch turn 92 degrees).
 const MOUSE_RAD: f64 = 0.002;
 /// hero_camera_set(mode), every story level's own copy (Veldin 0x510530), by its first words.
@@ -473,6 +480,8 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
     let mut option_was: Option<u8> = None;
     let mut aim_pending = false;
     let mut camera_set: Option<(u32, u32)> = None;
+    // The tracking gains as the game set them, and as last written (`FPS_TRACK`).
+    let mut track: Option<([u32; 2], [u32; 2])> = None;
     // The quick-select ring: a click took its slot, Triangle held off until Q is let go, Circle until the button is.
     let (mut ring_taken, mut ring_circle) = (false, false);
     // The quick-select ring's second ring turned on by the mouse wheel (below).
@@ -545,6 +554,7 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
             let mut i = input.lock().expect("input lock");
             i.bindings = menus.bindings;
             i.controller = ctl.as_ref().map_or(0, |c| c.controller);
+            i.controller_sticks = ctl.as_ref().map_or([0x80; 4], |c| c.controller_sticks);
             // --mouse: the scripted motion, as the window's raw mouse motion of the field.
             for &(_, dx, dy, _) in mice.iter().filter(|m| (m.0..m.0 + m.3).contains(&f)) {
                 let mut k = i.kbm.lock().expect("input lock");
@@ -596,6 +606,24 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
         };
         // The mouse aim: the device changed in play, so the hero's camera is set up for it (`hero_mode`: the free-look camera for
         // the keyboard and mouse, the player's own option for a pad), as the game's options do.
+        // LOCK-ON CAMERA PULL: the free-look camera's tracking gains, the game's own times the setting (`FPS_TRACK`); at 100%
+        // what is written is what the game set.
+        if !m.front_end() {
+            let now = [rd32(&m.ram, FPS_TRACK), rd32(&m.ram, FPS_TRACK + 4)];
+            let own = match track {
+                Some((own, written)) if written == now => own,
+                _ => now,
+            };
+            let pull = menus.settings.lock_pull();
+            let written = own.map(|g| (f32::from_bits(g) * pull).to_bits());
+            for (k, w) in written.iter().enumerate() {
+                let a = FPS_TRACK as usize + 4 * k;
+                m.ram[a..a + 4].copy_from_slice(&w.to_le_bytes());
+            }
+            track = Some((own, written));
+        } else {
+            track = None;
+        }
         if aim_pending && menus.in_play(&m.ram[..RAM]) {
             let level = rd32(&m.ram, crate::LEVEL_CURRENT);
             let set = match camera_set {

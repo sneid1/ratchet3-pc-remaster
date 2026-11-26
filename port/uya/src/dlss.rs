@@ -74,6 +74,10 @@ pub(crate) fn device(adapter: &wgpu::Adapter, desc: &wgpu::DeviceDescriptor, sup
         };
         UNAVAILABLE.get_or_init(|| format!("the {name} does not offer it ({remedy})"));
     }
+    // UYA_NO_DLSS: the GPU taken as one without DLSS (for a check of what such GPUs draw, on this PC).
+    if std::env::var_os("UYA_NO_DLSS").is_some() {
+        UNAVAILABLE.get_or_init(|| "UYA_NO_DLSS".to_string());
+    }
     Ok(made)
 }
 

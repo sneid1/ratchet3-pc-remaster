@@ -178,22 +178,60 @@ const RING_REACH: f64 = 80.0;
 const RING_DEAD: f64 = 20.0;
 
 /// The camera settings the devices' input is changed by before the game reads it (`settings.rs`, PLAN 10): the mouse's speed (a
-/// factor on its motion) and its inversion, the right stick's inversion (left and right, up and down). The right stick's speed
-/// is the game's own (`uyart::set_camera_speed`).
+/// factor on its motion) and its inversion, the right stick's inversion (left and right, up and down), and the controllers'
+/// sticks' dead zones (left, right: shares of a stick's travel, `shape`). The right stick's speed is the game's own
+/// (`uyart::set_camera_speed`).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Camera {
     pub mouse_speed: f32,
     pub mouse_invert: (bool, bool),
     pub stick_invert: (bool, bool),
+    pub dead: (f32, f32),
 }
 
-/// As the game takes the devices: no change.
-pub const CAMERA_GAME: Camera = Camera { mouse_speed: 1.0, mouse_invert: (false, false), stick_invert: (false, false) };
+/// As the game takes the devices: no change, and the dead zones `settings.rs` starts with.
+pub const CAMERA_GAME: Camera = Camera { mouse_speed: 1.0, mouse_invert: (false, false), stick_invert: (false, false), dead: (0.15, 0.20) };
+
+/// How much of a stick's travel past the dead zone is left for the rim: a stick that stops short of its gate's edge still reads
+/// a full push.
+const STICK_OUTER: f32 = 0.05;
+
+/// A controller's sticks (`Pad::sticks`: right x, y, then left x, y; 0..255, up 0) as the game is to read them, from the stick's
+/// own place. The game reads a byte's distance from 127 as nothing below 48 and as (d - 48) / 76 from there to 124 (its own
+/// square dead zone, 38 % of each axis, the DualShock 2's). It measures the left stick's push as the mean of its larger axis and
+/// its length, capped at 1, and takes a push measured under 0.25 as none (both found by reading the game's floats for pushes
+/// through this path: 0.5526 on each axis measured 0.6671, 0.6053 and 0.1974 measured 0.6209, a push to 0.1875 read 0): with its
+/// zone that was a dead zone of 53 % of a stick's travel, and a round-gated stick (an Xbox pad's, the DualSense's) pushed fully on
+/// the diagonal measured 0.67, so the player could not run on a diagonal as with the keys (a v0.1.3 player: "stick diagonals
+/// don't reach full run speed (unlike KB)", "deadzones feel off"). Here each stick has a round dead zone of its own (`dead`, the
+/// settings' MOVE STICK and CAMERA STICK DEAD ZONE), the push past it rescaled to the whole range. The left stick's push is
+/// written so that the game measures 0.25 just past the dead zone (its slowest walk) up to 1 at the rim, the same in every
+/// direction (the game's measure inverted: 2 / (1 + the larger share of the direction)); the right stick keeps its circle, since
+/// the camera turns by each axis alone. Each value is then written as the byte the game's own zone and range read back as
+/// exactly that value.
+pub fn shape(sticks: [u8; 4], dead: (f32, f32)) -> [u8; 4] {
+    let mut out = [0x80; 4];
+    for (at, dead, left) in [(0, dead.1, false), (2, dead.0, true)] {
+        let x = (sticks[at] as f32 - 127.5) / 127.5;
+        let y = (sticks[at + 1] as f32 - 127.5) / 127.5;
+        let r = x.hypot(y);
+        if r <= dead {
+            continue;
+        }
+        let s = ((r - dead) / (1.0 - dead - STICK_OUTER)).min(1.0);
+        let (ux, uy) = (x / r, y / r);
+        let k = if left { (0.25 + 0.75 * s) * 2.0 / (1.0 + ux.abs().max(uy.abs())) } else { s };
+        let byte = |a: f32| if a == 0.0 { 0x80 } else { (127.0 + a.signum() * (48.0 + 76.0 * a.abs().min(1.0)).round()).clamp(3.0, 251.0) as u8 };
+        out[at] = byte(ux * k);
+        out[at + 1] = byte(uy * k);
+    }
+    out
+}
 
 impl Pad {
-    /// The right stick flipped left and right (`x`) and up and down (`y`) about its centre.
+    /// The right stick flipped left and right (`x`) and up and down (`y`) about the game's centre, 127 (`shape`).
     pub fn invert_right(mut self, (x, y): (bool, bool)) -> Pad {
-        let flip = |v: u8| (0x100 - v as i32).min(0xff) as u8;
+        let flip = |v: u8| (0xFE - v as i32).clamp(0, 0xff) as u8;
         if x {
             self.sticks[0] = flip(self.sticks[0]);
         }
@@ -294,10 +332,11 @@ pub struct Input {
     ring_at: (f64, f64),
     /// The player's bindings (`bindings.rs`), set by the game thread.
     pub bindings: Bindings,
-    /// The control channel's Xbox controller (`control.rs` `controller`): its buttons this field and at the last, set by the game
-    /// thread; read as a plugged-in controller's are.
+    /// The control channel's Xbox controller (`control.rs` `controller`): its buttons this field and at the last, and its sticks
+    /// as a controller reports them, set by the game thread; read as a plugged-in controller's are.
     pub controller: u16,
     controller_was: u16,
+    pub controller_sticks: [u8; 4],
     /// What `field` saw pressed since the last field.
     pub presses: Presses,
 }
@@ -315,7 +354,7 @@ impl Input {
             })
             .expect("pad scan thread");
         let now = Instant::now();
-        Input { kbm: Arc::new(Mutex::new(Kbm::default())), xinput: [None; 4], xinput_next: [now; 4], sony, sony_before: HashMap::new(), kbm_before: CENTRE, last: fixed.unwrap_or(Device::Keyboard), fixed, camera: CAMERA_GAME, direct: false, look: (0.0, 0.0), ring: false, ring_at: (0.0, 0.0), bindings: Bindings::default(), presses: Presses::default(), controller: 0, controller_was: 0 }
+        Input { kbm: Arc::new(Mutex::new(Kbm::default())), xinput: [None; 4], xinput_next: [now; 4], sony, sony_before: HashMap::new(), kbm_before: CENTRE, last: fixed.unwrap_or(Device::Keyboard), fixed, camera: CAMERA_GAME, direct: false, look: (0.0, 0.0), ring: false, ring_at: (0.0, 0.0), bindings: Bindings::default(), presses: Presses::default(), controller: 0, controller_was: 0, controller_sticks: [0x80; 4] }
     }
 
     /// The controller the CONTROLLER tab names buttons for: the device in use if it is a controller, else one plugged in (an Xbox
@@ -382,7 +421,9 @@ impl Input {
             if self.xinput[slot].is_none() && now < self.xinput_next[slot] {
                 continue;
             }
-            let p = xinput(slot as u32);
+            // The sticks as the game is to read them (`shape`): a stick resting inside its dead zone does not count as the pad
+            // being used.
+            let p = xinput(slot as u32).map(|p| Pad { sticks: shape(p.sticks, self.camera.dead), ..p });
             if p.is_none() {
                 if self.xinput[slot].is_some() {
                     println!("input: Xbox controller {slot} unplugged");
@@ -402,7 +443,7 @@ impl Input {
             self.xinput[slot] = p;
         }
         {
-            let (p, was) = (Pad { buttons: self.controller, ..CENTRE }, Pad { buttons: self.controller_was, ..CENTRE });
+            let (p, was) = (Pad { buttons: self.controller, sticks: shape(self.controller_sticks, self.camera.dead), ..CENTRE }, Pad { buttons: self.controller_was, ..CENTRE });
             if p.used_since(&was) {
                 used = Some(Device::Xbox);
             }
@@ -414,13 +455,14 @@ impl Input {
             let sony = self.sony.lock().expect("input lock");
             self.sony_before.retain(|k, _| sony.contains_key(k));
             for (path, s) in sony.iter() {
+                let p = Pad { sticks: shape(s.pad.sticks, self.camera.dead), ..s.pad };
                 let was = *self.sony_before.get(path).unwrap_or(&CENTRE);
-                if s.pad.used_since(&was) {
+                if p.used_since(&was) {
                     used = Some(s.device);
                 }
-                self.presses.pad |= s.pad.buttons & !was.buttons;
-                self.sony_before.insert(path.clone(), s.pad);
-                pad = pad.merge(&self.bindings.remap(s.pad).invert_right(self.camera.stick_invert));
+                self.presses.pad |= p.buttons & !was.buttons;
+                self.sony_before.insert(path.clone(), p);
+                pad = pad.merge(&self.bindings.remap(p).invert_right(self.camera.stick_invert));
             }
         }
         if let Some(d) = used {
@@ -453,16 +495,12 @@ fn xinput(slot: u32) -> Option<Pad> {
     if g.bRightTrigger > 30 {
         buttons |= R2;
     }
-    // XInput's stick dead zones (7849 left, 8689 right, of 32767), the axes to 0..255 with up as 0.
-    let axis = |v: i16, dead: i32, flip: bool| -> u8 {
-        let v = v as i32;
-        if v.abs() < dead {
-            return 0x80;
-        }
-        let u = ((v + 32768) >> 8) as u8;
+    // The axes to 0..255 with up as 0, as the stick reads: the dead zones and the range are `shape`'s.
+    let axis = |v: i16, flip: bool| -> u8 {
+        let u = ((v as i32 + 32768) >> 8) as u8;
         if flip { 255 - u } else { u }
     };
-    let sticks = [axis(g.sThumbRX, 8689, false), axis(g.sThumbRY, 8689, true), axis(g.sThumbLX, 7849, false), axis(g.sThumbLY, 7849, true)];
+    let sticks = [axis(g.sThumbRX, false), axis(g.sThumbRY, true), axis(g.sThumbLX, false), axis(g.sThumbLY, true)];
     Some(Pad { buttons, sticks, l2: g.bLeftTrigger, r2: g.bRightTrigger })
 }
 
@@ -475,7 +513,7 @@ mod hid {
     use std::sync::{Arc, Mutex};
     use windows::Win32::Devices::DeviceAndDriverInstallation::{SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInterfaces, SetupDiGetClassDevsW, SetupDiGetDeviceInterfaceDetailW, DIGCF_DEVICEINTERFACE, DIGCF_PRESENT, SP_DEVICE_INTERFACE_DATA, SP_DEVICE_INTERFACE_DETAIL_DATA_W};
     use windows::Win32::Devices::HumanInterfaceDevice::{HidD_FreePreparsedData, HidD_GetAttributes, HidD_GetHidGuid, HidD_GetPreparsedData, HidP_GetCaps, HIDD_ATTRIBUTES, HIDP_CAPS, PHIDP_PREPARSED_DATA};
-    use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE};
+    use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE};
     use windows::Win32::Storage::FileSystem::{CreateFileW, ReadFile, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
     use windows::core::PCWSTR;
 
@@ -488,14 +526,34 @@ mod hid {
         }
     }
 
-    /// Opens every Sony game pad not open yet.
+    /// The Sony interfaces that could not be opened, each said once.
+    static NOT_OPENED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    /// Opens every Sony game pad not open yet. A pad's interface path names Sony's vendor id as `vid_054c&pid_` over USB and as
+    /// `_vid&0002054c_pid&` over Bluetooth (`{00001124-...}`, the HID service's id, before it): only the USB form was looked for,
+    /// so a DualSense paired by Bluetooth, the usual way on a PC, was never opened and nothing said why (a v0.1.3 player:
+    /// "DualSense not recognized"). The pad is opened to read only (the port writes nothing to it), so another program reading it
+    /// too does not keep it closed; one that cannot be opened (held by a program that wraps it, such as Steam Input or DS4Windows,
+    /// which then shows it as an Xbox pad) is said in the log.
     pub fn scan(open: &Arc<Mutex<HashMap<String, SonyPad>>>) {
         for path in interfaces() {
-            if !path.to_ascii_lowercase().contains("vid_054c") || open.lock().expect("input lock").contains_key(&path) {
+            let p = path.to_ascii_lowercase();
+            if !(p.contains("054c&pid") || p.contains("054c_pid")) || open.lock().expect("input lock").contains_key(&path) {
                 continue;
             }
+            let bluetooth = !p.contains("vid_054c");
             let wide: Vec<u16> = path.encode_utf16().chain([0]).collect();
-            let Ok(h) = (unsafe { CreateFileW(PCWSTR(wide.as_ptr()), GENERIC_READ.0 | GENERIC_WRITE.0, FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING, FILE_FLAGS_AND_ATTRIBUTES(0), None) }) else { continue };
+            let h = match unsafe { CreateFileW(PCWSTR(wide.as_ptr()), GENERIC_READ.0, FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING, FILE_FLAGS_AND_ATTRIBUTES(0), None) } {
+                Ok(h) => h,
+                Err(e) => {
+                    let mut said = NOT_OPENED.lock().expect("input lock");
+                    if !said.contains(&path) {
+                        println!("input: a Sony pad's interface could not be opened ({path}): {e}");
+                        said.push(path);
+                    }
+                    continue;
+                }
+            };
             let mut attrs = HIDD_ATTRIBUTES { Size: std::mem::size_of::<HIDD_ATTRIBUTES>() as u32, ..Default::default() };
             let mut caps = HIDP_CAPS::default();
             let ok = unsafe {
@@ -507,13 +565,13 @@ mod hid {
                 }
                 capped
             };
-            let device = kind(attrs.ProductID);
+            let device = kind(attrs.ProductID).filter(|_| attrs.VendorID == 0x054C);
             match (ok && caps.UsagePage == 1 && caps.Usage == 5, device) {
                 (true, Some(device)) => {
-                    println!("input: {device:?} found ({path}, input reports of {} bytes)", caps.InputReportByteLength);
+                    println!("input: {device:?} found ({path}, {}, input reports of {} bytes)", if bluetooth { "Bluetooth" } else { "USB" }, caps.InputReportByteLength);
                     open.lock().expect("input lock").insert(path.clone(), SonyPad { device, pad: CENTRE });
                     let (open, len, raw) = (open.clone(), caps.InputReportByteLength as usize, h.0 as isize);
-                    std::thread::Builder::new().name("uya pad".into()).spawn(move || read(HANDLE(raw as *mut _), len, device, &path, &open)).expect("pad reader thread");
+                    std::thread::Builder::new().name("uya pad".into()).spawn(move || read(HANDLE(raw as *mut _), len, device, bluetooth, &path, &open)).expect("pad reader thread");
                 }
                 _ => unsafe {
                     let _ = CloseHandle(h);
@@ -552,14 +610,14 @@ mod hid {
     }
 
     /// Reads the pad's input reports until it is unplugged, keeping its state in `open`.
-    fn read(h: HANDLE, len: usize, device: Device, path: &str, open: &Arc<Mutex<HashMap<String, SonyPad>>>) {
+    fn read(h: HANDLE, len: usize, device: Device, bluetooth: bool, path: &str, open: &Arc<Mutex<HashMap<String, SonyPad>>>) {
         let mut buf = vec![0u8; len.max(64)];
         loop {
             let mut n = 0u32;
             if unsafe { ReadFile(h, Some(&mut buf[..len]), Some(&mut n), None) }.is_err() {
                 break;
             }
-            if let Some(p) = report(device, &buf[..n as usize]) {
+            if let Some(p) = report(device, bluetooth, &buf[..n as usize]) {
                 if let Some(s) = open.lock().expect("input lock").get_mut(path) {
                     s.pad = p;
                 }
@@ -576,13 +634,16 @@ mod hid {
     /// sticks, L2, R2, a counter, then the button bytes; the DualShock 4's (0x01, 0x11 over Bluetooth two bytes further on) and
     /// either pad's short Bluetooth report (0x01 of 10 bytes): sticks, the button bytes, then L2 and R2. Button bytes: the d-pad
     /// as a hat (0 up, clockwise, 8 none) and Square, Cross, Circle, Triangle; L1, R1, L2, R2, Share / Create, Options, L3, R3;
-    /// PS and the touchpad's click. Share / Create and the touchpad press Select, Options Start.
-    fn report(device: Device, d: &[u8]) -> Option<Pad> {
-        let (o, full) = match (device, d.first()?, d.len()) {
-            (Device::DualSense, 0x01, n) if n >= 64 => (1, true),
-            (Device::DualSense, 0x31, n) if n >= 12 => (2, true),
-            (_, 0x01, n) if n >= 10 => (1, false),
-            (Device::DualShock4, 0x11, n) if n >= 12 => (3, false),
+    /// PS and the touchpad's click. Share / Create and the touchpad press Select, Options Start. Which layout a 0x01 report has
+    /// is the connection's, not the report's length: over Bluetooth it is always the short one (Windows may hand it over padded
+    /// to the interface's report length, which the DualSense's full USB report shares).
+    fn report(device: Device, bluetooth: bool, d: &[u8]) -> Option<Pad> {
+        let (o, full) = match (device, bluetooth, d.first()?, d.len()) {
+            (Device::DualSense, false, 0x01, n) if n >= 64 => (1, true),
+            (Device::DualSense, true, 0x31, n) if n >= 12 => (2, true),
+            (Device::DualShock4, false, 0x01, n) if n >= 10 => (1, false),
+            (_, true, 0x01, n) if n >= 10 => (1, false),
+            (Device::DualShock4, true, 0x11, n) if n >= 12 => (3, false),
             _ => return None,
         };
         let (b0, b1, b2, l2, r2) = if full { (d[o + 7], d[o + 8], d[o + 9], d[o + 4], d[o + 5]) } else { (d[o + 4], d[o + 5], d[o + 6], d[o + 7], d[o + 8]) };

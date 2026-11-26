@@ -8,9 +8,12 @@
 //!                              (hex, as `press`) held with it
 //!   stick X Y N [BUTTONS]      N fields with the left stick held at X, Y (-1 to 1: x right, y forward; 0 0 centred), and
 //!                              BUTTONS (hex, as `press`) held with it: the character walks and runs as with a pad
-//!   controller BUTTONS N       N fields with an Xbox controller's buttons held (hex, each by the PS2 button it presses
+//!   controller BUTTONS N [LX LY RX RY]
+//!                              N fields with an Xbox controller's buttons held (hex, each by the PS2 button it presses
 //!                              unbound, as `press`): read as a plugged-in controller's are, through the bindings (the
-//!                              CONTROLLER tab's swaps, its waiting row) and as the device in use
+//!                              CONTROLLER tab's swaps, its waiting row) and as the device in use; with its sticks held at
+//!                              LX LY RX RY (-1 to 1: x right, y up, as XInput reports them), read as a controller's sticks
+//!                              are (`input::shape`: the dead zones, the left stick's circle onto the square)
 //!   look X Y N                 N fields with the right stick held at X, Y (-1 to 1: x right, y up), as a pad's: the camera
 //!                              turns with the right stick's camera settings (PLAN 10)
 //!   pointer X Y [click]        the pointer at X, Y (shares of the picture) from the next field, and the left button clicked
@@ -96,8 +99,10 @@ pub struct Field {
     pub click: bool,
     /// The mouse wheel turned this field (notches, up positive).
     pub wheel: i32,
-    /// An Xbox controller's buttons held this field (`controller`: by the PS2 button each presses unbound).
+    /// An Xbox controller's buttons held this field (`controller`: by the PS2 button each presses unbound), and its sticks (the
+    /// bytes a controller reports before `input::shape`: right x, y, left x, y; 0x80 centred).
     pub controller: u16,
+    pub controller_sticks: [u8; 4],
 }
 
 pub enum Step {
@@ -117,7 +122,7 @@ enum Until {
 
 enum Task {
     /// Fields left, the buttons held, the mouse motion of each field, the left stick held, the right stick held.
-    Run(u64, u16, (f64, f64), Option<[u8; 2]>, Option<[u8; 2]>, u16),
+    Run(u64, u16, (f64, f64), Option<[u8; 2]>, Option<[u8; 2]>, u16, [u8; 4]),
     /// The condition, the fields run and the most to run.
     Until(Until, u64, u64),
 }
@@ -165,17 +170,17 @@ impl Control {
         }
         loop {
             if let Some(task) = &mut self.task {
-                let (buttons, mouse, stick, look, controller) = match task {
-                    Task::Run(left, b, m, st, lk, c) => {
+                let (buttons, mouse, stick, look, controller, controller_sticks) = match task {
+                    Task::Run(left, b, m, st, lk, c, cs) => {
                         *left -= 1;
-                        (*b, *m, *st, *lk, *c)
+                        (*b, *m, *st, *lk, *c, *cs)
                     }
                     Task::Until(_, ran, _) => {
                         *ran += 1;
-                        (0, (0.0, 0.0), None, None, 0)
+                        (0, (0.0, 0.0), None, None, 0, [0x80; 4])
                     }
                 };
-                let f = Field { buttons, mouse, stick, look, pointer: self.pointer, moved: std::mem::take(&mut self.moved), click: std::mem::take(&mut self.click), wheel: std::mem::take(&mut self.wheel), controller };
+                let f = Field { buttons, mouse, stick, look, pointer: self.pointer, moved: std::mem::take(&mut self.moved), click: std::mem::take(&mut self.click), wheel: std::mem::take(&mut self.wheel), controller, controller_sticks };
                 return Step::Run(f);
             }
             let Ok(line) = self.lines.recv() else { return Step::Quit };
@@ -187,24 +192,32 @@ impl Control {
                 Some("quit") => Err("quit".into()),
                 Some("run") => {
                     let n = num(1)?;
-                    self.task = (n > 0).then_some(Task::Run(n, 0, (0.0, 0.0), None, None, 0));
+                    self.task = (n > 0).then_some(Task::Run(n, 0, (0.0, 0.0), None, None, 0, [0x80; 4]));
                     Ok((n == 0).then(|| format!("ok field {}", s.field - 1)))
                 }
                 Some("press") => {
                     let (b, n) = (hex(1)?, num(2)?);
-                    self.task = (n > 0).then_some(Task::Run(n, b as u16, (0.0, 0.0), None, None, 0));
+                    self.task = (n > 0).then_some(Task::Run(n, b as u16, (0.0, 0.0), None, None, 0, [0x80; 4]));
                     Ok((n == 0).then(|| format!("ok field {}", s.field - 1)))
                 }
                 Some("controller") => {
                     let (b, n) = (hex(1)?, num(2)?);
-                    self.task = (n > 0).then_some(Task::Run(n, 0, (0.0, 0.0), None, None, b as u16));
+                    // The sticks as XInput reports them (-32768..32767), to the bytes `input::xinput` makes of them (y flipped:
+                    // up 0).
+                    let axis = |k: usize, flip: bool| -> Result<u8, String> {
+                        let v: f32 = w.get(k).ok_or_else(|| format!("{line}: controller BUTTONS N [LX LY RX RY]"))?.parse().ok().filter(|v: &f32| (-1.0..=1.0).contains(v)).ok_or_else(|| format!("{line}: a stick from -1 to 1"))?;
+                        let u = (((v * 32767.0).round() as i32 + 32768) >> 8) as u8;
+                        Ok(if flip { 255 - u } else { u })
+                    };
+                    let sticks = if w.len() > 3 { [axis(5, false)?, axis(6, true)?, axis(3, false)?, axis(4, true)?] } else { [0x80; 4] };
+                    self.task = (n > 0).then_some(Task::Run(n, 0, (0.0, 0.0), None, None, b as u16, sticks));
                     Ok((n == 0).then(|| format!("ok field {}", s.field - 1)))
                 }
                 Some("mouse") => {
                     let d = |k: usize| -> Result<f64, String> { w.get(k).and_then(|v| v.parse().ok()).ok_or_else(|| "mouse DX DY N".to_string()) };
                     let (dx, dy, n) = (d(1)?, d(2)?, num(3)?);
                     let b = if w.len() > 4 { hex(4)? as u16 } else { 0 };
-                    self.task = (n > 0).then_some(Task::Run(n, b, (dx, dy), None, None, 0));
+                    self.task = (n > 0).then_some(Task::Run(n, b, (dx, dy), None, None, 0, [0x80; 4]));
                     Ok((n == 0).then(|| format!("ok field {}", s.field - 1)))
                 }
                 Some("stick") => {
@@ -212,14 +225,14 @@ impl Control {
                     let (x, y, n) = (d(1)?, d(2)?, num(3)?);
                     let b = if w.len() > 4 { hex(4)? as u16 } else { 0 };
                     let byte = |v: f32| (128.0 + v * 127.0).round() as u8;
-                    self.task = (n > 0).then_some(Task::Run(n, b, (0.0, 0.0), Some([byte(x), byte(-y)]), None, 0));
+                    self.task = (n > 0).then_some(Task::Run(n, b, (0.0, 0.0), Some([byte(x), byte(-y)]), None, 0, [0x80; 4]));
                     Ok((n == 0).then(|| format!("ok field {}", s.field - 1)))
                 }
                 Some("look") => {
                     let d = |k: usize| -> Result<f32, String> { w.get(k).and_then(|v| v.parse().ok()).filter(|v: &f32| (-1.0..=1.0).contains(v)).ok_or_else(|| "look X Y N: X and Y from -1 to 1".to_string()) };
                     let (x, y, n) = (d(1)?, d(2)?, num(3)?);
                     let byte = |v: f32| (128.0 + v * 127.0).round() as u8;
-                    self.task = (n > 0).then_some(Task::Run(n, 0, (0.0, 0.0), None, Some([byte(x), byte(-y)]), 0));
+                    self.task = (n > 0).then_some(Task::Run(n, 0, (0.0, 0.0), None, Some([byte(x), byte(-y)]), 0, [0x80; 4]));
                     Ok((n == 0).then(|| format!("ok field {}", s.field - 1)))
                 }
                 Some("pointer") => {

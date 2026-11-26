@@ -133,7 +133,7 @@ pub(crate) enum Cmd {
     /// The pass begun last ends.
     End,
     /// The picture copied into a texture of its size.
-    CopyPicture(wgpu::Texture, wgpu::Texture),
+    CopyPicture(wgpu::Texture, Option<wgpu::Texture>),
     /// A texture copied into another (`size` texels).
     Copy(wgpu::Texture, wgpu::Texture, (u32, u32)),
     /// The picture at the GS's size into the texture (`eedraw::Pipelines::downsample`, with its map).
@@ -647,13 +647,17 @@ pub(crate) fn play(cmds: &[Cmd], enc: &mut wgpu::CommandEncoder, t_out: &Target,
             // and over `snap` (a draw sampling the frame by its shares): the same copy, but with DLSS before its step, where the
             // world is the scene at its render size (`scene_target`), the scene stretched over `snap`
             // (`dlss::Upscaler::scaled_copy`).
+            // On a GPU that cannot run DLSS the two are the same picture, and `snap` alone is copied: the GS blend reads it as its
+            // destination (`native::ee_draw`), one copy of the whole picture a step fewer.
             Cmd::CopyPicture(snap, dst) => {
                 let copy = |to: &wgpu::Texture, enc: &mut wgpu::CommandEncoder| enc.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo { texture: t.tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                     wgpu::TexelCopyTextureInfo { texture: to, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                     wgpu::Extent3d { width: t.size.0, height: t.size.1, depth_or_array_layers: 1 },
                 );
-                copy(dst, enc);
+                if let Some(dst) = dst {
+                    copy(dst, enc);
+                }
                 if std::ptr::eq(t, t_out) {
                     copy(snap, enc);
                 } else {

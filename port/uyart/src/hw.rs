@@ -959,27 +959,55 @@ struct Stream<'a> {
     /// The piece read last, and its first word.
     piece: usize,
     from: usize,
+    /// That piece's words (`enter`), and its data's bytes when they lie in RAM in one run (not the scratchpad, not wrapping at
+    /// RAM's end: `words_in`'s one copy); a tag's words and other data are read by `word_in`.
+    plen: usize,
+    at: Option<&'a [u8]>,
 }
+
+/// The data blocks ahead of the one entered whose first line is fetched (`Stream::enter`): on a CPU whose cache does not hold the
+/// frame's lists (a 4 MB L3), each block's first code was a wait on RAM.
+const PREFETCH_BLOCKS: usize = 8;
 
 impl<'a> Stream<'a> {
     fn new(ram: &'a [u8], spr: &'a [u8], head: (u32, u32), blocks: &'a [Block]) -> Stream<'a> {
         let len = 4 * head.1 as usize + blocks.iter().map(|b| 2 * b.tte.is_some() as usize + 4 * b.q as usize).sum::<usize>();
-        Stream { ram, spr, head, blocks, len, piece: 0, from: 0 }
+        let mut s = Stream { ram, spr, head, blocks, len, piece: 0, from: 0, plen: 0, at: None };
+        s.enter();
+        s
     }
 
-    fn piece_len(&self, p: usize) -> usize {
-        match p {
-            0 => 4 * self.head.1 as usize,
-            p if p % 2 == 1 => 2 * self.blocks[p / 2].tte.is_some() as usize,
-            p => 4 * self.blocks[p / 2 - 1].q as usize,
+    /// Data at `a`, `q` quadwords, as one run of RAM's bytes when it lies there so (`words_in`: (a + 16 k) & 0x01FFFFF0 is
+    /// (a & 0x01FFFFF0) + 16 k there, and bit 31 is not reached).
+    fn run(ram: &'a [u8], a: u32, q: u32) -> Option<&'a [u8]> {
+        let o = (a & 0x01ff_fff0) as usize;
+        (a & 0x8000_0000 == 0 && o + 16 * q as usize <= crate::RAM_SIZE as usize).then(|| &ram[o..o + 16 * q as usize])
+    }
+
+    /// The piece `piece` taken up: its words, its data's run in RAM, and the first line of the data `PREFETCH_BLOCKS` blocks on.
+    fn enter(&mut self) {
+        let p = self.piece;
+        if p % 2 == 1 {
+            (self.plen, self.at) = (2 * self.blocks[p / 2].tte.is_some() as usize, None);
+            return;
+        }
+        let (a, q) = if p == 0 { self.head } else { (self.blocks[p / 2 - 1].data, self.blocks[p / 2 - 1].q) };
+        (self.plen, self.at) = (4 * q as usize, Self::run(self.ram, a, q));
+        if let Some(b) = self.blocks.get((p / 2).saturating_sub(1) + PREFETCH_BLOCKS) {
+            if let Some(ahead) = Self::run(self.ram, b.data, b.q.min(1)) {
+                // SAFETY: a hint only; the address is inside `ram`.
+                unsafe { std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T0 }>(ahead.as_ptr() as *const i8) };
+            }
         }
     }
 
     /// To the piece holding word `i` (below `len`, not before the piece read last).
+    #[inline]
     fn seek(&mut self, i: usize) {
-        while i >= self.from + self.piece_len(self.piece) {
-            self.from += self.piece_len(self.piece);
+        while i >= self.from + self.plen {
+            self.from += self.plen;
             self.piece += 1;
+            self.enter();
         }
     }
 
@@ -988,10 +1016,13 @@ impl<'a> Stream<'a> {
         if self.piece == 0 { self.head.0 } else { self.blocks[self.piece / 2 - 1].data }
     }
 
+    #[inline]
     fn word(&mut self, i: usize) -> u32 {
         self.seek(i);
         let o = i - self.from;
-        if self.piece % 2 == 1 {
+        if let Some(at) = self.at {
+            u32::from_le_bytes([at[4 * o], at[4 * o + 1], at[4 * o + 2], at[4 * o + 3]])
+        } else if self.piece % 2 == 1 {
             // A tag's piece holds words only with TTE (`seek` passes over empty pieces).
             self.blocks[self.piece / 2].tte.expect("a tag's two words")[o]
         } else {
@@ -1167,16 +1198,24 @@ fn vif1_events(h: &mut Hw, mut s: Stream) {
                         continue;
                     }
                     let k = (p - s.from) / 4;
-                    let take = (n - got).min(s.piece_len(s.piece) / 4 - k);
+                    let take = (n - got).min(s.plen / 4 - k);
                     runs.push((got, s.addr().wrapping_add(16 * k as u32)));
                     got += take;
                     p += 4 * take;
                 }
                 let (ram, spr) = (s.ram, s.spr);
-                gif_events(h, 0, got, |k| {
-                    let (k0, a) = runs[runs.partition_point(|r| r.0 <= k) - 1];
-                    qw_in(ram, spr, a.wrapping_add(16 * (k - k0) as u32))
-                });
+                // The data in one run of RAM (a DIRECT within one block, the usual case) is read from its bytes; across blocks, or
+                // in the scratchpad, each quadword from its run.
+                match runs[..] {
+                    [(0, a)] if Stream::run(ram, a, got as u32).is_some() => {
+                        let at = Stream::run(ram, a, got as u32).expect("tested");
+                        gif_events(h, 0, got, |k| u128::from_le_bytes(at[16 * k..16 * k + 16].try_into().expect("16 bytes")));
+                    }
+                    _ => gif_events(h, 0, got, |k| {
+                        let (k0, a) = runs[runs.partition_point(|r| r.0 <= k) - 1];
+                        qw_in(ram, spr, a.wrapping_add(16 * (k - k0) as u32))
+                    }),
+                }
                 i = p;
             }
             0x60..=0x7f => {

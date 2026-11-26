@@ -175,10 +175,13 @@ fn items(tab: Tab) -> Vec<Item> {
     match tab {
         Tab::Graphics => v.push(Item::Preset),
         Tab::Keyboard => v.extend((0..bindings::ACTIONS.len()).map(Item::Key)),
-        Tab::Controller => v.extend((0..bindings::PAD.len()).map(Item::Pad)),
         _ => {}
     }
     v.extend(OPTS.iter().enumerate().filter(|(_, o)| o.tab == tab).map(|(i, _)| Item::Opt(i)));
+    // CONTROLLER's options (the sticks' dead zones) above its fourteen buttons, where the panel shows them without scrolling.
+    if tab == Tab::Controller {
+        v.extend((0..bindings::PAD.len()).map(Item::Pad));
+    }
     v.push(Item::Reset);
     v
 }
@@ -1390,14 +1393,16 @@ impl Menus {
             }
             // The reset takes Cross or a click anywhere on it only; KEYBOARD's and CONTROLLER's put the bindings back.
             Item::Reset if fresh & CROSS != 0 => match TABS[page.tab].0 {
-                Tab::Keyboard | Tab::Controller => {
-                    if TABS[page.tab].0 == Tab::Keyboard {
-                        self.bindings.reset_keys();
-                    } else {
-                        self.bindings.reset_pad();
-                    }
+                Tab::Keyboard => {
+                    self.bindings.reset_keys();
                     (self.bindings_changed, self.sound) = (true, Some(CHOICE_SOUND));
                     return None;
+                }
+                // CONTROLLER's buttons and its options (the sticks' dead zones) both.
+                Tab::Controller => {
+                    self.bindings.reset_pad();
+                    self.bindings_changed = true;
+                    s.reset(Tab::Controller);
                 }
                 tab => s.reset(tab),
             },
@@ -1637,9 +1642,9 @@ impl Menus {
             (None, Item::Reset) => match TABS[page.tab].0 {
                 Tab::Display => "Puts the display options back to windowed at 1080p, widescreen on.",
                 Tab::Graphics => "Puts every graphics option back to off: the Original preset, the game as it was.",
-                Tab::Controls => "Puts the camera back to the game's own: its field of view, speed and directions.",
+                Tab::Controls => "Puts the camera back to the game's own: its field of view, speed, directions and lock-on pull.",
                 Tab::Keyboard => "Puts every key and mouse button back to the port's own layout.",
-                Tab::Controller => "Puts every controller button back to the game's own.",
+                Tab::Controller => "Puts every controller button back to the game's own, and the sticks' dead zones to 15% and 20%.",
                 Tab::Gameplay => "Puts the gameplay options back to the game's own.",
                 Tab::Audio => "Puts the sound back to the game's own mix.",
             }

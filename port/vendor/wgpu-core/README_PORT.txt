@@ -1,13 +1,17 @@
-wgpu-core 30.0.1 as shipped on crates.io, with TWO changes for the port (MIT OR Apache-2.0, see LICENSE.MIT / LICENSE.APACHE).
+wgpu-core 30.0.1 as shipped on crates.io, with THREE changes for the port (MIT OR Apache-2.0, see LICENSE.MIT / LICENSE.APACHE).
 The port's native renderer (port/uya) and its play window draw through wgpu 30; this copy is the one the port's workspace builds
 (port/Cargo.toml, [patch.crates-io]).
 
 What changed (each place marked "PORT CHANGE")
-  1. src/command/bundle.rs, in `RenderBundleEncoder::finish`: the bundle's buffer and texture memory init actions keep only
-     the first of each (same buffer or texture, same range, same kind), in order.
+  1. src/command/bundle.rs, `State::flush_bindings`: a bind group's buffer and texture memory init actions join the bundle the
+     first time that group is bound in it (`State::registered_groups`), and each action once (`seen_buffer_actions`,
+     `seen_texture_actions`: same buffer or texture, same range, same kind, the first kept, in order). Until v0.1.5 every
+     binding appended all of them and `RenderBundleEncoder::finish` dropped the duplicates with a set and a retain.
   2. src/command/pass.rs, `flush_bindings_helper`: a bind group's buffer and texture init actions are registered the first
      time the group is bound in a pass, not at every binding (`PassState::registered_groups`, set empty where render.rs and
      compute.rs begin a pass).
+  3. src/command/bundle.rs, `set_bind_group`: a group already in the bundle's usage scope (`State::scoped_groups`) is not
+     merged into it again (the merge of a group already there changes nothing).
   Nothing else differs from the published crate (compare with `diff -r` against the crate unpacked from crates.io; only the .cargo-ok
   marker file is missing here).
 
@@ -23,6 +27,11 @@ Why
   between a few groups hundreds of times a picture): nothing in a pass discards a surface before the pass ends.
   Measured on hidden paced Daxx runs (fields 2400-4800), the presenter's encode time a picture (median): 5.29 ms before,
   4.14 ms with change 1 (3083 -> 4439 pictures drawn over the same fields), and 4.07 -> 3.62 ms for change 2 on top of it.
+  Recording the bundles is the frame's pool threads' work too (the ties', terrain's and shrubs' bundles, every frame): appending
+  every group's actions at each rebind and retaining them at the end, and merging a group's usages again at each rebind, were
+  58 % of those threads' time on Veldin. With change 1 as it is now and change 3, `uya native` on a Veldin dump at 1080p
+  (medians of 27 redraws): the ties' thread 1.98 -> 1.70 ms, their recording 1.96 -> 1.46 ms, the frame 2.93 -> 2.49 ms; the
+  picture byte-identical.
 
 How it is used
   port/Cargo.toml: [patch.crates-io] wgpu-core = { path = "vendor/wgpu-core" } (cargo reads [patch] only at the workspace root).

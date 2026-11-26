@@ -182,11 +182,16 @@ pub(crate) enum Msg {
 enum Event {
     Ready,
     Ended(Result<(), String>),
+    /// The renderer's end, after it took the GPU, DLSS and Streamline down (`render`'s end): the process ends after it (`end`).
+    Rendered(Result<(), String>),
     Menu(bool),
     Settings(crate::settings::Settings),
 }
 
 pub fn play(iso: &str, o: Options) -> Result<(), String> {
+    // A crash's place and stack into the log (`crash.rs`).
+    #[cfg(windows)]
+    crate::crash::report();
     // UYA_PROFILE=START,SECONDS: the threads' time by function (`sampler.rs`, an instrument).
     #[cfg(windows)]
     crate::sampler::start();
@@ -222,6 +227,8 @@ pub fn play(iso: &str, o: Options) -> Result<(), String> {
         menu: true,
         fullscreen: false,
         windowed: (PhysicalSize::new(1, 1), PhysicalPosition::new(0, 0)),
+        rendering: false,
+        ending: None,
     };
     el.run_app(&mut app).map_err(|e| format!("play: event loop: {e}"))?;
     app.quit.store(true, Ordering::SeqCst);
@@ -298,7 +305,13 @@ struct App {
     /// given back when fullscreen ends).
     fullscreen: bool,
     windowed: (PhysicalSize<u32>, PhysicalPosition<i32>),
+    /// The render thread runs (`Event::Rendered` when it ends), and when the game's end began (`end`).
+    rendering: bool,
+    ending: Option<Instant>,
 }
+
+/// The longest the process waits for the renderer's own end after the game's (`App::end`).
+const ENDING: Duration = Duration::from_secs(10);
 
 /// The CPU sets of the core the game's threads have to themselves (`keep_game_core`).
 #[cfg(windows)]
@@ -412,6 +425,13 @@ impl App {
         };
         let window = Arc::new(el.create_window(attrs).map_err(|e| format!("play: window: {e}"))?);
         self.window = Some(window.clone());
+        // The game's view at the window's shape from the first frame on (`Screen::acquire` sets it again at each picture shown):
+        // the frames drawn before the first picture was shown took the original shape (a boot's first picture at 16:9 was
+        // 697x540, the next 960x540).
+        let s = window.inner_size();
+        if s.width > 0 && s.height > 0 {
+            uyart::set_view_k(if settings.wide() { s.width as f32 / (s.height as f32 * 0.62 / 0.4805) } else { 1.0 });
+        }
         self.windowed = (size, at);
         // winit gives the window's handles only on this thread: the renderer makes its surface from them (it holds the window,
         // so they stay valid as long as the surface).
@@ -446,9 +466,10 @@ impl App {
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     render(&iso, height, settings, &atlas, window, handles, rx, back_tx, kbm, paced, (!hidden).then_some(&proxy))
                 })).unwrap_or_else(|_| Err("play: the render thread panicked".into()));
-                let _ = proxy.send_event(Event::Ended(r));
+                let _ = proxy.send_event(Event::Rendered(r));
             })
             .map_err(|e| format!("play: render thread: {e}"))?;
+        self.rendering = true;
         let (iso, presses, proxy, quit) = (self.iso.clone(), self.o.presses.clone(), self.proxy.clone(), self.quit.clone());
         let (mice, fast, start, control) = (self.o.mice.clone(), self.o.fast || (self.o.control && !paced_control), self.o.start, self.o.control);
         // AUDIO > MIXING at the start: the mix's rate is made then (`audio.rs`).
@@ -476,10 +497,16 @@ impl App {
                 let r = rtgame::game(&iso, (&presses, &pointer, &warps, &mice), (fast, start, control), input, &tx, &back_rx, &quit, &field, settings, &profile, &events, &audio);
                 let result = match r {
                     Ok(rtgame::GameEnd::Quit) => Ok(()),
-                    Ok(rtgame::GameEnd::RendererStopped) => return,
+                    Ok(rtgame::GameEnd::RendererStopped) => {
+                        crate::cinema::detach();
+                        return;
+                    }
                     Err(e) => Err(e),
                 };
                 let _ = proxy.send_event(Event::Ended(result));
+                // The movies' hold on the renderer's channel let go: with the game's own (this thread's, at its end) it closes, and
+                // the renderer ends (`Event::Rendered`).
+                crate::cinema::detach();
             })
             .map_err(|e| format!("play: game thread: {e}"))?;
         Ok(())
@@ -487,12 +514,23 @@ impl App {
 
     fn end(&mut self, el: &ActiveEventLoop, r: Result<(), String>) {
         self.quit.store(true, Ordering::SeqCst);
-        // Where the window is, for the next start (`Placement`).
-        let saved = self.place().and_then(|p| p.map_or(Ok(()), |p| p.save(&self.o.profile)));
-        if self.result.is_none() {
-            self.result = Some(r.and(saved));
+        if self.ending.is_none() {
+            self.ending = Some(Instant::now());
+            // Where the window is, for the next start (`Placement`).
+            let saved = self.place().and_then(|p| p.map_or(Ok(()), |p| p.save(&self.o.profile)));
+            if self.result.is_none() {
+                self.result = Some(r.and(saved));
+            }
+        } else if self.result.is_none() {
+            self.result = Some(r);
         }
-        el.exit();
+        // The renderer takes the GPU, DLSS and Streamline down itself once the game's frames end (`render`'s end), and the process
+        // ends after it (`Event::Rendered`), at most ENDING later (`about_to_wait`). Ended while the renderer was at that (or still
+        // drawing, with the movies holding its channel open), the drivers' libraries were unloaded under it: the process closed
+        // with an access violation after the game had quit, now and then (exit 0xC0000005, DLSS frame generation on).
+        if !self.rendering {
+            el.exit();
+        }
     }
 
     /// The window's monitor, and its place and size while windowed (None before the window is open, or while Windows reports it
@@ -559,6 +597,10 @@ impl ApplicationHandler<Event> for App {
                 }
             }
             Event::Ended(r) => self.end(el, r),
+            Event::Rendered(r) => {
+                self.rendering = false;
+                self.end(el, r);
+            }
             Event::Menu(m) => {
                 self.menu = m;
                 self.grab();
@@ -649,6 +691,15 @@ impl ApplicationHandler<Event> for App {
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        if let Some(t) = self.ending {
+            if t.elapsed() >= ENDING {
+                println!("play: the renderer did not stop within {} s of the game's end: the process ends without it", ENDING.as_secs());
+                el.exit();
+            } else {
+                el.set_control_flow(ControlFlow::WaitUntil(t + ENDING));
+            }
+            return;
+        }
         match self.o.seconds {
             Some(s) if self.t0.elapsed().as_secs_f64() >= s => {
                 println!("play: {s} s: quit");
@@ -931,8 +982,13 @@ fn render(iso: &str, height: u32, settings: crate::settings::Settings, atlas: &s
         Ok(r) => r,
         Err(_) => Err("play: the presenter panicked".into()),
     };
-    // Streamline shut down with the window gone (the presenter's) and the device still there (`native`'s, until this returns).
+    // Streamline shut down with the window gone (the presenter's) and the device still there (`native`'s), its plugins freeing
+    // what they made on it. The shutdown unloads them, and the device's release goes through their Vulkan hooks: released after
+    // it, the render thread called into code no longer there ("crash: exception 0xc0000005 at ... (in no module), executing ...,
+    // on uya render", after "streamline: shut down", on every quit with DLSS frame generation once the process waited for this
+    // end). The process is ending: the device and what it made are left to it.
     crate::streamline::shutdown();
+    std::mem::forget(native);
     r
 }
 
@@ -1212,6 +1268,10 @@ impl Drop for Refreshes {
 ///   frames took from their field's start on the line to the presenter, the longest a picture may be recorded before its
 ///   refresh (`lead`) and 1 ms. It moves only when the need passes it by 3 ms (up: the game's time slows by 2 % at most) or
 ///   it passes the need by 8 ms (down, 1 %).
+/// How far off the fitted line a frame's field may begin before the line begins again from it (`Timeline::push`): three fields.
+/// A field the game thread began a little late slips by a few milliseconds and the line follows; only a step goes past this.
+const OFF_LINE: f64 = 3.0 * FIELD_S;
+
 struct Timeline {
     profile: Option<crate::gpu_profile::Profiler>,
     period: f64,
@@ -2006,6 +2066,17 @@ impl Timeline {
             self.fit.clear();
             self.shown = None;
         }
+        // A frame whose field began well off the line (`OFF_LINE`: the PC held the game for a moment, a stall, or the game thread
+        // began fields late for a while) begins the line again from it, and the game's time shown goes on from the last picture's
+        // from now. Kept, the line through the step was the step's, not the game's, for its 120 frames (two seconds): the game's
+        // time shown ran slow, caught the newest frame, stopped and jumped (the game frozen 400 ms: speeds of 0.13, then 0.85 to
+        // 1.13 in turn for two seconds, single pictures 2.24 times the game's; a v0.1.3 player: "random slowdowns followed by fast
+        // catch-up surges with character, camera, and scenery shaking"). The last picture's game time is not advanced across the
+        // step: the step was the display holding still, already.
+        else if self.fit.len() >= 16 && (t - (self.fit_mean.0 + (field as f64 - self.fit_mean.1) * self.rate)).abs() > OFF_LINE {
+            self.fit.clear();
+            self.shown = self.shown.map(|(g, _)| (g, ready));
+        }
         if self.frames.back().is_some_and(|b| cut || field - b.field > crate::replay::MAX_GAP) {
             for f in self.frames.drain(..) {
                 self.unapplied.extend(f.outbox);
@@ -2117,6 +2188,10 @@ struct Screen {
     fps: Fps,
     /// The settings page's tab bar (`TabBar`).
     tab_bar: TabBar,
+    /// The window's size, the surface's and the game's view widening last said in the log, and whether the surface was made
+    /// again for a suboptimal image at this size (`acquire`).
+    shape_said: (u32, u32, u32, u32, f32),
+    suboptimal_redone: bool,
 }
 
 /// The most native pictures the window keeps a bind group for (`Screen::picture_group`): the frame sets', the timeline's and the
@@ -2395,6 +2470,25 @@ const RING_AT: (f32, f32) = (0.2444, 0.4944);
 const RING_SLOTS: (f32, f32) = (0.1561, 0.1944);
 const POINTER: f32 = 0.024;
 
+/// The shape of the game's movies: the original picture's (0.62 / 0.4805, the console's 4:3).
+const MOVIE_SHAPE: f32 = 0.62 / 0.4805;
+
+/// How much a movie is zoomed, and as much again widened, in a window wider than the movie (a v0.1.3 player: 'Intro "Press
+/// Start" screen stays locked to 4:3'). The movie fills the window itself: a blurred copy of it beside the 4:3 picture duplicated
+/// things at the wrong size and place, and a glow carrying its edges out still read as bars. The window's extra width is shared
+/// evenly: the square root of how much wider the window is than the movie, both ways, so a 16:9 window takes the movie zoomed
+/// 1.174 (7.4 % of its height cut at the top and at the bottom, inside the tenth these pictures keep clear for a television's edge)
+/// and widened 1.174. At most 1.25 each: a window wider than 2:1 keeps black sides rather than cut or widen more. 1 with
+/// WIDESCREEN off (the console's shape with bars, as the world is shown then), in a window as wide as the movie or narrower (the
+/// whole movie across its width) and in one with no size (minimised: nothing is shown).
+fn movie_zoom(win: winit::dpi::PhysicalSize<u32>) -> f32 {
+    if !WIDE.load(Ordering::Relaxed) || win.width == 0 || win.height == 0 {
+        return 1.0;
+    }
+    let wider = win.width as f32 / win.height as f32 / MOVIE_SHAPE;
+    if wider <= 1.0 { 1.0 } else { wider.sqrt().min(1.25) }
+}
+
 const BLIT: &str = r#"
 @group(0) @binding(0) var pic: texture_2d<f32>;
 @group(0) @binding(1) var smp: sampler;
@@ -2639,18 +2733,17 @@ impl Screen {
         });
         let fps = Fps::new(&device, native.gpu().3, format)?;
         let tab_bar = TabBar::new(&device, native.gpu().3, format)?;
-        Ok(Screen { device: device.clone(), queue: native.gpu().3.clone(), window, surface, config, pipeline, layout, sampler, frame: None, pictures: Vec::new(), last: None, kbm, easu, rcas, up: None, pointer, fps, tab_bar })
+        Ok(Screen { device: device.clone(), queue: native.gpu().3.clone(), window, surface, config, pipeline, layout, sampler, frame: None, pictures: Vec::new(), last: None, kbm, easu, rcas, up: None, pointer, fps, tab_bar, shape_said: (0, 0, 0, 0, 0.0), suboptimal_redone: false })
     }
 
     /// The shape `shown` is shown at, the native picture's height high (`size`: the native picture's size when the frame was
-    /// drawn): the native picture at its own (the shape the game's view was made at, the window's: PLAN 4.2), a movie at the
-    /// original picture's (0.62 / 0.4805).
-    fn shape(&self, size: (u32, u32), shown: &Shown) -> (u32, u32) {
+    /// drawn): the native picture at its own (the shape the game's view was made at, the window's: PLAN 4.2), a movie at its own
+    /// (`MOVIE_SHAPE`) widened by `zoom` (`movie_zoom`: its rows were cut by as much where it was uploaded, `window_copy`).
+    fn shape(&self, size: (u32, u32), shown: &Shown, zoom: f32) -> (u32, u32) {
         let h = size.1;
-        let original = ((h as f32 * 0.62 / 0.4805).round() as u32, h);
         match shown {
             Shown::Gpu(_) => size,
-            Shown::Picture(_) => original,
+            Shown::Picture(_) => ((h as f32 * MOVIE_SHAPE * zoom * zoom).round() as u32, h),
         }
     }
 
@@ -2658,7 +2751,7 @@ impl Screen {
     /// of its own and written to `path` as a PNG (the control channel's `shot`: the renderer's picture, not a grab of the window).
     fn shot(&mut self, shown: &Shown, size: (u32, u32), path: &str) -> Result<(), String> {
         let (device, queue) = (&self.device.clone(), &self.queue.clone());
-        let (w, h) = self.shape(size, shown);
+        let (w, h) = self.shape(size, shown, movie_zoom(self.window.inner_size()));
         let format = self.config.format;
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("shot"),
@@ -2757,12 +2850,37 @@ impl Screen {
             self.config.width = win.width;
             self.config.height = win.height;
             self.surface.configure(&self.device, &self.config);
+            self.suboptimal_redone = false;
         }
         // The game's view at the window's shape (`uyart::set_view_k`): its width over the original picture's at its height
         // (`Native::open`'s 0.62 / 0.4805), 1.0 for a window of the original shape, and with WIDESCREEN off.
-        uyart::set_view_k(if WIDE.load(Ordering::Relaxed) { win.width as f32 / (win.height as f32 * 0.62 / 0.4805) } else { 1.0 });
+        let k = if WIDE.load(Ordering::Relaxed) { win.width as f32 / (win.height as f32 * 0.62 / 0.4805) } else { 1.0 };
+        uyart::set_view_k(k);
+        // Each change of the window's size, the surface's or the view's widening is said: a player's log then shows the shape
+        // history around a picture shown at the wrong scale (a v0.1.3 player: "Scaled to 4K until pausing with KB").
+        let shape = (win.width, win.height, self.config.width, self.config.height, k);
+        if shape != self.shape_said {
+            println!("play: window {}x{}, surface {}x{}, view widening {k:.4}", win.width, win.height, self.config.width, self.config.height);
+            self.shape_said = shape;
+        }
         match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => Ok(Some(t)),
+            wgpu::CurrentSurfaceTexture::Success(t) => Ok(Some(t)),
+            // A suboptimal image (the swapchain's extent or form no longer the window's, as after a switch to fullscreen, which
+            // Windows makes after the window's size is read): the surface made again once at this size and a new image taken, so
+            // a stale swapchain is not stretched over the window until the size next changes. An image still suboptimal after it
+            // is shown as it is.
+            wgpu::CurrentSurfaceTexture::Suboptimal(t) if !self.suboptimal_redone => {
+                drop(t);
+                println!("play: the window's surface was suboptimal at {}x{}: made again", self.config.width, self.config.height);
+                self.surface.configure(&self.device, &self.config);
+                self.suboptimal_redone = true;
+                match self.surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => Ok(Some(t)),
+                    wgpu::CurrentSurfaceTexture::Validation => Err("play: the window's surface texture failed validation".into()),
+                    _ => Ok(None),
+                }
+            }
+            wgpu::CurrentSurfaceTexture::Suboptimal(t) => Ok(Some(t)),
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => Ok(None),
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.device, &self.config);
@@ -2828,9 +2946,12 @@ impl Screen {
     fn window_copy(&mut self, out: Option<wgpu::SurfaceTexture>, shown: &Shown, native_size: (u32, u32)) -> Result<Option<wgpu::SurfaceTexture>, String> {
         let (device, queue) = (&self.device.clone(), &self.queue.clone());
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("present") });
+        let win = self.window.inner_size();
+        let zoom = movie_zoom(win);
         let size = match shown {
             Shown::Gpu(t) => (t.width(), t.height()),
-            Shown::Picture(p) => (p.w, p.h),
+            // A movie's rows the window shows: its top and bottom cut alike by the zoom (`movie_zoom`).
+            Shown::Picture(p) => (p.w, ((p.h as f32 / zoom).round() as u32).clamp(1, p.h)),
         };
         // A native picture the window shows now is sampled where it is (`picture_group`); a movie's picture, and a native one the
         // window cannot show now, are copied into the presenter's own `frame` first (a native picture goes back to the renderer once
@@ -2869,8 +2990,8 @@ impl Screen {
                 ),
                 Shown::Picture(p) => queue.write_texture(
                     wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                    &p.rgba,
-                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * p.w), rows_per_image: Some(p.h) },
+                    &p.rgba[(4 * p.w * ((p.h - size.1) / 2)) as usize..],
+                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * p.w), rows_per_image: Some(size.1) },
                     extent,
                 ),
             }
@@ -2885,12 +3006,11 @@ impl Screen {
             queue.submit([enc.finish()]);
             return Ok(None);
         };
-        let win = self.window.inner_size();
         // The picture at its own shape, as large as the window allows, centred, on whole pixels: the world at the native
-        // picture's (the shape the game's view was made at, the window's: PLAN 4.2), a movie at the original picture's (0.62 /
-        // 0.4805).
+        // picture's (the shape the game's view was made at, the window's: PLAN 4.2), a movie at its own widened by the zoom
+        // (`movie_zoom`: across the whole of a 16:9 or 16:10 window).
         let (ww, wh) = (win.width as f32, win.height as f32);
-        let shape = self.shape(native_size, shown);
+        let shape = self.shape(native_size, shown, zoom);
         let s = (ww / shape.0 as f32).min(wh / shape.1 as f32);
         let (vw, vh) = ((shape.0 as f32 * s).round().max(1.0), (shape.1 as f32 * s).round().max(1.0));
         let (vx, vy) = (((ww - vw) / 2.0).floor(), ((wh - vh) / 2.0).floor());

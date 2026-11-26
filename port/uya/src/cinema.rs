@@ -62,6 +62,11 @@ pub(crate) fn attach(iso: &str, show: std::sync::mpsc::SyncSender<crate::play::M
     *PLAYER.lock().expect("movie lock") = Some(Player { iso: iso.into(), show, input, quit, presses: presses.to_vec(), field });
 }
 
+/// The window's channel let go (`play.rs`: the game thread's end), so that it closes with the game's own and the renderer ends.
+pub(crate) fn detach() {
+    *PLAYER.lock().expect("movie lock") = None;
+}
+
 /// Whether `attach` gave a window to play movies into (the port's runtime gives the game's player a movie service only then).
 pub fn attached() -> bool {
     PLAYER.lock().expect("movie lock").is_some()

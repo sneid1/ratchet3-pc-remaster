@@ -629,6 +629,11 @@ pub(crate) fn open(dir: &Path, rift: Option<&Path>) -> Result<(), String> {
         }
         false => None,
     };
+    // UPDATED TEXTURES draws, and lights per pixel, only with its surfaces there (`enhance::rift_apart`).
+    if rift.is_none() {
+        println!("textures: no updated textures: UPDATED TEXTURES draws nothing, and its per-pixel lighting is off");
+    }
+    crate::enhance::set_rift_surfaces(rift.is_some());
     let relief = match rift_dir.join("relief.tsv").is_file() {
         true => {
             let r = read_relief(&rift_dir)?;

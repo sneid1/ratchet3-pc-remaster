@@ -305,6 +305,41 @@ pub const OPTIONS: &[Opt] = &[
         presets: None,
         about: "Turns the camera the other way with the mouse: up and down, left and right, or both.",
     },
+    // The free-look camera (the mouse aim's lock-strafe camera, and a pad's in that camera option) turns by itself to keep a
+    // target in view while the hero moves: fps_cam_update's strafe tracking, by its yaw and pitch gains (`rtgame.rs`
+    // `FPS_TRACK`), which this scales; the target, the aim point and the crosshair are the game's own at any value (a v0.1.3
+    // player: "lock-on camera magnetism pulls back toward targets and fights mouse/free-look", "a toggle/slider to reduce or
+    // disable lock-on camera pull").
+    Opt {
+        key: "lock_on_camera_pull",
+        tab: Tab::Controls,
+        name: "LOCK-ON CAMERA PULL",
+        values: &[("0", "OFF"), ("25", "25%"), ("50", "50%"), ("75", "75%"), ("100", "100%")],
+        default: 4,
+        presets: None,
+        about: "How strongly the camera turns by itself to keep a target in view while you move. 100% is the game's own; off stops it. Aiming is not changed.",
+    },
+    // The controllers' sticks' round dead zones (`input::shape`), in place of the game's own square one (38 % of each axis, the
+    // DualShock 2's), which a pad's stick never reached past on a diagonal. No zero: the game turns any push of the left stick
+    // into the d-pad in its menus, so a stick that drifts with no zone would move them.
+    Opt {
+        key: "left_stick_dead_zone",
+        tab: Tab::Controller,
+        name: "MOVE STICK DEAD ZONE",
+        values: DEAD_VALUES,
+        default: 2,
+        presets: None,
+        about: "How far the left stick is pushed before Ratchet moves. Raise it if he creeps with the stick let go. The stick's edge always runs at full speed.",
+    },
+    Opt {
+        key: "right_stick_dead_zone",
+        tab: Tab::Controller,
+        name: "CAMERA STICK DEAD ZONE",
+        values: DEAD_VALUES,
+        default: 3,
+        presets: None,
+        about: "How far the right stick is pushed before the camera turns. Raise it if the camera drifts with the stick let go.",
+    },
     // PLAN 10: a level change (the travel between planets, a level's start from the front end) runs as fast as the PC goes
     // instead of at the game's 59.94 fields a second (`rtgame.rs`, `LEVEL_CHANGE_REQUEST`): the game does the same, sooner. The
     // memory card's saves already run so (their messages are answered for the player and not shown).
@@ -361,6 +396,14 @@ const SPEED_GAME: u8 = 3;
 /// The camera inversions: (left and right flipped, up and down flipped).
 const INVERT_VALUES: &[(&str, &str)] = &[("off", "OFF"), ("vertical", "UP / DOWN"), ("horizontal", "LEFT / RIGHT"), ("both", "BOTH")];
 const INVERTS: [(bool, bool); 4] = [(false, false), (false, true), (true, false), (true, true)];
+
+/// The sticks' dead zones (percent of a stick's travel) and their shares. 15 % and 20 % (left, right) lie above common stick
+/// drift (up to about 8 %) and under XInput's own 24 % and 27 %.
+const DEAD_VALUES: &[(&str, &str)] = &[("5", "5%"), ("10", "10%"), ("15", "15%"), ("20", "20%"), ("25", "25%"), ("30", "30%"), ("40", "40%")];
+const DEADS: [f32; 7] = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40];
+
+/// LOCK-ON CAMERA PULL's factors on the game's own pull.
+const PULLS: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
 
 /// The field of view's values in degrees across at 16:9 (0: the game's own view, 81 degrees there: its vertical half-angle
 /// tangent 0.4805 at the gameplay camera's horizontal 0.62).
@@ -442,7 +485,13 @@ impl Settings {
             mouse_speed: SPEEDS[self.get("mouse_camera_speed") as usize],
             mouse_invert: INVERTS[self.get("mouse_camera_invert") as usize],
             stick_invert: INVERTS[self.get("stick_camera_invert") as usize],
+            dead: (DEADS[self.get("left_stick_dead_zone") as usize], DEADS[self.get("right_stick_dead_zone") as usize]),
         }
+    }
+
+    /// LOCK-ON CAMERA PULL's factor on the free-look camera's own target tracking (`rtgame.rs`): 1.0 for the game's own.
+    pub fn lock_pull(&self) -> f32 {
+        PULLS[self.get("lock_on_camera_pull") as usize]
     }
 
     /// The field of view's factor on the game's view tangents (`uyart::set_view_fov`): 1.0 for the game's own.

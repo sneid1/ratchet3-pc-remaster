@@ -41,7 +41,7 @@ impl Batch {
         view: &wgpu::BindGroupLayout,
         fog: &wgpu::BindGroupLayout,
         inputs: impl IntoIterator<Item = (Key, MaterialInput)>,
-    ) -> Result<Self, String> {
+    ) -> Result<Option<Self>, String> {
         let (mut ids, mut materials, mut textures, mut samplers) =
             (HashMap::new(), Vec::new(), Vec::new(), Vec::new());
         for (key, input) in inputs {
@@ -73,17 +73,24 @@ impl Batch {
         if materials.is_empty() {
             return Err("native: vegetation batch has no materials".into());
         }
+        // The tables are binding arrays: wgpu counts all their elements against max_binding_array_elements_per_shader_stage and
+        // the samplers again against max_binding_array_sampler_elements_per_shader_stage (wgpu-core's
+        // BindingTypeMaxCountValidator; on Vulkan the update-after-bind descriptor limits), not against the per-stage sampled
+        // texture and sampler limits (58 and 64 on Intel's Windows driver, where a level's vegetation with the updated textures
+        // uses up to 95 views). A level whose tables pass them is drawn material by material, the way a GPU without the arrays
+        // draws every level (`Shrubs::new`).
         let limits = device.limits();
-        if textures.len() as u32 > limits.max_sampled_textures_per_shader_stage
-            || samplers.len() as u32 > limits.max_samplers_per_shader_stage
+        if (textures.len() + samplers.len()) as u32 > limits.max_binding_array_elements_per_shader_stage
+            || samplers.len() as u32 > limits.max_binding_array_sampler_elements_per_shader_stage
         {
-            return Err(format!(
-                "native: vegetation batch needs {} textures and {} samplers, GPU limits {} and {}",
+            println!(
+                "native: this level's vegetation drawn material by material: its {} textures and {} samplers pass this GPU's binding arrays ({} elements, {} samplers)",
                 textures.len(),
                 samplers.len(),
-                limits.max_sampled_textures_per_shader_stage,
-                limits.max_samplers_per_shader_stage
-            ));
+                limits.max_binding_array_elements_per_shader_stage,
+                limits.max_binding_array_sampler_elements_per_shader_stage
+            );
+            return Ok(None);
         }
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("vegetation material table"),
@@ -214,44 +221,29 @@ impl Batch {
             }, (!fail).then_some("batch_surface"))
         };
         println!(
-            "native: GPU vegetation: {} materials, {} shared texture views, {} samplers",
+            "native: GPU vegetation: {} materials, {} shared texture views, {} samplers (this GPU's binding arrays: {} elements, {} samplers)",
             materials.len(),
             textures.len(),
-            samplers.len()
+            samplers.len(),
+            limits.max_binding_array_elements_per_shader_stage,
+            limits.max_binding_array_sampler_elements_per_shader_stage
         );
-        Ok(Self {
+        Ok(Some(Self {
             ids,
             group,
             pass: pipeline(false),
             fail: pipeline(true),
-        })
+        }))
     }
 
-    pub fn vertex_materials(
-        &self,
-        device: &wgpu::Device,
-        vertices: &[Option<wgpu::Buffer>],
-        runs: &[(usize, Vec<(Key, u32, u32)>)],
-        colours: impl Fn(usize) -> Vec<u32>,
-    ) -> Vec<Option<wgpu::Buffer>> {
+    /// Each chunk's vertices' material and colour words (`objects::Shrubs::build`: per vertex its strip's texture setting and its
+    /// colour's place in the fog table), the batch's second vertex stream.
+    pub fn vertex_materials(&self, device: &wgpu::Device, vertices: &[Option<Vec<(Key, u32)>>]) -> Vec<Option<wgpu::Buffer>> {
         vertices
             .iter()
-            .enumerate()
-            .map(|(chunk, vb)| {
-                vb.as_ref().map(|vb| {
-                    let mut ids: Vec<[u32; 2]> =
-                        colours(chunk).into_iter().map(|c| [0, c]).collect();
-                    assert_eq!(
-                        ids.len(),
-                        vb.size() as usize / std::mem::size_of::<ShrubVertex>()
-                    );
-                    for (_, runs) in runs.iter().filter(|r| r.0 == chunk) {
-                        for &(key, first, count) in runs {
-                            for v in &mut ids[first as usize..(first + count) as usize] {
-                                v[0] = self.ids[&key];
-                            }
-                        }
-                    }
+            .map(|vm| {
+                vm.as_ref().map(|vm| {
+                    let ids: Vec<[u32; 2]> = vm.iter().map(|(key, slot)| [self.ids[key], *slot]).collect();
                     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("vegetation vertex materials"),
                         contents: bytemuck::cast_slice(&ids),
@@ -265,20 +257,25 @@ impl Batch {
     pub fn draw<'a, E: crate::replay::Enc<'a>>(
         &'a self,
         pass: &mut E,
+        keys: &crate::objects::Materials,
         vertices: &'a [Option<wgpu::Buffer>],
+        indices: &'a [Option<wgpu::Buffer>],
         materials: &'a [Option<wgpu::Buffer>],
         draws: &[(usize, Draw)],
     ) -> Result<(), String> {
         // Keep the caller's passing/failing split and every visible triangle's order. Hidden instances inside a span are
-        // clipped on the GPU; material selection no longer needs a CPU bind/draw between neighbouring strips.
+        // clipped on the GPU; material selection no longer needs a CPU bind/draw between neighbouring strips. The failing
+        // pixels' pipeline draws only the runs of draws whose material can fail its alpha test (`Materials::keys`' flag, as the
+        // material-by-material path takes it): over a material that never fails it draws nothing, and spanning those runs too
+        // ran every shrub's vertices a second time (1.2 million in Veldin, 49 MB more read a frame).
         pass.set_bind_group(1, &self.group);
-        for pipeline in [&self.pass, &self.fail] {
-            pass.set_pipeline(pipeline);
+        for fail in [false, true] {
+            pass.set_pipeline(if fail { &self.fail } else { &self.pass });
             let mut i = 0;
             while i < draws.len() {
                 let chunk = draws[i].0;
-                let first = draws[i].1.first;
-                let mut end = first;
+                let (mut end, mut span): (u32, Option<(u32, u32)>) = (draws[i].1.first, None);
+                let mut bound = false;
                 while i < draws.len() && draws[i].0 == chunk {
                     let dr = &draws[i].1;
                     if dr.first < end {
@@ -286,22 +283,32 @@ impl Batch {
                     }
                     end = dr.first + dr.count;
                     i += 1;
+                    let fails = keys.keys.get(&dr.key).ok_or("native: a shrub texture setting made at load is missing")?.1;
+                    if fail && !fails {
+                        if let Some((first, last)) = span.take() {
+                            self.span(pass, &mut bound, vertices, indices, materials, chunk, first..last)?;
+                        }
+                        continue;
+                    }
+                    span = Some((span.map_or(dr.first, |s| s.0), end));
                 }
-                pass.set_vertex_buffer(
-                    0,
-                    vertices[chunk]
-                        .as_ref()
-                        .ok_or("native: missing vegetation vertices")?,
-                );
-                pass.set_vertex_buffer(
-                    1,
-                    materials[chunk]
-                        .as_ref()
-                        .ok_or("native: missing vegetation material indices")?,
-                );
-                pass.draw(first..end);
+                if let Some((first, last)) = span {
+                    self.span(pass, &mut bound, vertices, indices, materials, chunk, first..last)?;
+                }
             }
         }
+        Ok(())
+    }
+
+    /// One span of a chunk's vertices drawn, the chunk's vertex and material streams bound first (`bound`) where not yet.
+    fn span<'a, E: crate::replay::Enc<'a>>(&self, pass: &mut E, bound: &mut bool, vertices: &'a [Option<wgpu::Buffer>], indices: &'a [Option<wgpu::Buffer>], materials: &'a [Option<wgpu::Buffer>], chunk: usize, range: std::ops::Range<u32>) -> Result<(), String> {
+        if !*bound {
+            pass.set_vertex_buffer(0, vertices[chunk].as_ref().ok_or("native: missing vegetation vertices")?);
+            pass.set_vertex_buffer(1, materials[chunk].as_ref().ok_or("native: missing vegetation material indices")?);
+            pass.set_index_buffer(indices[chunk].as_ref().ok_or("native: missing vegetation corners")?);
+            *bound = true;
+        }
+        pass.draw_indexed(range);
         Ok(())
     }
 }

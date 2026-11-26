@@ -1877,21 +1877,20 @@ fn rd_q(c: &mut Cpu, a: u32) -> V4 {
 }
 
 /// VU0's data memory, quadword `q` (wrapping at 256).
+#[inline(always)]
 fn vu0_get(c: &Cpu, q: u32) -> V4 {
     let a = (q as usize & 0xff) * 16;
-    let m = unsafe { std::slice::from_raw_parts(c.vu0d, 4096) };
-    std::array::from_fn(|k| u32::from_le_bytes(m[a + 4 * k..a + 4 * k + 4].try_into().expect("4 bytes")))
+    unsafe { (c.vu0d.add(a) as *const V4).read_unaligned() }
 }
 
+#[inline(always)]
 fn vu0_put(c: &mut Cpu, q: u32, v: V4) {
     let a = (q as usize & 0xff) * 16;
-    let m = unsafe { std::slice::from_raw_parts_mut(c.vu0d, 4096) };
-    for k in 0..4 {
-        m[a + 4 * k..a + 4 * k + 4].copy_from_slice(&v[k].to_le_bytes());
-    }
+    unsafe { (c.vu0d.add(a) as *mut V4).write_unaligned(v) }
 }
 
 /// A 4 x 4 matrix of VU0 data memory from quadword `q`.
+#[inline(always)]
 fn vu0_mat(c: &Cpu, q: u32) -> [V4; 4] {
     std::array::from_fn(|k| vu0_get(c, q + k as u32))
 }
@@ -2012,6 +2011,7 @@ fn skinned(c: &mut Cpu, rec: u32, staging: u32, ra: u64) -> u32 {
     // Each mesh's setup (0x3F71AC to 0x3F71BC: ORI 0x80, PCPYH, PCPYLD) leaves v0 0x80 in every halfword, both halves: the next
     // job's quadword 255 has that high half.
     c.rh[2] = 0x0080_0080_0080_0080;
+    let shared = Lights::new(&dirs, &cols, base, vf1);
     let mut entry_at = SPR + 0x1c80;
     loop {
         // The next mesh's packet B to the other buffer while this one is skinned.
@@ -2023,7 +2023,7 @@ fn skinned(c: &mut Cpu, rec: u32, staging: u32, ra: u64) -> u32 {
         }
         c.wr32(SPR + 0x1fc8, other);
         let out = c.rd32(SPR + 0x1fcc);
-        mesh(c, buf, out, staging, &dirs, &cols, base, vf1);
+        mesh(c, buf, out, staging, &shared);
         let dest = c.rd32(entry_at + 4);
         let qwc = c.rd32(SPR + 0x1fd0);
         spr_from(c, 256, dest, qwc, out);
@@ -2141,9 +2141,168 @@ fn rigid(c: &mut Cpu, f14: u32, group: u32, dirs: &[V4; 3], cols: &[V4; 3]) -> u
     next
 }
 
+/// A record's light section as its meshes' arithmetic reads it: `dirs`, `cols`, `base` and `wrap` are the registers as the VU
+/// holds them (the scalar row path takes them so); the `s*` fields are the same values as `m_fmac` reads them (an operand with
+/// exponent 255 as the largest number of its sign), each lane splat over the four rows of a group.
+struct Lights {
+    dirs: [V4; 3],
+    cols: [V4; 3],
+    base: V4,
+    wrap: V4,
+    sd: [[std::arch::x86_64::__m128; 3]; 3],
+    sc: [[std::arch::x86_64::__m128; 4]; 3],
+    sw: [std::arch::x86_64::__m128; 3],
+    sb: [std::arch::x86_64::__m128; 4],
+}
+
+impl Lights {
+    fn new(dirs: &[V4; 3], cols: &[V4; 3], base: V4, wrap: V4) -> Lights {
+        let sp = |x: u32| unsafe { std::arch::x86_64::_mm_set1_ps(uycpu::fpu::fin(x)) };
+        // The base colour as every row's `VMUL base, 1.0` reads it.
+        let lit0 = m_fmac::<6, 15>(base, bcx(f(1.0)), [0; 4]);
+        Lights {
+            dirs: *dirs,
+            cols: *cols,
+            base,
+            wrap,
+            sd: std::array::from_fn(|k| std::array::from_fn(|l| sp(dirs[k][l]))),
+            sc: std::array::from_fn(|k| std::array::from_fn(|l| sp(cols[k][l]))),
+            sw: std::array::from_fn(|l| sp(wrap[l])),
+            sb: std::array::from_fn(|l| sp(lit0[l])),
+        }
+    }
+}
+
+/// Whether some word of the matrix has exponent 255 (which `m_fmac` reads as the largest number of its sign).
+#[inline(always)]
+fn m_255(m: &[V4; 4]) -> bool {
+    use std::arch::x86_64::*;
+    unsafe {
+        let e = _mm_set1_epi32(0x7f80_0000);
+        let mut o = _mm_setzero_si128();
+        for q in m {
+            o = _mm_or_si128(o, _mm_cmpeq_epi32(_mm_and_si128(_mm_loadu_si128(q.as_ptr() as *const _), e), e));
+        }
+        _mm_movemask_epi8(o) != 0
+    }
+}
+
+type Soa = [[std::arch::x86_64::__m128; 4]; 4];
+
+/// One matrix for all four rows: every word splat.
+#[inline(always)]
+fn soa_one(m: &[V4; 4]) -> Soa {
+    use std::arch::x86_64::*;
+    unsafe { std::array::from_fn(|k| std::array::from_fn(|l| _mm_set1_ps(f32::from_bits(m[k][l])))) }
+}
+
+/// Each row's own matrix: [k][l] holds word l of matrix row k for the four rows.
+#[inline(always)]
+fn soa_four(ms: &[[V4; 4]; 4]) -> Soa {
+    use std::arch::x86_64::*;
+    unsafe {
+        std::array::from_fn(|k| {
+            let ld = |i: usize| _mm_loadu_ps(ms[i][k].as_ptr() as *const f32);
+            let (mut a, mut b, mut c, mut d) = (ld(0), ld(1), ld(2), ld(3));
+            _MM_TRANSPOSE4_PS(&mut a, &mut b, &mut c, &mut d);
+            [a, b, c, d]
+        })
+    }
+}
+
+/// What four rows of a mesh come to: the normals (x, y, z), the lit colours, the positions as integers, the colour words and
+/// the packed positions for the staging records, and the status flags VRSQRT sets (as `qop`).
+struct Rows4 {
+    nrm: [std::arch::x86_64::__m128; 3],
+    lit: [std::arch::x86_64::__m128; 4],
+    ints: [std::arch::x86_64::__m128i; 4],
+    col: std::arch::x86_64::__m128i,
+    pack: [std::arch::x86_64::__m128i; 2],
+    flags: u32,
+}
+
+/// The arithmetic of `mesh`'s row loop on four rows at once (the lanes of each vector are the rows): the same operations in the
+/// same order as the scalar path, so the same bits, given operands without exponent 255 (the caller sends those rows to the
+/// scalar path). `m` is the rows' matrices, `p` the positions' coordinates, `t` the four trig words (cos A, sin A, cos B, sin B).
+#[inline(always)]
+fn rows4(lt: &Lights, m: &Soa, p: [std::arch::x86_64::__m128; 3], t: [std::arch::x86_64::__m128; 4]) -> Rows4 {
+    use std::arch::x86_64::*;
+    unsafe {
+        let one = _mm_set1_ps(1.0);
+        let mul = |a, b| _mm_mul_ps(a, b);
+        let add = |a, b| _mm_add_ps(a, b);
+        // The position: VMULAx, VMADDAy, VMADDAz, VMADDw (the matrix's row 3 times 1).
+        let pos: [__m128; 4] = std::array::from_fn(|l| add(add(add(mul(m[0][l], p[0]), mul(m[1][l], p[1])), mul(m[2][l], p[2])), mul(m[3][l], one)));
+        // The normal from the angles (cos A cos B, sin A cos B, sin B) through rows 0 to 2.
+        let (a, b, z) = (mul(t[0], t[2]), mul(t[1], t[2]), t[3]);
+        let nrm: [__m128; 3] = std::array::from_fn(|l| add(add(mul(m[0][l], a), mul(m[1][l], b)), mul(m[2][l], z)));
+        // 1 / sqrt(x^2 + y^2 + z^2): VRSQRT's quotient, the largest number for a zero, flags D (0x820) and I (0x410).
+        let len = add(add(mul(nrm[0], nrm[0]), mul(nrm[1], nrm[1])), mul(nrm[2], nrm[2]));
+        let zero = _mm_setzero_ps();
+        let is0 = _mm_cmpeq_ps(len, zero);
+        let neg = _mm_cmplt_ps(len, zero);
+        let root = _mm_sqrt_ps(_mm_and_ps(len, _mm_castsi128_ps(_mm_set1_epi32(0x7fff_ffff))));
+        let quot = _mm_div_ps(one, root);
+        let big = _mm_or_si128(
+            _mm_and_si128(_mm_xor_si128(_mm_castps_si128(one), _mm_castps_si128(len)), _mm_set1_epi32(0x8000_0000u32 as i32)),
+            _mm_set1_epi32(0x7f7f_ffff),
+        );
+        let q = _mm_castsi128_ps(_mm_or_si128(_mm_and_si128(_mm_castps_si128(is0), big), _mm_andnot_si128(_mm_castps_si128(is0), _mm_castps_si128(quot))));
+        let flags = if _mm_movemask_ps(is0) != 0 { 0x820 } else { 0 } | if _mm_movemask_ps(neg) != 0 { 0x410 } else { 0 };
+        // The lights: the directions through the normal, the larger of that and it times the wrap factors, the colours through
+        // that, the base added to those times 1 / length.
+        let d: [__m128; 3] = std::array::from_fn(|l| add(add(mul(lt.sd[0][l], nrm[0]), mul(lt.sd[1][l], nrm[1])), mul(lt.sd[2][l], nrm[2])));
+        let s: [__m128; 3] = std::array::from_fn(|l| {
+            let dw = mul(d[l], lt.sw[l]);
+            let ge = _mm_castps_si128(_mm_cmpge_ps(d[l], dw));
+            _mm_castsi128_ps(_mm_or_si128(_mm_and_si128(ge, _mm_castps_si128(d[l])), _mm_andnot_si128(ge, _mm_castps_si128(dw))))
+        });
+        let lit: [__m128; 4] = std::array::from_fn(|l| add(lt.sb[l], mul(add(add(mul(lt.sc[0][l], s[0]), mul(lt.sc[1][l], s[1])), mul(lt.sc[2][l], s[2])), q)));
+        // FTOI0 with the saturation at 2^31 (CVTTPS2DQ gives 0x80000000 for it).
+        let top = _mm_set1_ps(2147483648.0);
+        let ints: [__m128i; 4] = std::array::from_fn(|l| _mm_xor_si128(_mm_cvttps_epi32(pos[l]), _mm_castps_si128(_mm_cmpge_ps(pos[l], top))));
+        // The colour bytes: the low 16 bits of each lane as an s16, limited to -256..255, low byte.
+        let byte = |v: __m128| {
+            let x = _mm_srai_epi32(_mm_slli_epi32(_mm_castps_si128(v), 16), 16);
+            _mm_and_si128(_mm_min_epi16(_mm_max_epi16(x, _mm_set1_epi16(-256)), _mm_set1_epi16(255)), _mm_set1_epi32(0xff))
+        };
+        let col = _mm_or_si128(
+            _mm_or_si128(byte(lit[0]), _mm_slli_epi32(byte(lit[1]), 8)),
+            _mm_or_si128(_mm_slli_epi32(byte(lit[2]), 16), _mm_slli_epi32(byte(lit[3]), 24)),
+        );
+        // The positions' halfwords as the 8 bytes of each row's `pack`.
+        let lo = _mm_set1_epi32(0xffff);
+        let xy = _mm_or_si128(_mm_and_si128(ints[0], lo), _mm_slli_epi32(ints[1], 16));
+        let zw = _mm_or_si128(_mm_and_si128(ints[2], lo), _mm_slli_epi32(ints[3], 16));
+        Rows4 { nrm, lit, ints, col, pack: [_mm_unpacklo_epi32(xy, zw), _mm_unpackhi_epi32(xy, zw)], flags }
+    }
+}
+
+/// One row on the scalar path (`m_fmac` and `m_q`: the operands' exponent 255 read as the largest number): the matrix `m`, the
+/// row's 16 bytes `b`; returns the lit colour, the positions as integers and the normal.
+fn row_scalar(c: &mut Cpu, lt: &Lights, m: &[V4; 4], b: &[u8; 16]) -> (V4, V4, V4) {
+    let p = [i16::from_le_bytes([b[10], b[11]]), i16::from_le_bytes([b[12], b[13]]), i16::from_le_bytes([b[14], b[15]])];
+    let pos = transform(m, p.map(|x| f(x as f32)), Some(f(1.0)));
+    let nrm = transform(m, angles(c, b[8], b[9]), None);
+    // The normal's length: 1 / sqrt(x^2 + y^2 + z^2) (VRSQRT).
+    let sq = m_fmac::<6, 15>(nrm, nrm, [0; 4]);
+    let len = m_fmac::<0, 15>(m_fmac::<0, 15>(bcx(sq[0]), bcx(sq[1]), [0; 4]), bcx(sq[2]), [0; 4]);
+    let q = uycpu::vu0::m_q::<2>(c, f(1.0), len[0]);
+    let d = transform(&lt.dirs, [nrm[0], nrm[1], nrm[2]], None);
+    let s = m_fmac::<4, 15>(d, m_fmac::<6, 15>(d, lt.wrap, [0; 4]), [0; 4]);
+    let a = transform(&lt.cols, [s[0], s[1], s[2]], None);
+    let lit = m_fmac::<2, 15>(a, bcx(q), m_fmac::<6, 15>(lt.base, bcx(f(1.0)), [0; 4]));
+    (lit, m_ftoi::<0>(pos), nrm)
+}
+
 /// One mesh of the skinned layout: packet B at `buf`, its output arrays at `out`.
-#[allow(clippy::too_many_arguments)]
-fn mesh(c: &mut Cpu, buf: u32, out: u32, staging: u32, dirs: &[V4; 3], cols: &[V4; 3], base: V4, wrap: V4) {
+///
+/// The rows go through in groups of four, in the order the VU program takes them: each row's matrix through VU0's data memory as
+/// before (a group 3 row that repeats the previous row's matrix words and joint leaves the memory as it is and keeps its
+/// matrix), then the four rows' arithmetic at once (`rows4`), or, when some operand of the group has exponent 255, row by row
+/// on the scalar path.
+fn mesh(c: &mut Cpu, buf: u32, out: u32, staging: u32, lt: &Lights) {
+    use std::arch::x86_64::*;
     let h = |c: &mut Cpu, o: u32| c.rd16(buf + o) as u32;
     let (n0, g1, g2, g3, copies, vc, roff, cn) = (h(c, 0), h(c, 2), h(c, 4), h(c, 6), h(c, 8), h(c, 0xa), h(c, 0xc), h(c, 0xe));
     let rows = g1 + g2 + g3;
@@ -2165,63 +2324,141 @@ fn mesh(c: &mut Cpu, buf: u32, out: u32, staging: u32, dirs: &[V4; 3], cols: &[V
         }
     }
     let copies_at = buf + 0x10 + ((2 * n0 + 7) & !7);
+    let row_at = (buf + roff) & !15;
     let row = |c: &mut Cpu, r: u32| -> [u8; 16] {
-        let (lo, hi) = c.rd128(buf + roff + 16 * r);
+        let (lo, hi) = c.rd128(row_at + 16 * r);
         let mut b = [0u8; 16];
         b[..8].copy_from_slice(&lo.to_le_bytes());
         b[8..].copy_from_slice(&hi.to_le_bytes());
         b
     };
     let w = |b: u8| f(b as f32 / 256.0);
+    let normals = crate::SKIN_JOINTS.load(Relaxed);
+    // Each row's packed position and colour word (a mesh has under 128 rows: packet B is 0x800 bytes).
+    let mut pk = [0u64; 136];
+    let mut cl = [0u32; 136];
     // The VU program writes row r's results two hand-offs later, even rows into VF11/VF12 and odd ones into VF09/VF10, and
     // ends at hand-off rows + 2; the EE reads row r after hand-off r + 3, so a row past the end it reads finds the last real row
-    // of the same parity.
-    let mut outs: Vec<(u64, u32)> = Vec::with_capacity(rows as usize);
-    for r in 0..rows {
-        let pair = if r % 2 == 0 { 11 } else { 9 };
-        let b = row(c, r);
-        let w0 = u16::from_le_bytes([b[0], b[1]]) as u32;
-        let (b2, b3) = (b[2] as u32, b[3] as u32);
-        // A row's own joint (VF05 to VF08, the joint its halfword names) goes into VU0's data memory before the matrices it
-        // uses are loaded (groups 1 and 3), its blended matrix after them (groups 1 and 2).
-        let m = if r < g1 {
-            let own = joint(c, w0 >> 9);
-            for k in 0..4 {
-                vu0_put(c, b[6] as u32 + k, own[k as usize]);
+    // of the same parity: the last two rows' registers are the ones that stay.
+    let to_vf = |c: &mut Cpu, r: u32, lit: V4, ints: V4| {
+        if r + 2 >= rows {
+            let pair = if r % 2 == 0 { 11 } else { 9 };
+            (c.vf[pair], c.vf[pair + 1]) = (lit, ints);
+        }
+    };
+    // The matrix of the last group 3 row, and the words that named it ((b2, b3, w0 >> 9)): the next row with the same ones leaves
+    // VU0's data memory as it is (its put writes what the last row's put did, and its matrix is the last row's).
+    let mut cur_key: Option<(u32, u32, u32)> = None;
+    let (mut cur_m, mut cur_255, mut cur_id) = ([[0u32; 4]; 4], false, 0u32);
+    let (mut ms, mut soa_id, mut soa) = ([[[0u32; 4]; 4]; 4], u32::MAX, unsafe { [[_mm_setzero_ps(); 4]; 4] });
+    let mut start = 0u32;
+    while start < rows {
+        let n = (rows - start).min(4) as usize;
+        let mut bs = [[0u8; 16]; 4];
+        let mut ids = [0u32; 4];
+        let mut any_255 = false;
+        for i in 0..n {
+            let r = start + i as u32;
+            let b = row(c, r);
+            bs[i] = b;
+            let w0 = u16::from_le_bytes([b[0], b[1]]) as u32;
+            let (b2, b3) = (b[2] as u32, b[3] as u32);
+            // A row's own joint (VF05 to VF08, the joint its halfword names) goes into VU0's data memory before the matrices it
+            // uses are loaded (groups 1 and 3), its blended matrix after them (groups 1 and 2).
+            if r < g1 {
+                let own = joint(c, w0 >> 9);
+                for k in 0..4 {
+                    vu0_put(c, b[6] as u32 + k, own[k as usize]);
+                }
+                let m = blend(&[vu0_mat(c, b2), vu0_mat(c, b3)], &[w(b[4]), w(b[5])]);
+                for k in 0..4 {
+                    vu0_put(c, b[7] as u32 + k, m[k as usize]);
+                }
+                (cur_key, cur_m, cur_255, cur_id) = (None, m, m_255(&m), cur_id + 1);
+            } else if r < g1 + g2 {
+                let m = blend(&[vu0_mat(c, b2), vu0_mat(c, b3), vu0_mat(c, 2 * (w0 >> 9))], &[w(b[4]), w(b[5]), w(b[6])]);
+                for k in 0..4 {
+                    vu0_put(c, b[7] as u32 + k, m[k as usize]);
+                }
+                (cur_key, cur_m, cur_255, cur_id) = (None, m, m_255(&m), cur_id + 1);
+            } else if cur_key != Some((b2, b3, w0 >> 9)) {
+                let own = joint(c, w0 >> 9);
+                for k in 0..4 {
+                    vu0_put(c, b3 + k, own[k as usize]);
+                }
+                let m = vu0_mat(c, b2);
+                (cur_key, cur_m, cur_255, cur_id) = (Some((b2, b3, w0 >> 9)), m, m_255(&m), cur_id + 1);
             }
-            let m = blend(&[vu0_mat(c, b2), vu0_mat(c, b3)], &[w(b[4]), w(b[5])]);
-            for k in 0..4 {
-                vu0_put(c, b[7] as u32 + k, m[k as usize]);
-            }
-            m
-        } else if r < g1 + g2 {
-            let m = blend(&[vu0_mat(c, b2), vu0_mat(c, b3), vu0_mat(c, 2 * (w0 >> 9))], &[w(b[4]), w(b[5]), w(b[6])]);
-            for k in 0..4 {
-                vu0_put(c, b[7] as u32 + k, m[k as usize]);
-            }
-            m
-        } else {
-            let own = joint(c, w0 >> 9);
-            for k in 0..4 {
-                vu0_put(c, b3 + k, own[k as usize]);
-            }
-            vu0_mat(c, b2)
+            ids[i] = cur_id;
+            ms[i] = cur_m;
+            any_255 |= cur_255;
+        }
+        // The trig words of the rows' angles (the missing rows of the last group repeat the last row's).
+        let mut tg = [[0u32; 4]; 4];
+        for i in 0..4 {
+            let b = &bs[i.min(n - 1)];
+            let ((ca, sa), (cb, sb)) = (trig(c, b[8]), trig(c, b[9]));
+            tg[i] = [ca, sa, cb, sb];
+        }
+        let t = unsafe { std::array::from_fn::<__m128i, 4, _>(|l| _mm_setr_epi32(tg[0][l] as i32, tg[1][l] as i32, tg[2][l] as i32, tg[3][l] as i32)) };
+        let e = unsafe { _mm_set1_epi32(0x7f80_0000) };
+        let t_255 = unsafe {
+            let o = |v: __m128i| _mm_cmpeq_epi32(_mm_and_si128(v, e), e);
+            _mm_movemask_epi8(_mm_or_si128(_mm_or_si128(o(t[0]), o(t[1])), _mm_or_si128(o(t[2]), o(t[3])))) != 0
         };
-        let p = [i16::from_le_bytes([b[10], b[11]]), i16::from_le_bytes([b[12], b[13]]), i16::from_le_bytes([b[14], b[15]])];
-        let pos = transform(&m, p.map(|x| f(x as f32)), Some(f(1.0)));
-        let nrm = transform(&m, angles(c, b[8], b[9]), None);
-        // The normal's length: 1 / sqrt(x^2 + y^2 + z^2) (VRSQRT).
-        let sq = m_fmac::<6, 15>(nrm, nrm, [0; 4]);
-        let len = m_fmac::<0, 15>(m_fmac::<0, 15>(bcx(sq[0]), bcx(sq[1]), [0; 4]), bcx(sq[2]), [0; 4]);
-        let q = uycpu::vu0::m_q::<2>(c, f(1.0), len[0]);
-        let d = transform(dirs, [nrm[0], nrm[1], nrm[2]], None);
-        let s = m_fmac::<4, 15>(d, m_fmac::<6, 15>(d, wrap, [0; 4]), [0; 4]);
-        let a = transform(cols, [s[0], s[1], s[2]], None);
-        let lit = m_fmac::<2, 15>(a, bcx(q), m_fmac::<6, 15>(base, bcx(f(1.0)), [0; 4]));
-        normal(c, nrm);
-        let ints = m_ftoi::<0>(pos);
-        (c.vf[pair], c.vf[pair + 1]) = (lit, ints);
-        outs.push((pack(ints), colour_of(lit)));
+        if any_255 || t_255 {
+            for i in 0..n {
+                let r = start + i as u32;
+                let (lit, ints, nrm) = row_scalar(c, lt, &ms[i], &bs[i]);
+                normal(c, nrm);
+                to_vf(c, r, lit, ints);
+                (pk[r as usize], cl[r as usize]) = (pack(ints), colour_of(lit));
+            }
+        } else {
+            if ids[..n].iter().all(|&i| i == ids[0]) {
+                if soa_id != ids[0] {
+                    soa = soa_one(&cur_m);
+                    soa_id = ids[0];
+                }
+            } else {
+                for i in n..4 {
+                    ms[i] = ms[n - 1];
+                }
+                soa = soa_four(&ms);
+                soa_id = u32::MAX;
+            }
+            let p: [__m128; 3] = unsafe {
+                std::array::from_fn(|l| {
+                    let x = |i: usize| i16::from_le_bytes([bs[i.min(n - 1)][10 + 2 * l], bs[i.min(n - 1)][11 + 2 * l]]) as i32;
+                    _mm_cvtepi32_ps(_mm_setr_epi32(x(0), x(1), x(2), x(3)))
+                })
+            };
+            let res = rows4(lt, &soa, p, unsafe { t.map(|v| _mm_castsi128_ps(v)) });
+            c.vi[16] |= res.flags;
+            let r0 = start as usize;
+            unsafe {
+                _mm_storeu_si128(cl.as_mut_ptr().add(r0) as *mut __m128i, res.col);
+                _mm_storeu_si128(pk.as_mut_ptr().add(r0) as *mut __m128i, res.pack[0]);
+                _mm_storeu_si128(pk.as_mut_ptr().add(r0 + 2) as *mut __m128i, res.pack[1]);
+            }
+            if normals || start + n as u32 + 1 >= rows {
+                let mut lanes = [[[0u32; 4]; 4]; 3];
+                unsafe {
+                    for l in 0..3 {
+                        _mm_storeu_ps(lanes[0][l].as_mut_ptr() as *mut f32, res.nrm[l]);
+                    }
+                    for l in 0..4 {
+                        _mm_storeu_ps(lanes[1][l].as_mut_ptr() as *mut f32, res.lit[l]);
+                        _mm_storeu_si128(lanes[2][l].as_mut_ptr() as *mut __m128i, res.ints[l]);
+                    }
+                }
+                for i in 0..n {
+                    normal(c, [lanes[0][0][i], lanes[0][1][i], lanes[0][2][i], 0]);
+                    to_vf(c, start + i as u32, std::array::from_fn(|l| lanes[1][l][i]), std::array::from_fn(|l| lanes[2][l][i]));
+                }
+            }
+        }
+        start += 4;
     }
     // The EE's last pass (fp, (rows - 3) % 4 rows after its loop of four): row r's outputs at index r and in the staging record
     // the row 7 after it names (the last rows': the halfwords 2 to 7 of the row its loop read last).
@@ -2230,15 +2467,14 @@ fn mesh(c: &mut Cpu, buf: u32, out: u32, staging: u32, dirs: &[V4; 3], cols: &[V
         let j = r + 7;
         let last = rows + 3 - fp;
         if j <= last {
-            u16::from_le_bytes(row(c, j)[..2].try_into().expect("2 bytes")) as u32 & 0x1ff
+            c.rd16(row_at + 16 * j) as u32 & 0x1ff
         } else {
-            let lane = (j - last + 1) as usize;
-            let b = row(c, last);
-            u16::from_le_bytes([b[2 * lane], b[2 * lane + 1]]) as u32 & 0x1ff
+            let lane = (j - last + 1) as u32;
+            c.rd16(row_at + 16 * last + 2 * lane) as u32 & 0x1ff
         }
     };
     for r in 0..rows {
-        let (p, col) = outs[r as usize];
+        let (p, col) = (pk[r as usize], cl[r as usize]);
         c.wr32(out + 4 * r, col);
         // The last row's position: x, y and z alone when it ends at a doubleword's end (fp 1), else with its w.
         if r + 1 == rows && fp == 1 {
@@ -2246,7 +2482,7 @@ fn mesh(c: &mut Cpu, buf: u32, out: u32, staging: u32, dirs: &[V4; 3], cols: &[V
                 c.wr16(positions + 6 * r + 2 * k, (p >> (16 * k)) as u16);
             }
         } else {
-            wr_pos(c, positions + 6 * r, p);
+            c.wr64(positions + 6 * r, p);
         }
         let at = staging + 16 * named(c, r);
         c.wr64(at, p);
@@ -2254,7 +2490,7 @@ fn mesh(c: &mut Cpu, buf: u32, out: u32, staging: u32, dirs: &[V4; 3], cols: &[V
     }
     // With fp 0 or 2 the EE stores its colours in pairs one row past the end: the colour of row rows - 2 (VF09's).
     if fp % 2 == 0 {
-        let col = outs[rows as usize - 2].1;
+        let col = cl[rows as usize - 2];
         c.wr32(out + 4 * rows, col);
     }
     // The vertex copies from the staging records.

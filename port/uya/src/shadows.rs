@@ -653,7 +653,7 @@ impl LevelShadows {
             if let Some((shrubs, g)) = statics.shrubs {
                 let mut bound: Option<*const wgpu::Buffer> = None;
                 let mut err = None;
-                shrubs.casters(ram, g, |vb, key, range, centre, radius| {
+                shrubs.casters(ram, g, |vb, ib, key, range, centre, radius| {
                     if err.is_some() || !reaches(centre, radius) {
                         return;
                     }
@@ -663,10 +663,11 @@ impl LevelShadows {
                     };
                     if bound != Some(vb as *const _) {
                         p.set_vertex_buffer(0, vb.slice(..));
+                        p.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
                         bound = Some(vb as *const _);
                     }
                     p.set_bind_group(1, bg, &[]);
-                    p.draw(range, 0..1);
+                    p.draw_indexed(range, 0, 0..1);
                 })?;
                 if let Some(e) = err {
                     return Err(e);

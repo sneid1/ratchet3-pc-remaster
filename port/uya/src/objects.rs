@@ -1108,7 +1108,7 @@ impl Pipelines {
 
     /// The shrubs' `draws` (`Shrubs::frame`: ranges of the level's built shrub vertices, each with the chunk of `vertices` it
     /// draws from, bound with the instances' fog values at group 2), as `draw` draws a `Blend::Alpha` setting.
-    pub fn draw_shrubs<'a, E: Enc<'a>>(&'a self, pass: &mut E, materials: &'a Materials, vertices: &'a [Option<wgpu::Buffer>], draws: &[(usize, Draw)]) -> Result<(), String> {
+    pub fn draw_shrubs<'a, E: Enc<'a>>(&'a self, pass: &mut E, materials: &'a Materials, vertices: &'a [Option<wgpu::Buffer>], indices: &'a [Option<wgpu::Buffer>], draws: &[(usize, Draw)]) -> Result<(), String> {
         // Every draw's passing pixels, then every draw's failing ones: two pipeline binds, where a draw's own passing and failing
         // pixels in turn bound one each (level 1's 10,149 draws took 11.4 ms to record that way). A shrub's below-AREF pixels (its
         // fringe, colour only) come after the passing pixels of the shrubs after it, as within one draw they come after its later
@@ -1125,10 +1125,11 @@ impl Pipelines {
                 if *c != chunk {
                     let vb = vertices[*c].as_ref().ok_or("native: a shrub draw from a chunk with no vertices")?;
                     pass.set_vertex_buffer(0, vb);
+                    pass.set_index_buffer(indices[*c].as_ref().ok_or("native: a shrub draw from a chunk with no corners")?);
                     chunk = *c;
                 }
                 b.group(pass, bg);
-                pass.draw(dr.first..dr.first + dr.count);
+                pass.draw_indexed(dr.first..dr.first + dr.count);
             }
         }
         Ok(())
@@ -1798,8 +1799,10 @@ struct ShrubsBuilt {
     colours: Vec<u8>,
     /// Per instance its chunk and its runs of one texture setting: (setting, first vertex in the chunk, vertices).
     runs: Vec<(usize, Vec<(Key, u32, u32)>)>,
-    /// Each chunk's vertices (None: no triangles).
+    /// Each chunk's vertices (None: no triangles), and its corners, three a triangle in the strips' order, as indices into them:
+    /// the runs' first vertex and count are into these.
     vertices: Vec<Option<wgpu::Buffer>>,
+    indices: Vec<Option<wgpu::Buffer>>,
     /// Each instance's fog value as float bits, followed by the batched path's current packed colours, and per frame set
     /// (`native::SETS`) its buffer and bind group
     /// (`Pipelines::shrub_layout`; empty when no instance has a triangle).
@@ -1919,14 +1922,16 @@ impl Shrubs {
             held += n;
         }
         chunks.push(from..instance_class.len());
-        let batch = materials.batch_inputs.take().filter(|inputs| !inputs.is_empty()).map(|inputs| crate::shrub_batch::Batch::new(device, view_layout, fog_layout, inputs)).transpose()?;
+        let batch = materials.batch_inputs.take().filter(|inputs| !inputs.is_empty()).map(|inputs| crate::shrub_batch::Batch::new(device, view_layout, fog_layout, inputs)).transpose()?.flatten();
         Ok(Shrubs { classes, records, instance_class, class_reach, materials, chunks, built: std::sync::Mutex::new(None), batch })
     }
 
-    /// Every built instance not hidden (+0x16 bit 0), as the shadows' casters (`shadows.rs`): `f(its chunk's vertices, a run's
-    /// setting, its vertices, the instance's sphere centre and radius)` for each run, in the game's order (`visible`'s sphere).
-    /// Nothing before the shrubs' first frame has built them.
-    pub fn casters(&self, ram: &[u8], g: &ShrubGlobals, mut f: impl FnMut(&wgpu::Buffer, Key, std::ops::Range<u32>, [f32; 3], f32)) -> Result<(), String> {
+    /// Every built instance not hidden (+0x16 bit 0), as the shadows' casters (`shadows.rs`): `f(its chunk's vertices, the chunk's
+    /// corners as indices into them, a run's setting, its corners, the instance's sphere centre and radius)` for each run, in the
+    /// game's order (`visible`'s sphere): the runs are ranges of corners, drawn indexed (as ranges of the vertices they passed
+    /// the vertices' end: a VertexBeyondLimit error, the game stopped, with SHADOWS on). Nothing before the shrubs' first frame
+    /// has built them.
+    pub fn casters(&self, ram: &[u8], g: &ShrubGlobals, mut f: impl FnMut(&wgpu::Buffer, &wgpu::Buffer, Key, std::ops::Range<u32>, [f32; 3], f32)) -> Result<(), String> {
         let built = self.built.lock().map_err(|_| "native: the built shrubs' lock is poisoned")?;
         let Some(b) = built.as_ref() else { return Ok(()) };
         let (arr, mats) = (rd_u32(ram, g.instances as usize)? as usize, rd_u32(ram, g.matrices as usize)? as usize);
@@ -1935,7 +1940,8 @@ impl Shrubs {
             if *ram.get(arr + 32 * i + 0x16).ok_or("native: a shrub instance past RAM")? & 1 != 0 || runs.is_empty() {
                 continue;
             }
-            let Some(vb) = &b.vertices[*chunk] else { continue };
+            // A chunk's vertices and corners are made together (both or neither).
+            let (Some(vb), Some(ib)) = (&b.vertices[*chunk], &b.indices[*chunk]) else { continue };
             let m = mats + 64 * i;
             let row = |r: usize| -> Result<[f32; 3], String> { Ok([rd_f32(ram, m + 16 * r)?, rd_f32(ram, m + 16 * r + 4)?, rd_f32(ram, m + 16 * r + 8)?]) };
             let rows = [row(0)?, row(1)?, row(2)?, row(3)?];
@@ -1945,7 +1951,7 @@ impl Shrubs {
             let norm = (dot(rows[0], rows[0]) + dot(rows[1], rows[1]) + dot(rows[2], rows[2])).sqrt();
             let reach = self.class_reach[self.instance_class[i]] * scale.abs() * norm * 1.001 + 0.01;
             for &(key, first, count) in runs {
-                f(vb, key, first..first + count, mid, reach);
+                f(vb, ib, key, first..first + count, mid, reach);
             }
         }
         Ok(())
@@ -2096,7 +2102,7 @@ impl Shrubs {
     ///
     /// `groups` gets where each run of one chunk and setting begins in `draws` (the draws the frame's indices gave before: the
     /// shrubs' threads split their bundles between them as they split those draws).
-    pub fn frame(&self, device: &wgpu::Device, queue: &wgpu::Queue, fog_layout: &wgpu::BindGroupLayout, ram: &[u8], g: &ShrubGlobals, cam: &Camera, fog: &uyafmt::gameplay::Fog, instances: &[usize], set: usize, draws: &mut Vec<(usize, Draw)>, groups: &mut Vec<usize>) -> Result<Option<(Vec<Option<wgpu::Buffer>>, Vec<Option<wgpu::Buffer>>, wgpu::BindGroup)>, String> {
+    pub fn frame(&self, device: &wgpu::Device, queue: &wgpu::Queue, fog_layout: &wgpu::BindGroupLayout, ram: &[u8], g: &ShrubGlobals, cam: &Camera, fog: &uyafmt::gameplay::Fog, instances: &[usize], set: usize, draws: &mut Vec<(usize, Draw)>, groups: &mut Vec<usize>) -> Result<Option<(Vec<Option<wgpu::Buffer>>, Vec<Option<wgpu::Buffer>>, Vec<Option<wgpu::Buffer>>, wgpu::BindGroup)>, String> {
         let n = self.instance_class.len();
         let (arr, mats, cols) = (rd_u32(ram, g.instances as usize)? as usize, rd_u32(ram, g.matrices as usize)? as usize, rd_u32(ram, g.colours as usize)? as usize);
         let mut built = self.built.lock().map_err(|_| "native: the built shrubs' lock is poisoned")?;
@@ -2147,7 +2153,7 @@ impl Shrubs {
             }
         }
         queue.write_buffer(fog_buffer, 0, bytemuck::cast_slice(&b.fog));
-        Ok(Some((b.vertices.clone(), b.batch_vertices.clone(), fog_group.clone())))
+        Ok(Some((b.vertices.clone(), b.indices.clone(), b.batch_vertices.clone(), fog_group.clone())))
     }
 
     /// Every instance's triangles from the game's arrays in `ram`, in its order, each vertex carrying its instance's number for
@@ -2162,7 +2168,7 @@ impl Shrubs {
         let colours_len = blocks.iter().map(|&k| 96 * (k as usize + 1)).fold(0, usize::max);
         let colours = ram.get(cols..cols + colours_len).ok_or("native: the shrub colour blocks lie past RAM")?.to_vec();
         // One chunk: its instances' runs, and its vertices' buffer, written as they are made.
-        let chunk = |c: usize| -> Result<(Vec<Vec<(Key, u32, u32)>>, Option<wgpu::Buffer>), String> {
+        let chunk = |c: usize| -> Result<(Vec<Vec<(Key, u32, u32)>>, Option<(wgpu::Buffer, wgpu::Buffer, Vec<(Key, u32)>)>), String> {
             let range = self.chunks[c].clone();
             // The chunk's runs first (the vertices each takes), then its vertices into the buffer.
             let mut runs = Vec::with_capacity(range.len());
@@ -2186,64 +2192,76 @@ impl Shrubs {
             if total == 0 {
                 return Ok((runs, None));
             }
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("shrubs"), size: total as u64 * std::mem::size_of::<ShrubVertex>() as u64, usage: wgpu::BufferUsages::VERTEX, mapped_at_creation: true });
-            {
-                let mut out: Vec<ShrubVertex> = Vec::with_capacity(total as usize);
-                // A block's vertices as this instance draws them, each made the first time a strip asks for it: a strip's vertex
-                // is in up to three of its triangles.
-                let mut made: Vec<Option<ShrubVertex>> = Vec::new();
-                for i in range {
-                    let a = arr + 32 * i;
-                    let m = mats + 64 * i;
-                    let row = |r: usize| -> Result<[f32; 3], String> { Ok([rd_f32(ram, m + 16 * r)?, rd_f32(ram, m + 16 * r + 4)?, rd_f32(ram, m + 16 * r + 8)?]) };
-                    let rows = [row(0)?, row(1)?, row(2)?, row(3)?];
-                    // Row 3's w: the class's scale the loader writes (the instance's centre, +0, is the class's centre times it,
-                    // carried through the rows: Veldin field 2400, every shrub).
-                    let scale = rd_f32(ram, m + 0x3c)?;
-                    let block = cols + 96 * u16::from_le_bytes([ram[a + 0x18], ram[a + 0x19]]) as usize;
-                    let colour = |c: u16| -> Result<[u8; 4], String> {
-                        if c >= 24 {
-                            return Err(format!("native: shrub colour index {c} of 24"));
+            // The chunk's vertices, each once for the strips of one texture setting in a block, and its corners (three a triangle,
+            // in the strips' order: the runs' first and count are into them) as indices into those. A strip's vertex is in up to
+            // three of its triangles: drawn as a list of every triangle's three, it was fetched and shaded that often, 1.2 million
+            // corners a frame in Veldin, 98 MB read twice (the passing and the failing pixels) with the batch's material words, on
+            // GPUs of a fraction of this PC's bandwidth. Each vertex carries its strip's setting and its colour's place in the fog
+            // table (`ShrubBatch::vertex_materials`), so a vertex is shared only within one setting.
+            let mut out: Vec<ShrubVertex> = Vec::new();
+            let mut idx: Vec<u32> = Vec::with_capacity(total as usize);
+            let mut vmat: Vec<(Key, u32)> = Vec::new();
+            let mut made: Vec<Option<u32>> = Vec::new();
+            for i in range {
+                let a = arr + 32 * i;
+                let m = mats + 64 * i;
+                let row = |r: usize| -> Result<[f32; 3], String> { Ok([rd_f32(ram, m + 16 * r)?, rd_f32(ram, m + 16 * r + 4)?, rd_f32(ram, m + 16 * r + 8)?]) };
+                let rows = [row(0)?, row(1)?, row(2)?, row(3)?];
+                // Row 3's w: the class's scale the loader writes (the instance's centre, +0, is the class's centre times it,
+                // carried through the rows: Veldin field 2400, every shrub).
+                let scale = rd_f32(ram, m + 0x3c)?;
+                let block = cols + 96 * u16::from_le_bytes([ram[a + 0x18], ram[a + 0x19]]) as usize;
+                let colour = |c: u16| -> Result<[u8; 4], String> {
+                    if c >= 24 {
+                        return Err(format!("native: shrub colour index {c} of 24"));
+                    }
+                    let w = ram.get(block + 4 * c as usize..block + 4 * c as usize + 4).ok_or("native: shrub colour block past RAM")?;
+                    Ok([w[0], w[1], w[2], ram[block + 3]])
+                };
+                // The instance's colours' place in the fog table: after the instances' fog words, 24 a colour block.
+                let slots = n as u32 + 24 * blocks[i] as u32;
+                for bl in &self.classes[self.instance_class[i]].blocks {
+                    made.clear();
+                    made.resize(bl.vertices.len(), None);
+                    let mut setting: Option<Key> = None;
+                    for st in &bl.strips {
+                        let key = strip_key(bl, st, &self.records[self.instance_class[i]])?;
+                        if setting != Some(key) {
+                            made.fill(None);
+                            setting = Some(key);
                         }
-                        let w = ram.get(block + 4 * c as usize..block + 4 * c as usize + 4).ok_or("native: shrub colour block past RAM")?;
-                        Ok([w[0], w[1], w[2], ram[block + 3]])
-                    };
-                    for bl in &self.classes[self.instance_class[i]].blocks {
-                        made.clear();
-                        made.resize(bl.vertices.len(), None);
-                        for st in &bl.strips {
-                            // `uya native --surfaces`: the strip's texture's name, for its world size per repeat.
-                            let surface = match crate::surfaces::on() {
-                                true => self.materials.names.get(strip_key(bl, st, &self.records[self.instance_class[i]])?.0 as usize).copied().flatten(),
-                                false => None,
-                            };
-                            let mut vert = |vi: usize| -> Result<ShrubVertex, String> {
-                                if let Some(o) = made[vi] {
-                                    return Ok(o);
-                                }
-                                let v = &bl.vertices[vi];
-                                // The raw s16 position in 1/1024 class units (every vertex then lies in the class's bounding
-                                // sphere, +0xC), times the class's scale.
-                                let p = v.pos.map(|c| c / 1024.0 * scale);
-                                let pos = [0, 1, 2].map(|k| p[0] * rows[0][k] + p[1] * rows[1][k] + p[2] * rows[2][k] + rows[3][k]);
-                                let o = ShrubVertex { pos, st: v.st, colour: colour(v.colour)?, instance: i as u32 };
-                                made[vi] = Some(o);
-                                Ok(o)
-                            };
-                            for k in 2..st.vertices.len() {
-                                for vi in [st.vertices[k - 2], st.vertices[k - 1], st.vertices[k]] {
-                                    out.push(vert(vi)?);
-                                }
+                        // `uya native --surfaces`: the strip's texture's name, for its world size per repeat.
+                        let surface = match crate::surfaces::on() {
+                            true => self.materials.names.get(key.0 as usize).copied().flatten(),
+                            false => None,
+                        };
+                        for k in 2..st.vertices.len() {
+                            for vi in [st.vertices[k - 2], st.vertices[k - 1], st.vertices[k]] {
+                                let at = match made[vi] {
+                                    Some(at) => at,
+                                    None => {
+                                        let v = &bl.vertices[vi];
+                                        // The raw s16 position in 1/1024 class units (every vertex then lies in the class's
+                                        // bounding sphere, +0xC), times the class's scale.
+                                        let p = v.pos.map(|c| c / 1024.0 * scale);
+                                        let pos = [0, 1, 2].map(|k| p[0] * rows[0][k] + p[1] * rows[1][k] + p[2] * rows[2][k] + rows[3][k]);
+                                        out.push(ShrubVertex { pos, st: v.st, colour: colour(v.colour)?, instance: i as u32 });
+                                        vmat.push((key, slots + v.colour as u32));
+                                        let at = (out.len() - 1) as u32;
+                                        made[vi] = Some(at);
+                                        at
+                                    }
+                                };
+                                idx.push(at);
+                            }
+                            if surface.is_some() || pick.is_some() {
+                                let c3 = idx.len();
+                                let t = [out[idx[c3 - 3] as usize], out[idx[c3 - 2] as usize], out[idx[c3 - 1] as usize]];
                                 if let Some(name) = surface {
-                                    let n = out.len();
-                                    let t = [out[n - 3], out[n - 2], out[n - 1]];
                                     crate::surfaces::object_triangle(name, t.map(|v| v.pos), t.map(|v| [v.st[0], v.st[1]]));
                                 }
                                 if let Some(pick) = pick {
-                                    let n = out.len();
-                                    let t = [out[n - 3], out[n - 2], out[n - 1]];
                                     if let Some(distance) = pick.hit(t.map(|v| v.pos)) {
-                                        let key = strip_key(bl, st, &self.records[self.instance_class[i]])?;
                                         let name = self.materials.names[key.0 as usize].map(|n| n.stem());
                                         println!("pick: shrub {i} class {} distance {distance:.4} texture {name:?} key {key:?} colours {:?}", self.instance_class[i], t.map(|v| v.colour));
                                     }
@@ -2252,14 +2270,17 @@ impl Shrubs {
                         }
                     }
                 }
-                buffer.slice(..).get_mapped_range_mut().map_err(|e| format!("native: the shrubs' buffer, mapped at creation: {e}"))?.copy_from_slice(bytemuck::cast_slice(&out));
             }
-            buffer.unmap();
-            Ok((runs, Some(buffer)))
+            if idx.len() != total as usize {
+                return Err(format!("native: shrub chunk {c}: {} corners made where its runs count {total}", idx.len()));
+            }
+            let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("shrubs"), contents: bytemuck::cast_slice(&out), usage: wgpu::BufferUsages::VERTEX });
+            let corners = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("shrub corners"), contents: bytemuck::cast_slice(&idx), usage: wgpu::BufferUsages::INDEX });
+            Ok((runs, Some((vertices, corners, vmat))))
         };
         // `SHRUB_BUILDERS` chunks at a time, each on a thread; each batch's vertices copied to the GPU and their staging freed
         // before the next batch is built (level 28's 12 chunks, 380 MB, staged at once took its peak memory from 1.5 to 1.8 GB).
-        let mut done: Vec<(usize, Vec<Vec<(Key, u32, u32)>>, Option<wgpu::Buffer>)> = Vec::with_capacity(self.chunks.len());
+        let mut done: Vec<(usize, Vec<Vec<(Key, u32, u32)>>, Option<(wgpu::Buffer, wgpu::Buffer, Vec<(Key, u32)>)>)> = Vec::with_capacity(self.chunks.len());
         let all: Vec<usize> = (0..self.chunks.len()).collect();
         let chunk = &chunk;
         for batch in all.chunks(SHRUB_BUILDERS) {
@@ -2273,10 +2294,16 @@ impl Shrubs {
         }
         done.sort_by_key(|d| d.0);
         let mut runs = Vec::with_capacity(n);
-        let mut vertices = Vec::with_capacity(done.len());
-        for (c, r, buffer) in done {
+        let (mut vertices, mut indices, mut vmats) = (Vec::with_capacity(done.len()), Vec::with_capacity(done.len()), Vec::with_capacity(done.len()));
+        for (c, r, built) in done {
             runs.extend(r.into_iter().map(|own| (c, own)));
-            vertices.push(buffer);
+            let (v, i, m) = match built {
+                Some((v, i, m)) => (Some(v), Some(i), Some(m)),
+                None => (None, None, None),
+            };
+            vertices.push(v);
+            indices.push(i);
+            vmats.push(m);
         }
         // Batched vertices fetch the current lighting colour after the per-instance fog words. Keep both in the frame set
         // so replays retain the original frame's colours while another frame is prepared.
@@ -2290,25 +2317,13 @@ impl Shrubs {
             })
             .collect();
         let total: u64 = vertices.iter().flatten().map(|b| b.size()).sum::<u64>() / std::mem::size_of::<ShrubVertex>() as u64;
-        println!("native: shrubs built: {n} instances, {total} vertices in {} chunks, {:.1} ms", vertices.len(), t.elapsed().as_secs_f64() * 1e3);
+        let corners: u64 = indices.iter().flatten().map(|b| b.size()).sum::<u64>() / 4;
+        println!("native: shrubs built: {n} instances, {total} vertices for {corners} corners in {} chunks, {:.1} ms", vertices.len(), t.elapsed().as_secs_f64() * 1e3);
         let batch_vertices = match &self.batch {
-            Some(batch) => batch.vertex_materials(device, &vertices, &runs, |chunk| {
-                let mut slots = Vec::new();
-                for i in self.chunks[chunk].clone() {
-                    let base = n as u32 + 24 * blocks[i] as u32;
-                    for bl in &self.classes[self.instance_class[i]].blocks {
-                        for st in &bl.strips {
-                            for k in 2..st.vertices.len() {
-                                slots.extend([st.vertices[k - 2], st.vertices[k - 1], st.vertices[k]].map(|v| base + bl.vertices[v].colour as u32));
-                            }
-                        }
-                    }
-                }
-                slots
-            }),
+            Some(batch) => batch.vertex_materials(device, &vmats),
             None => Vec::new(),
         };
-        Ok(ShrubsBuilt { matrices, blocks, colours, runs, vertices, fog, fog_gpu, batch_vertices })
+        Ok(ShrubsBuilt { matrices, blocks, colours, runs, vertices, indices, fog, fog_gpu, batch_vertices })
     }
 }
 

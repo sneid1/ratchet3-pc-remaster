@@ -828,7 +828,8 @@ impl Native {
         let cache = if crate::pipelines::wanted() { wgpu::Features::PIPELINE_CACHE } else { wgpu::Features::empty() };
         // The ray-traced shadows (`raytrace.rs`) where the GPU traces rays: Vulkan's ray queries, which wgpu 30 offers as an
         // experimental feature.
-        let rays = crate::raytrace::supported(&adapter);
+        // UYA_NO_RT: the GPU taken as one without ray queries (for a check of what such GPUs draw, on this PC).
+        let rays = crate::raytrace::supported(&adapter) && std::env::var_os("UYA_NO_RT").is_none();
         // The GPU's own buffer and texture sizes, not wgpu's defaults (8192 texels a side): a texture as large as the GPU takes is
         // made (the player, 17 November 2026, on the 2D layer's 16384-row texture that ended the game: "not cap it at 8192 make it
         // dynamic").
@@ -840,6 +841,22 @@ impl Native {
             true => (crate::raytrace::features(), crate::raytrace::limits(&adapter, limits), unsafe { wgpu::ExperimentalFeatures::enabled() }),
             false => (wgpu::Features::empty(), limits, wgpu::ExperimentalFeatures::disabled()),
         };
+        // The vegetation drawn in one batch (`shrub_batch`: the level's shrub textures in one indexed array) on every GPU that indexes
+        // texture arrays, not only on one that traces rays, whose features carried them: without ray queries the shrubs were drawn
+        // material by material, some 11,700 draws and bind groups a frame in Veldin, 9 ms of recording on this PC's CPU and about
+        // 26 ms a frame on a Ryzen 5 4600G with its GPU's front end stalled as long (two v0.1.3 players without ray tracing, that
+        // 4600G's integrated graphics at 20 to 22 pictures a second and a GTX 1650 Ti). The array holds every shrub texture of a level,
+        // so the GPU's own limits are asked for. UYA_NO_ARRAYS: the material-by-material path, for a check on this PC.
+        let arrays = wgpu::Features::TEXTURE_BINDING_ARRAY | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING;
+        let (rt_features, limits) = if rays {
+            (rt_features, limits)
+        } else if adapter.features().contains(arrays) && std::env::var_os("UYA_NO_ARRAYS").is_none() {
+            let a = adapter.limits();
+            (arrays, wgpu::Limits { max_binding_array_elements_per_shader_stage: a.max_binding_array_elements_per_shader_stage, max_binding_array_sampler_elements_per_shader_stage: a.max_binding_array_sampler_elements_per_shader_stage, max_sampled_textures_per_shader_stage: a.max_sampled_textures_per_shader_stage, max_samplers_per_shader_stage: a.max_samplers_per_shader_stage, ..limits })
+        } else {
+            (wgpu::Features::empty(), limits)
+        };
+        println!("native: vegetation drawn {}", if rt_features.contains(arrays) { "in one batch (indexed texture arrays)" } else { "material by material (the GPU indexes no texture arrays)" });
         // UYA_RT_TIMES: the frame's own GPU times (`raytrace::GpuTimes`).
         let timing = (crate::raytrace::times_wanted() || crate::gpu_profile::wanted()) && adapter.features().contains(crate::raytrace::times_features());
         let live_timing = crate::gpu_profile::wanted();
@@ -1242,6 +1259,7 @@ impl Native {
         if size == self.size {
             return;
         }
+        println!("native: pictures {}x{} now (were {}x{})", size.0, size.1, self.size.0, self.size.1);
         let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("native picture size") });
         if let Some((_, g)) = self.level.as_mut() {
             g.ee_textures.resize(&self.device, &mut enc, &self.shadow_pipes, size);
@@ -1600,7 +1618,7 @@ impl Native {
                     lap = std::time::Instant::now();
                 };
                 let bundles = match sh.frame(&device, queue, &objects.shrub_layout, ram, &g.shrubs, cam, fog, &visible, set, &mut draws, &mut groups)? {
-                    Some((vertices, batch_vertices, fog_group)) if !draws.is_empty() => {
+                    Some((vertices, indices, batch_vertices, fog_group)) if !draws.is_empty() => {
                         stage(0);
                         stage(1);
                         // The draws in up to SHRUB_THREADS runs of about as many each, each recorded into a bundle of its own on a
@@ -1611,7 +1629,7 @@ impl Native {
                         let per = groups.len().div_ceil(SHRUB_THREADS);
                         let cuts: Vec<usize> = (0..SHRUB_THREADS).filter_map(|k| groups.get(k * per).copied()).chain([draws.len()]).collect();
                         let runs: Vec<&[(usize, crate::objects::Draw)]> = cuts.windows(2).map(|w| &draws[w[0]..w[1]]).collect();
-                        let record = |run: &[(usize, crate::objects::Draw)]| shrub_bundle(&device, pic_ref, &fog_group, |p| match &sh.batch { Some(batch) => batch.draw(p, &vertices, &batch_vertices, run), None => objects.draw_shrubs(p, &sh.materials, &vertices, run) });
+                        let record = |run: &[(usize, crate::objects::Draw)]| shrub_bundle(&device, pic_ref, &fog_group, |p| match &sh.batch { Some(batch) => batch.draw(p, &sh.materials, &vertices, &indices, &batch_vertices, run), None => objects.draw_shrubs(p, &sh.materials, &vertices, &indices, run) });
                         let bundles = pool.scope(|s2| -> Result<Vec<Static>, String> {
                             let record = &record;
                             let others: Vec<_> = runs[1..].iter().map(|&run| s2.spawn(move || record(run))).collect();
@@ -2634,7 +2652,7 @@ fn ee_draw(device: &wgpu::Device, objects: &crate::objects::Pipelines, size: (u3
         rec.outside(Cmd::Downsample(tx.main_gs.clone(), tx.main_gs_map));
     } else if let Some(b) = snap {
         if *b == MAIN {
-            rec.outside(Cmd::CopyPicture(tx.main_snap.clone(), tx.main_dst.clone()));
+            rec.outside(Cmd::CopyPicture(tx.main_snap.clone(), crate::dlss::unavailable().is_none().then(|| tx.main_dst.clone())));
         } else {
             let t = &tx.targets[b];
             rec.outside(Cmd::Copy(t.tex.clone(), t.snap.clone(), t.size));
@@ -2642,7 +2660,9 @@ fn ee_draw(device: &wgpu::Device, objects: &crate::objects::Pipelines, size: (u3
     }
     // A GS blend's destination: the copy of the buffer drawn into.
     let dst = (*snap == Some(*target)).then(|| {
-        let view = if *target == MAIN { tx.main_dst.create_view(&Default::default()) } else { tx.targets[target].snap.create_view(&Default::default()) };
+        // The main picture's copy for a GS blend: `main_dst`, or on a GPU that cannot run DLSS `main_snap`, the same copy
+        // (`replay::Cmd::CopyPicture`).
+        let view = if *target == MAIN { if crate::dlss::unavailable().is_none() { &tx.main_dst } else { &tx.main_snap }.create_view(&Default::default()) } else { tx.targets[target].snap.create_view(&Default::default()) };
         device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("GS blend destination"), layout: &objects.dst_layout, entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }] })
     });
     if *target == MAIN {
@@ -2960,8 +2980,10 @@ fn colour_texture(d: &wgpu::Device, (w, h): (u32, u32)) -> wgpu::Texture {
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
-        // Read by the main frame's downsampling to the GS's size (`eedraw::Pipelines::downsample`); written by DLSS (`dlss.rs`).
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+        // Read by the main frame's downsampling to the GS's size (`eedraw::Pipelines::downsample`); written by DLSS (`dlss.rs`)
+        // as storage, so storage-capable only on a GPU that can run DLSS: on AMD's GCN and Vega a storage-capable image keeps no
+        // colour compression, and every write, blend and clear of the picture ran uncompressed for nothing.
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING | if crate::dlss::unavailable().is_none() { wgpu::TextureUsages::STORAGE_BINDING } else { wgpu::TextureUsages::empty() },
         view_formats: &[],
     })
 }

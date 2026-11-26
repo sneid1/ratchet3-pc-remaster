@@ -41,9 +41,22 @@ pub(crate) fn uncapped() -> bool {
     level("frame_pacing") == 0
 }
 
-/// Whether the pack folder's `0-riftapart` replacements are drawn (`texnames`, `rift_apart_surfaces`).
+/// Whether the updated textures' surfaces are there to draw (`texnames::open`: the updated-textures folder found and read).
+static RIFT_SURFACES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The updated textures' surfaces read, or not there (`texnames::open`); the skin job's joint matrices follow (`set`).
+pub(crate) fn set_rift_surfaces(there: bool) {
+    RIFT_SURFACES.store(there, Ordering::Relaxed);
+    uyart::SKIN_JOINTS.store(lighting(), Ordering::Relaxed);
+}
+
+/// Whether the pack folder's `0-riftapart` replacements are drawn (`texnames`, `rift_apart_surfaces`): the option on and the
+/// updated textures there. Without them (a release installed without the updated-textures volumes, the usual way) the option,
+/// on by default, drew nothing new but still lit every pixel (`lighting`): the world's per-pixel lighting and the mobies' skin
+/// job capture, three times the frame's jobs a field, at a cost a weak PC could not pay, with LIGHTING at VERTEX (two v0.1.3
+/// players without the volumes: a Ryzen 5 4600G's integrated graphics at 20 to 22 pictures a second, a GTX 1650 Ti).
 pub(crate) fn rift_apart() -> bool {
-    level("rift_apart_surfaces") == 1
+    level("rift_apart_surfaces") == 1 && RIFT_SURFACES.load(Ordering::Relaxed)
 }
 
 /// The anisotropy the game's own textures are sampled with (`texture_filtering`): None, the GS's own filtering.

@@ -11,6 +11,8 @@ pub mod audio;
 pub mod bindings;
 pub mod cinema;
 pub mod control;
+#[cfg(windows)]
+pub mod crash;
 mod crew;
 mod dlss;
 mod streamline;
@@ -258,7 +260,8 @@ pub fn redraw(a: &[String]) -> Result<(), String> {
         let frame = if screen {
             let field: u64 = name.strip_suffix(".bin").and_then(|f| f.parse().ok()).ok_or("uya native: the RAM dump's name is ramNNNNN.bin")?;
             n.load_gsm(&p.with_file_name(format!("gsm{:05}.bin", field - 1)).to_string_lossy())?;
-            let fill = !matches!(level_current(&ram), 0 | u32::MAX);
+            // The load screen's fill as `play` decides it: a level named and the front end showing its arrival (`LOAD_STEP`).
+            let fill = !matches!(level_current(&ram), 0 | u32::MAX) && load_step(&ram) >= 2;
             n.draw_screen(&ram, &jobs, fill)?
         } else {
             n.draw(&ram, &jobs, level_of(index))?
