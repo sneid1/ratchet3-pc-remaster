@@ -32,9 +32,9 @@
 //! the mouse turns it itself, its motion an angle (`Input::look`; underwater, where the hero tilts, its look direction:
 //! `rtgame.rs` `fps_turn`). Where the game's follow camera runs instead (the hero's camera not allowed) the mouse turns that, by
 //! angle too: `Input::direct` is set while it is the camera in use, and `rtgame.rs` moves its arm (`follow_turn`). Flying the
-//! hovership, the mouse's vertical motion tilts the ship's aim and its chase camera, as the right stick's does
-//! (`hovership_aim`). The mouse never pushes the right stick, the pad's or a virtual one (the player, 16 November 2026, of a
-//! stick push: "i dont want that"); in the menus its motion is dropped.
+//! hovership, the mouse turns the ship and tilts its aim, by angle, as the right stick does by rate (`hovership_turn`); in the
+//! car the right stick does nothing, and the mouse neither. The mouse never pushes the right stick, the pad's or a virtual one
+//! (the player, 16 November 2026, of a stick push: "i dont want that"); in the menus its motion is dropped.
 
 use crate::bindings::{Bindings, Key};
 use std::collections::{HashMap, HashSet};

@@ -230,7 +230,8 @@ const LEVEL_CHANGE_REQUEST: u32 = 0x1D_6674;
 /// without the stick's ramp. A pad plays with the player's own option, as the game does. When the device changes in play the
 /// hero's camera is set up for the other (`hero_mode`, hero_camera_set, as the game's options and quick select do). Where the
 /// game's follow camera runs instead (hero_camera_mode 0) the mouse turns that by angle too (`follow_turn`); in the hovership
-/// it tilts the ship's aim and the chase camera with it, as the right stick does (`hovership_aim`).
+/// it turns the ship and tilts its aim, and the chase camera follows, as the right stick does (`hovership_turn`); in the car,
+/// where the right stick does nothing, it does nothing.
 ///
 /// The crosshair (the player, 16 November 2026: "set up the full correct crosshair per gun and view mode") is each gun's own:
 /// its update draws it (crosshair_colour, Veldin 0x4C7588, then reticle_marker_add 0x3F4D78) by its own test, so each gun shows
@@ -275,18 +276,31 @@ const FPS_PITCH_UP: u32 = 0x1A_61D8;
 /// the hero's vehicle (hero +0x19E0, 0x1A65C0) the ship, and the ship's state (moby +0x95) 4, then 5 while he flies it, in which
 /// its controls read the pad. The right stick's vertical turns its aim (its variables, moby +0x68, +0x350: radians, positive the
 /// nose and the chase camera down; the stick adds 0.012 a frame at full push, which the game then holds within 7 to 35 degrees,
-/// or -25 to 30 where the ship's +0x3BC is set); free-look is not allowed in state 0x31 (0x50FF18), so hero_camera_mode is 0,
-/// and the camera is type 0x1D's, not the follow camera. The stick's horizontal only leans the ship's flaps and shifts the chase
-/// camera's look point up to 1.4 units aside while held (0x34D6A0, 0x3F8980): there is no angle for the mouse to turn there.
+/// or -25 to 30 where the ship's +0x3BC is set). The stick's horizontal turns the ship: 0.0024 rad a frame at full push (right
+/// negative, the game's LEFT/RIGHT MOVEMENT option applied) added to its turn rate (+0x2A8, which falls to 0.9 of itself each
+/// frame), by which the ship turns its heading each frame: where +0x3BC is clear its heading frame (+0x2D0 forward, +0x2E0 the
+/// side, +0x2F0 up, the ground's up under it; the moby's rows are copied from it), where it is set its yaw (moby +0xF8). It also
+/// leans the flaps and shifts the chase camera's look point up to 1.4 units aside while held (0x34D6A0, 0x3F8980). Free-look is
+/// not allowed in state 0x31 (0x50FF18), so hero_camera_mode is 0, and the camera is type 0x1D's, not the follow camera.
+///
+/// The car (moby classes 0x1A17, on Tyhrranosis, Aridia, level 20 and Tyhrranosis Ranger Missions, and 0x107C on level 24,
+/// whose code is the same: boarded by 0x3C9218, Tyhrranosis 0x3C91D8 sets hero_state 0x31, the hero's vehicle and camera type
+/// 0x1D) reads no right stick: its controls read the left stick's horizontal (0x1A6E40) and the buttons, and camera type 0x1D
+/// follows it by its speed alone. So the mouse has nothing to turn there, as a pad's right stick has not.
 const HERO_STATE: u32 = 0x1A_71A4;
 const HERO_PILOTS: u32 = 0x31;
 const HERO_VEHICLE: u32 = 0x1A_65C0;
 const MOBY_CLASS: u32 = 0xAA;
 const MOBY_STATE: u32 = 0x95;
 const MOBY_VARS: u32 = 0x68;
+const MOBY_YAW: u32 = 0xF8;
 const HOVERSHIP: u16 = 0x107E;
 const HOVERSHIP_FLOWN: u8 = 5;
 const HOVERSHIP_AIM: u32 = 0x350;
+const HOVERSHIP_FLAT: u32 = 0x3BC;
+const HOVERSHIP_FORWARD: u32 = 0x2D0;
+const HOVERSHIP_SIDE: u32 = 0x2E0;
+const HOVERSHIP_UP: u32 = 0x2F0;
 /// hero_camera_set(mode), every story level's own copy (Veldin 0x510530), by its first words.
 const HERO_CAMERA_SET_SIG: [u32; 8] = [0x27bd_ffe0, 0xffb1_0008, 0xffb0_0000, 0x0080_882d, 0x1620_0023, 0xffbf_0010, 0x3c02_001a, 0x2403_0001];
 
@@ -383,47 +397,77 @@ fn follow_turn(ram: &mut [u8], gc: u32, block: u32, look: (f64, f64)) {
 /// held within the camera's pitch limits (`FPS_PITCH_DOWN`, `FPS_PITCH_UP`), so that the yaw and pitch the update takes from it
 /// are the ones the mouse turned to.
 fn fps_turn(ram: &mut [u8], look: (f64, f64)) -> Result<(), String> {
-    use std::f64::consts::{PI, TAU};
-    let f = |ram: &[u8], a: u32| f32::from_bits(rd32(ram, a)) as f64;
-    let write = |ram: &mut [u8], a: u32, x: f64| ram[a as usize..a as usize + 4].copy_from_slice(&(x as f32).to_le_bytes());
     let upright = u16::from_le_bytes([ram[FPS_FLAGS as usize], ram[FPS_FLAGS as usize + 1]]) & FPS_UPRIGHT != 0;
     let frame = rd32(ram, FPS_FRAME);
     if upright || frame == 0 {
-        let yaw = (f(ram, FPS_YAW) - look.0 * MOUSE_RAD + PI).rem_euclid(TAU) - PI;
-        let pitch = f(ram, FPS_PITCH) + look.1 * MOUSE_RAD;
-        write(ram, FPS_YAW, yaw);
-        write(ram, FPS_PITCH, pitch);
+        wrf(ram, FPS_YAW, wrap(rdf(ram, FPS_YAW) + mouse_yaw(look)));
+        wrf(ram, FPS_PITCH, rdf(ram, FPS_PITCH) + look.1 * MOUSE_RAD);
         return Ok(());
     }
     if !(0x10_0000..RAM as u32 - 0x30).contains(&frame) {
         return Err(format!("the mouse turns the free-look camera: its frame is at {frame:#x}"));
     }
-    let v3 = |ram: &[u8], a: u32| [0, 4, 8].map(|k| f(ram, a + k));
-    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    let cross = |a: [f64; 3], b: [f64; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-    let unit = |a: [f64; 3]| a.map(|x| x / dot(a, a).sqrt());
     let (up, at) = (unit(v3(ram, frame + 0x20)), unit(v3(ram, FPS_LOOK)));
     // The look's pitch (positive down) and its heading on the plane normal to the up axis; the limits keep it off the pole.
     let rise = dot(at, up).clamp(-1.0, 1.0);
-    let heading = unit([0, 1, 2].map(|i| at[i] - up[i] * rise));
-    // The yaw about the up axis: a positive angle turns the view left (up x heading is its left), so the mouse turns by minus its
-    // motion.
-    let yaw = -look.0 * MOUSE_RAD;
-    let left = cross(up, heading);
-    let heading = [0, 1, 2].map(|i| heading[i] * yaw.cos() + left[i] * yaw.sin());
-    let (most_up, most_down) = (f(ram, FPS_PITCH_UP), f(ram, FPS_PITCH_DOWN));
+    let heading = about(unit([0, 1, 2].map(|i| at[i] - up[i] * rise)), up, mouse_yaw(look));
+    let (most_up, most_down) = (rdf(ram, FPS_PITCH_UP), rdf(ram, FPS_PITCH_DOWN));
     if !(most_up <= most_down) {
         return Err(format!("the mouse turns the free-look camera: its pitch limits are {most_up} up and {most_down} down"));
     }
     let pitch = (-rise.asin() + look.1 * MOUSE_RAD).clamp(most_up, most_down);
-    for (i, x) in [0, 1, 2].map(|i| heading[i] * pitch.cos() - up[i] * pitch.sin()).into_iter().enumerate() {
-        write(ram, FPS_LOOK + 4 * i as u32, x);
-    }
+    put3(ram, FPS_LOOK, [0, 1, 2].map(|i| heading[i] * pitch.cos() - up[i] * pitch.sin()));
     Ok(())
 }
 
-/// The variables of the hovership the hero flies (`HOVERSHIP`), or None while he flies none.
-fn hovership(ram: &[u8]) -> Result<Option<u32>, String> {
+/// The turn about the up axis for the mouse's motion `look`: a positive angle turns left (counter-clockwise seen from above, as
+/// the free-look camera's yaw and the moby yaws count), so the mouse turns by minus its horizontal motion.
+fn mouse_yaw(look: (f64, f64)) -> f64 {
+    -look.0 * MOUSE_RAD
+}
+
+fn rdf(ram: &[u8], a: u32) -> f64 {
+    f32::from_bits(rd32(ram, a)) as f64
+}
+
+fn wrf(ram: &mut [u8], a: u32, x: f64) {
+    ram[a as usize..a as usize + 4].copy_from_slice(&(x as f32).to_le_bytes());
+}
+
+fn v3(ram: &[u8], a: u32) -> [f64; 3] {
+    [0, 4, 8].map(|k| rdf(ram, a + k))
+}
+
+fn put3(ram: &mut [u8], a: u32, v: [f64; 3]) {
+    for (i, x) in v.into_iter().enumerate() {
+        wrf(ram, a + 4 * i as u32, x);
+    }
+}
+
+fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn unit(a: [f64; 3]) -> [f64; 3] {
+    a.map(|x| x / dot(a, a).sqrt())
+}
+
+/// `v` turned by `angle` about the unit axis `k` (Rodrigues): a positive angle counter-clockwise seen from the axis's tip.
+fn about(v: [f64; 3], k: [f64; 3], angle: f64) -> [f64; 3] {
+    let (s, c) = angle.sin_cos();
+    let (x, d) = ([k[1] * v[2] - k[2] * v[1], k[2] * v[0] - k[0] * v[2], k[0] * v[1] - k[1] * v[0]], dot(k, v));
+    [0, 1, 2].map(|i| v[i] * c + x[i] * s + k[i] * d * (1.0 - c))
+}
+
+/// An angle in radians within -pi to pi.
+fn wrap(a: f64) -> f64 {
+    use std::f64::consts::{PI, TAU};
+    (a + PI).rem_euclid(TAU) - PI
+}
+
+/// The hovership the hero flies (`HOVERSHIP`), as its moby and its variables, or None while he flies none (on foot, or in the
+/// car, whose class is another).
+fn hovership(ram: &[u8]) -> Result<Option<(u32, u32)>, String> {
     let inside = |a: u32| (0x10_0000..RAM as u32 - 0x400).contains(&a);
     let moby = rd32(ram, HERO_VEHICLE);
     if rd32(ram, HERO_STATE) != HERO_PILOTS || moby == 0 {
@@ -440,15 +484,25 @@ fn hovership(ram: &[u8]) -> Result<Option<u32>, String> {
     if !inside(vars) {
         return Err(format!("the mouse aims the hovership: the ship {moby:#x} holds no variables ({vars:#x})"));
     }
-    Ok(Some(vars))
+    Ok(Some((moby, vars)))
 }
 
-/// Tilts the hovership's aim, and its chase camera with it, by the mouse's vertical motion `look.1` (down tilts down), as the
-/// right stick's vertical does; the game holds it within its limits.
-fn hovership_aim(ram: &mut [u8], vars: u32, look: (f64, f64)) {
-    let a = (vars + HOVERSHIP_AIM) as usize;
-    let aim = f32::from_bits(rd32(ram, vars + HOVERSHIP_AIM)) as f64 + look.1 * MOUSE_RAD;
-    ram[a..a + 4].copy_from_slice(&(aim as f32).to_le_bytes());
+/// Turns the hovership by the mouse's motion `look`, by angle, as the right stick turns it by rate: right turns it right, its
+/// heading frame about the ground's up under it (`HOVERSHIP_UP`) or, where the ship keeps a yaw instead (`HOVERSHIP_FLAT`), its
+/// yaw; the ship's velocity and chase camera follow the heading as they follow the stick's turn. Down tilts its aim, and its chase
+/// camera with it, down (`HOVERSHIP_AIM`); the game holds that within its limits.
+fn hovership_turn(ram: &mut [u8], (moby, vars): (u32, u32), look: (f64, f64)) {
+    let yaw = mouse_yaw(look);
+    if rd32(ram, vars + HOVERSHIP_FLAT) == 0 {
+        let up = unit(v3(ram, vars + HOVERSHIP_UP));
+        for row in [HOVERSHIP_FORWARD, HOVERSHIP_SIDE] {
+            let turned = about(v3(ram, vars + row), up, yaw);
+            put3(ram, vars + row, turned);
+        }
+    } else {
+        wrf(ram, moby + MOBY_YAW, wrap(rdf(ram, moby + MOBY_YAW) + yaw));
+    }
+    wrf(ram, vars + HOVERSHIP_AIM, rdf(ram, vars + HOVERSHIP_AIM) + look.1 * MOUSE_RAD);
 }
 
 /// Whether the mouse aims: the keyboard and mouse in use, a story level running (not the front end, nor a vid-comic, levels 30
@@ -770,11 +824,11 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
             // The right stick's camera speed on the game's own option; the keyboard and mouse turn by the mouse's (`Camera`).
             uyart::set_camera_speed(if i.last == crate::input::Device::Keyboard { 1.0 } else { menus.settings.stick_speed() });
             // The mouse aim: the mouse turns the hero's camera itself (to the right for a move right, down for a move down): the
-            // follow camera's arm, the hovership's aim, or the free-look camera's look.
+            // follow camera's arm, the hovership, or the free-look camera's look.
             if let (true, Some((gc, block))) = (i.look != (0.0, 0.0), follow.filter(|_| i.direct)) {
                 follow_turn(&mut m.ram[..RAM], gc, block, i.look);
-            } else if let (true, Some(vars)) = (i.look != (0.0, 0.0), ship.filter(|_| i.direct)) {
-                hovership_aim(&mut m.ram[..RAM], vars, i.look);
+            } else if let (true, Some(ship)) = (i.look != (0.0, 0.0), ship.filter(|_| i.direct)) {
+                hovership_turn(&mut m.ram[..RAM], ship, i.look);
             } else if i.direct && i.look != (0.0, 0.0) {
                 fps_turn(&mut m.ram[..RAM], i.look)?;
             }
