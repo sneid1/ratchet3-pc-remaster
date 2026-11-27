@@ -31,7 +31,7 @@ cpal = "0.18.2"
 [target.'cfg(windows)'.dependencies]
 # SetPriorityClass (the batch commands run below normal priority, `lower_priority`; `uya play` at normal), XInput (Xbox
 # controllers) and the HID API (DualSense, DualShock 4) for src/input.rs; the console (`keep_log`).
-windows = { version = "0.62", default-features = false, features = ["Win32_System_Console", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_UI_Input_XboxController", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO", "Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Kernel"] }
+windows = { version = "0.62", default-features = false, features = ["Win32_System_Console", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_UI_Input_XboxController", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO", "Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Kernel", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"] }
 
 [build-dependencies]
 # The Streamline layer (native/streamline.cpp), compiled with the SDK's headers (STREAMLINE_SDK).

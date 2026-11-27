@@ -31,6 +31,7 @@ pub mod mpeg;
 pub mod native;
 pub mod objects;
 mod shrub_batch;
+mod tie_batch;
 pub mod pic;
 pub mod pipelines;
 pub mod play;
@@ -118,21 +119,58 @@ pub fn lower_priority() {
     unsafe { SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS) }.expect("SetPriorityClass");
 }
 
-/// `uya play` given a console of its own (started from Explorer or the desktop shortcut; not from a terminal, and not by a script
-/// that reads its output through a pipe) writes what it prints, its errors and a panic's message with the rest, to the
-/// profile's `play.log`, and the run before's is kept as `play-previous.log`: the console closes with the game, and what it
-/// printed as it stopped went with it (the player, 16 November 2026: "game crashed check logs").
+/// The program is a windowed one (main.rs), so Windows gives it no console: started from a terminal with its output not
+/// redirected, it takes the terminal's console (the parent's) for its output, errors and input, so the tools (`uya native`,
+/// `uya scene`, ...) and `uya play` print there as a console program did. Output redirected (uyactl's pipes, a launcher's) is
+/// left where it was sent; a double-click has no terminal, and `play` keeps play.log (`keep_log`).
+#[cfg(windows)]
+pub fn attach_console() {
+    use windows::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+    use windows::Win32::Storage::FileSystem::{CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
+    use windows::Win32::System::Console::{AttachConsole, GetStdHandle, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE, STD_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
+    if !no_output() {
+        return;
+    }
+    // No parent console (Explorer, a launcher that redirects nothing): nothing to attach to.
+    if unsafe { AttachConsole(ATTACH_PARENT_PROCESS) }.is_err() {
+        return;
+    }
+    let open = |name: &str, access: u32, ids: &[STD_HANDLE]| {
+        let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+        // SAFETY: a console device opened by its documented name; the handle is kept for the process's life as a standard handle.
+        let h = unsafe { CreateFileW(windows::core::PCWSTR(wide.as_ptr()), access, FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, None) }
+            .unwrap_or_else(|e| panic!("the terminal's {name}: {e}"));
+        for &id in ids {
+            // Only a handle the terminal left unset is taken over (a redirected input stays redirected).
+            if unsafe { GetStdHandle(id) }.map_or(true, |s| s.is_invalid() || s.0.is_null()) {
+                unsafe { SetStdHandle(id, h) }.unwrap_or_else(|e| panic!("the terminal's {name}: {e}"));
+            }
+        }
+    };
+    open("CONOUT$", GENERIC_READ.0 | GENERIC_WRITE.0, &[STD_OUTPUT_HANDLE, STD_ERROR_HANDLE]);
+    open("CONIN$", GENERIC_READ.0 | GENERIC_WRITE.0, &[STD_INPUT_HANDLE]);
+}
+
+/// Whether the program has no standard output: a windowed program started by a double-click, or by a launcher that redirects
+/// nothing.
+#[cfg(windows)]
+fn no_output() -> bool {
+    use windows::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE};
+    unsafe { GetStdHandle(STD_OUTPUT_HANDLE) }.map_or(true, |h| h.is_invalid() || h.0.is_null())
+}
+
+/// `uya play` with no output of its own (started from Explorer or the desktop shortcut, or by a launcher that redirects nothing;
+/// not from a terminal, and not by a script that reads its output through a pipe) writes what it prints, its errors and a
+/// panic's message with the rest, to the profile's `play.log`, and the run before's is kept as `play-previous.log` (the player,
+/// 16 November 2026: "game crashed check logs").
 #[cfg(windows)]
 pub fn keep_log(profile: &str, args: &[String]) -> Result<(), String> {
-    use windows::Win32::Storage::FileSystem::{GetFileType, FILE_TYPE_CHAR};
-    use windows::Win32::System::Console::{FreeConsole, GetConsoleProcessList, GetStdHandle, SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
-    let out = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) }.map_err(|e| format!("play: the console: {e}"))?;
-    let mut attached = [0u32; 2];
-    // Under RecompLauncher (it sets RECOMPLAUNCHER) the output is its pipe and its console is attached, so the checks
-    // below would skip the log; but the launcher's crash report shows the newest .log in the game's folder, and the
-    // game's own last lines are what names a crash: keep the log there anyway.
+    use windows::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
+    // Under RecompLauncher (it sets RECOMPLAUNCHER) the output may be its pipe, so the check below would skip the log; but the
+    // launcher's crash report shows the newest .log in the game's folder, and the game's own last lines are what names a crash:
+    // keep the log there anyway.
     let launcher = std::env::var_os("RECOMPLAUNCHER").is_some();
-    if !launcher && (unsafe { GetFileType(out) } != FILE_TYPE_CHAR || unsafe { GetConsoleProcessList(&mut attached) } != 1) {
+    if !launcher && !no_output() {
         return Ok(());
     }
     let dir = std::path::Path::new(profile);
@@ -144,12 +182,6 @@ pub fn keep_log(profile: &str, args: &[String]) -> Result<(), String> {
     let file = std::fs::File::create(&log).map_err(|e| format!("play: {}: {e}", log.display()))?;
     let handle = windows::Win32::Foundation::HANDLE(std::os::windows::io::IntoRawHandle::into_raw_handle(file));
     unsafe {
-        // Explorer allocated this console solely for the game. Once the log is open, the game window
-        // should own the desktop and taskbar entry. Interactive control still reads its console input.
-        // Under the launcher the console is its: leave it attached.
-        if !args.iter().any(|arg| arg == "--control") && std::env::var_os("RECOMPLAUNCHER").is_none() {
-            FreeConsole().map_err(|e| format!("play: detach launcher console: {e}"))?;
-        }
         SetStdHandle(STD_OUTPUT_HANDLE, handle).map_err(|e| format!("play: the log: {e}"))?;
         SetStdHandle(STD_ERROR_HANDLE, handle).map_err(|e| format!("play: the log: {e}"))?;
     }
@@ -164,8 +196,8 @@ pub fn keep_log(profile: &str, args: &[String]) -> Result<(), String> {
 /// jobsNNNNN.bin); several dumps are drawn in turn by one renderer (what a frame keeps for the next, the display buffer and a
 /// grabbed frame, carries on) and the last is saved. `--frames-dir` also saves every frame in sequence. `--preset` (original, low, medium, high, ultra) and `--set` (keys and values
 /// as `settings.txt` writes them, after the preset) choose the graphics options (`settings::OPTIONS`); without them each is at
-/// its default: off, the game's picture, but for UPDATED TEXTURES, the standard game, on (`--set rift_apart_surfaces=off`
-/// draws the picture without it). `--screen` draws the dumps as front end frames (below), each frame's count of what it could not
+/// its default: off, the game's picture, but for UPDATED TEXTURES, the standard game, at AUTO (the level for this GPU's memory,
+/// `enhance::auto_textures`; `--set rift_apart_surfaces=off` draws the picture without them, `=max` with every one at its size). `--screen` draws the dumps as front end frames (below), each frame's count of what it could not
 /// draw printed.
 pub fn redraw(a: &[String]) -> Result<(), String> {
     // UYA_PROFILE=START,SECONDS: the threads' time by function (`sampler.rs`, an instrument).

@@ -1010,6 +1010,8 @@ pub(crate) struct Walk {
     pub passes: Vec<std::ops::Range<usize>>,
     /// Every IMAGE transfer of the frame's jobs in order, by destination block (`Run::images` counts them).
     images: Vec<(u32, Upload)>,
+    /// The data words of the chain's UNPACKs (`RawUnpack::words`).
+    unpack_words: Vec<u32>,
 }
 
 impl Walk {
@@ -1127,6 +1129,8 @@ pub(crate) fn walk_into(jobs: &crate::jobs::FrameJobs, boot: &uyafmt::boot::Boot
     let (mut star_runs, mut star_fresh, mut star_unknown, mut alone_runs, mut alone_skipped) = (0u32, 0u32, 0u32, 0u32, 0u32);
     let (mut star_qws, mut star_prims, mut star_entries) = (0usize, 0usize, Vec::new());
     let mut runs = Vec::new();
+    // The words of every UNPACK the chain sent (`RawUnpack::words` ranges in it).
+    let mut unpack_words: Vec<u32> = Vec::new();
     let mut constants = [[0f32; 4]; 6];
     let mut chain_constants = false;
     let mut world_fogcol: Option<Option<u64>> = None;
@@ -1433,12 +1437,12 @@ pub(crate) fn walk_into(jobs: &crate::jobs::FrameJobs, boot: &uyafmt::boot::Boot
                                     }
                                 }
                                 (0x69, 0x000) => {
-                                    cur.positions = (0..n).map(|v| [0, 1, 2].map(|k| i16::from_le_bytes([data[6 * v + 2 * k], data[6 * v + 2 * k + 1]]))).collect();
+                                    cur.positions = std::sync::Arc::from(bytemuck::cast_slice::<u8, [i16; 3]>(&data[..6 * n]));
                                     // The data's address: the block's, plus where in it (its words follow the tag's two).
                                     cur.positions_at = Some(data_at as u32 + 4 * (i as u32 - 2));
                                 }
-                                (0x6e, 0x061) => cur.colours = (0..n).map(|v| [data[4 * v], data[4 * v + 1], data[4 * v + 2], data[4 * v + 3]]).collect(),
-                                (0x65, 0x0c2) if !is_packet_a => cur.uvs = Some((0..n).map(|v| [0, 1].map(|k| i16::from_le_bytes([data[4 * v + 2 * k], data[4 * v + 2 * k + 1]]))).collect::<std::sync::Arc<[_]>>()),
+                                (0x6e, 0x061) => cur.colours = std::sync::Arc::from(bytemuck::cast_slice::<u8, [u8; 4]>(&data[..4 * n])),
+                                (0x65, 0x0c2) if !is_packet_a => cur.uvs = Some(std::sync::Arc::from(bytemuck::cast_slice::<u8, [i16; 2]>(&data[..4 * n]))),
                                 // Packet A's own coordinates and its texture setups (at 0x12D + the strip list's quadword count).
                                 (0x65, 0x0c2) if is_packet_a => cur.uvs = None,
                                 (0x6c, a) if is_packet_a && a > 0x12d => {}
@@ -1448,7 +1452,8 @@ pub(crate) fn walk_into(jobs: &crate::jobs::FrameJobs, boot: &uyafmt::boot::Boot
                                 (0x6c, 0x123) => {}
                                 (c, a) => return Err(format!("native: moby chain UNPACK {c:#x} to {a:#x} at {at:#x}")),
                             }
-                            let raw = RawUnpack { cmd, num: num as u32, imm, regs: zregs, words: words[i..i + len].into() };
+                            let raw = RawUnpack { cmd, num: num as u32, imm, regs: zregs, words: (unpack_words.len() as u32, len as u32) };
+                            unpack_words.extend_from_slice(&words[i..i + len]);
                             // STMOD 2 (difference) keeps each value it writes in ROW, which the next UNPACK adds to: its replay
                             // (`run_vu`) starts from the ROW this one leaves.
                             if zregs.mode == 2 {
@@ -1576,7 +1581,7 @@ pub(crate) fn walk_into(jobs: &crate::jobs::FrameJobs, boot: &uyafmt::boot::Boot
             t.after = AFTER_EFFECTS;
         }
     }
-    Ok(Walk { runs, constants, chain_constants, world_fogcol: world_fogcol.flatten(), ee: prims, stopped, fx_q, ran, transfers, gs_end: GsLeft { ctx: gs.ctx, texa: gs.texa, fogcol: gs.fogcol }, passes: outputs, images: gs.images })
+    Ok(Walk { runs, constants, chain_constants, world_fogcol: world_fogcol.flatten(), ee: prims, stopped, fx_q, ran, transfers, gs_end: GsLeft { ctx: gs.ctx, texa: gs.texa, fogcol: gs.fogcol }, passes: outputs, images: gs.images, unpack_words })
 }
 
 /// A level's moby globals: the variable holding the core's RAM base, the view camera, the hero armor's entry and buffer
@@ -1945,8 +1950,8 @@ struct RawUnpack {
     imm: u32,
     /// VIF1's cycle, mask, row and column registers when it got the UNPACK.
     regs: crate::vif::VifRegs,
-    /// Shared by the runs' copies of the buffer (`VuData`'s clone).
-    words: std::sync::Arc<[u32]>,
+    /// Where its data words are in `Walk::unpack_words`: the start and the count.
+    words: (u32, u32),
 }
 
 /// One run of program 0 read from the chain.
@@ -2393,7 +2398,7 @@ impl Mobies {
     }
 
     pub fn frame(&mut self, _pool: &crate::native::Pool, device: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::BindGroupLayout, ram: &[u8], walk: Walk, g: &MobyGlobals, cam: &Camera, field: u64, out: &mut Vec<ObjVertex>, prev: &mut Vec<[f32; 3]>, lit: &mut Vec<crate::lighting::MobyLit>, light_rows: &mut Vec<[[f32; 4]; 4]>, skin: &[(u64, std::sync::Arc<uyart::hw::SkinJoints>)], track: bool, draws: &mut Vec<((u32, u16), Draw, u32)>, targets: &mut Vec<(u32, u32)>, fx_q: &mut Option<f32>, transfers: &mut [Transfer], passes: &mut [std::ops::Range<usize>]) -> Result<(usize, Vec<(String, usize)>, Vec<(usize, EePrim)>), String> {
-        let Walk { runs, constants, mut ee, stopped, fx_q: held, images, .. } = walk;
+        let Walk { runs, constants, mut ee, stopped, fx_q: held, images, unpack_words, .. } = walk;
         let mut vu: Option<crate::vu1::Vu1> = None;
         let mut vu_gs: Option<EeGs> = None;
         if eedump() {
@@ -2839,7 +2844,7 @@ impl Mobies {
                         Some(v) => v,
                         None => vu.insert(chain_vu()?),
                     };
-                    if let Err(e) = run_vu(vu, &mut vu_gs, run, &constants, &images, r, &mut made) {
+                    if let Err(e) = run_vu(vu, &mut vu_gs, run, &constants, &images, &unpack_words, r, &mut made) {
                         skip(e);
                         continue;
                     }
@@ -3233,14 +3238,14 @@ fn chain_vu() -> Result<crate::vu1::Vu1, String> {
 /// this buffer's matrix, positions, colours, texture coordinates, strip list and texture setups, whose GS registers the game wrote
 /// into the packet), its GIF packets read through the GS state the run starts with (the chain's IMAGE transfers before it:
 /// `EeGs`), the primitives onto `out` after `r` moby runs, to be drawn as the EE's own are, in the world.
-fn run_vu(vu: &mut crate::vu1::Vu1, gs: &mut Option<EeGs>, run: &Run, constants: &[[f32; 4]; 6], images: &[(u32, Upload)], r: usize, out: &mut Vec<(usize, EePrim)>) -> Result<(), String> {
+fn run_vu(vu: &mut crate::vu1::Vu1, gs: &mut Option<EeGs>, run: &Run, constants: &[[f32; 4]; 6], images: &[(u32, Upload)], unpack_words: &[u32], r: usize, out: &mut Vec<(usize, EePrim)>) -> Result<(), String> {
     vu.mem.fill([0; 4]);
     for (n, c) in constants.iter().enumerate() {
         vu.mem[0x123 + n] = c.map(f32::to_bits);
     }
     for u in run.vu.unpacks.iter() {
         let mut regs = crate::vif::VifRegs { tops: run.top as u32, ..u.regs };
-        crate::vif::unpack(&mut vu.mem[..], u.cmd, u.num, u.imm, &u.words, &mut regs).map_err(|e| format!("native: {e}"))?;
+        crate::vif::unpack(&mut vu.mem[..], u.cmd, u.num, u.imm, &unpack_words[u.words.0 as usize..(u.words.0 + u.words.1) as usize], &mut regs).map_err(|e| format!("native: {e}"))?;
     }
     let qs = run_program_0(vu, run.top, run.mscal)?;
     // The GS keeps its texture registers from run to run: a strip without a setup draws with the texture the run before bound,

@@ -497,7 +497,7 @@ impl App {
         let paced = !self.o.fast && (!self.o.control || paced_control);
         // The HD texture packs in the profile's `texture_replacements`, always (the player: "The HD texture packs should be the
         // only thing used and not a menu option"): each level's replacements are decoded when the level loads (`texnames`).
-        crate::texnames::open(std::path::Path::new(&format!("{}/texture_replacements", self.o.profile)), self.o.rift.as_deref().map(std::path::Path::new))?;
+        crate::texnames::open_in_play(std::path::Path::new(&format!("{}/texture_replacements", self.o.profile)), self.o.rift.as_deref().map(std::path::Path::new))?;
         // The pipeline cache in the profile's folder (`pipelines.rs`), always.
         crate::pipelines::open(std::path::Path::new(&self.o.profile));
         std::thread::Builder::new()

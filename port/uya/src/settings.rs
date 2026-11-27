@@ -164,10 +164,14 @@ pub const OPTIONS: &[Opt] = &[
         key: "rift_apart_surfaces",
         tab: Tab::Graphics,
         name: "UPDATED TEXTURES",
-        values: &[("off", "OFF"), ("on", "ON")],
-        default: 1,
-        presets: Some([1, 1, 1, 1]),
-        about: "The remaster's updated textures: new detail and colour on characters and the world, with surface grain, relief and gloss, lit per pixel. Some GPU memory.",
+        // The levels `enhance::texture_level` reads: the first five in this order, AUTO after them. OFF is the PS2's own textures,
+        // the community packs too; HUD ONLY the 2D layer's alone; LOW and MEDIUM every replacement at a smaller size
+        // (`enhance::texture_caps`); MAX at its own. AUTO picks one at start for the GPU's memory (`enhance::auto_textures`).
+        // The old values: `on` loads as AUTO (`Settings::set_named`).
+        values: &[("off", "OFF"), ("hud_only", "HUD ONLY"), ("low", "LOW"), ("medium", "MEDIUM"), ("max", "MAX"), ("auto", "AUTO")],
+        default: 5,
+        presets: Some([5, 5, 5, 5]),
+        about: "Replacement textures, packs included. Auto picks the most your GPU's memory takes; Max is full size, Low and Medium smaller, HUD only just the HUD and menus.",
     },
     Opt {
         key: "lighting",
@@ -545,6 +549,13 @@ impl Settings {
     }
 
     fn set_named(&mut self, key: &str, value: &str) -> Result<(), String> {
+        // UPDATED TEXTURES was ON or OFF before it had levels: a settings.txt that says `on` is AUTO now (`off` is still OFF).
+        let value = if key == "rift_apart_surfaces" && value == "on" {
+            println!("settings: rift_apart_surfaces = on is the old ON: loaded as AUTO");
+            "auto"
+        } else {
+            value
+        };
         let i = OPTIONS.iter().position(|o| o.key == key).ok_or_else(|| format!("settings: unknown setting \"{key}\""))?;
         let o = &OPTIONS[i];
         let v = o.values.iter().position(|(f, _)| *f == value).ok_or_else(|| format!("settings: {key} = {value} ({})", o.values.iter().map(|(f, _)| *f).collect::<Vec<_>>().join(", ")))?;

@@ -819,6 +819,8 @@ impl Native {
             apply_limit_buckets: false,
         }))
         .map_err(|e| format!("native: no GPU adapter: {e}"))?;
+        // UPDATED TEXTURES' AUTO: the highest level of replacement textures this GPU's memory takes (`enhance`).
+        crate::enhance::auto_textures(&adapter.get_info(), height)?;
         // DLSS Frame Generation on this GPU (`streamline.rs`)?
         crate::streamline::adapter(&adapter);
         // The largest buffer the GPU makes: a level's tie corners (`objects::Ties`) pass wgpu's default 256 MB on the larger levels.
@@ -856,7 +858,7 @@ impl Native {
         } else {
             (wgpu::Features::empty(), limits)
         };
-        println!("native: vegetation drawn {}", if rt_features.contains(arrays) { "in one batch (indexed texture arrays)" } else { "material by material (the GPU indexes no texture arrays)" });
+        println!("native: vegetation drawn {}", if rt_features.contains(arrays) { "in one batch (indexed texture arrays)" } else { "in one batch where the level's base textures fit one texture array (the GPU indexes no binding arrays), else material by material" });
         // UYA_RT_TIMES: the frame's own GPU times (`raytrace::GpuTimes`).
         let timing = (crate::raytrace::times_wanted() || crate::gpu_profile::wanted()) && adapter.features().contains(crate::raytrace::times_features());
         let live_timing = crate::gpu_profile::wanted();
@@ -1181,7 +1183,7 @@ impl Native {
             sun = crate::shafts::Sun::of(&gameplay);
             shrubs = Some(std::sync::Arc::new(crate::objects::Shrubs::new(d, &self.queue, &self.mat_layout, &self.view_layout, &self.objects.shrub_layout, classes, &textures, &records, &gameplay)?));
             let (tc, tt, tr) = s.ties;
-            ties = Some(std::sync::Arc::new(crate::objects::Ties::new(d, &self.queue, &self.mat_layout, &self.objects.tie_layout, tc, &tt, &tr, &gameplay, self.globals(level)?.ties.tests)?));
+            ties = Some(std::sync::Arc::new(crate::objects::Ties::new(d, &self.queue, &self.mat_layout, &self.objects.tie_layout, &self.view_layout, tc, &tt, &tr, &gameplay, self.globals(level)?.ties.tests)?));
         }
         let (mc, mr, mt, specials) = s.mobies;
         let mut mobies = crate::mobies::Mobies::new(d, &self.queue, &self.mat_layout, &self.iso, level as usize, mc, &mr, &mt, specials)?;
@@ -1569,6 +1571,12 @@ impl Native {
                         vec![picture_bundle(&device_t, "native ties", pic_ref, |p| {
                             crate::replay::Enc::set_vertex_buffer(p, 0, corners);
                             crate::replay::Enc::set_bind_group(p, 2, group);
+                            // In spans with the level's material table (`tie_batch.rs`), or material by material.
+                            if let Some(batch) = &ti.batch
+                                && batch.draw(p, queue, set, &ti.materials, &room.draws.draws, &room.draws.ranges, &room.bits, room.draws.base, &mut room.batch, &mut stats)?
+                            {
+                                return Ok(());
+                            }
                             objects.draw_ties(p, &ti.materials, &room.draws.draws, &room.draws.ranges)
                         })?]
                     } else {
@@ -1577,6 +1585,7 @@ impl Native {
                     let record = lap.elapsed().as_secs_f64() * 1000.0;
                     Ok((bundle, room, counts, n_draws, stats, [upload, record], corners_drawn))
                 };
+                ti.begin(set);
                 let built = pool.scope(|s2| -> Result<Vec<Built>, String> {
                     let build = &build;
                     let mut work = ranges.into_iter().zip(rooms);
@@ -2507,6 +2516,10 @@ impl Native {
                     tm.note("ties (their thread)", tp.all);
                     tm.note("ties: ranges", tp.stages[0]);
                     tm.note("ties: draws", tp.stages[1]);
+                    tm.note("ties: spans", tp.stats.spans as f64);
+                    tm.note("ties: indices", tp.stats.indices as f64);
+                    tm.note("ties: indices made (sum)", tp.stats.gather_ns as f64 / 1e6);
+                    tm.note("ties: indices written (sum)", tp.stats.write_ns as f64 / 1e6);
                     tm.note("ties: vertices", tp.stages[2]);
                     // Summed over the ranges' threads.
                     tm.note("ties: decide (sum)", tp.stats.decide_ns as f64 / 1e6);

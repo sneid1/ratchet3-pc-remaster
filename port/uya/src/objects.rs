@@ -717,7 +717,7 @@ impl Blend {
         }
     }
 
-    fn index(self) -> usize {
+    pub(crate) fn index(self) -> usize {
         match self {
             Blend::Alpha => 0,
             Blend::Replace => 1,
@@ -731,6 +731,49 @@ impl Blend {
             Blend::AddDst => 9,
         }
     }
+}
+
+/// The blend states of `Blend::index`'s order (`Gs`'s entry is not used: it draws with the shader's own blend).
+pub(crate) fn blend_states() -> [Option<wgpu::BlendState>; 10] {
+    let add_dst = Some(wgpu::BlendState {
+        color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::DstAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+        alpha: wgpu::BlendComponent::REPLACE,
+    });
+    [
+        Some(wgpu::BlendState {
+            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Src1Alpha, dst_factor: wgpu::BlendFactor::OneMinusSrc1Alpha, operation: wgpu::BlendOperation::Add },
+            alpha: wgpu::BlendComponent::REPLACE,
+        }),
+        Some(wgpu::BlendState::REPLACE),
+        // Add: the shader's product (`blended`) plus Cd.
+        Some(wgpu::BlendState {
+            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+            alpha: wgpu::BlendComponent::REPLACE,
+        }),
+        Some(wgpu::BlendState {
+            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Constant, dst_factor: wgpu::BlendFactor::OneMinusConstant, operation: wgpu::BlendOperation::Add },
+            alpha: wgpu::BlendComponent::REPLACE,
+        }),
+        // AddAlpha: the shader's product plus Cd.
+        Some(wgpu::BlendState {
+            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+            alpha: wgpu::BlendComponent::REPLACE,
+        }),
+        Some(wgpu::BlendState {
+            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+            alpha: wgpu::BlendComponent::REPLACE,
+        }),
+        // Scale: the shader's product.
+        Some(wgpu::BlendState::REPLACE),
+        // Sub: Cd less the shader's product.
+        Some(wgpu::BlendState {
+            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::ReverseSubtract },
+            alpha: wgpu::BlendComponent::REPLACE,
+        }),
+        // Gs (index 8) draws with `gs`; this entry is not used.
+        Some(wgpu::BlendState::REPLACE),
+        add_dst,
+    ]
 }
 
 /// The pipelines of the object pass, per blend: pixels passing the alpha test (colour and depth) and failing it (colour only).
@@ -808,45 +851,8 @@ impl Pipelines {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("objects"), bind_group_layouts: &[Some(view_layout), Some(mat_layout)], immediate_size: 0 });
         let gs_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("objects, GS blend"), bind_group_layouts: &[Some(view_layout), Some(mat_layout), Some(&dst_layout)], immediate_size: 0 });
         let attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4, 3 => Float32];
-        let add_dst = Some(wgpu::BlendState {
-            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::DstAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
-            alpha: wgpu::BlendComponent::REPLACE,
-        });
-        let blends = [
-            Some(wgpu::BlendState {
-                color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Src1Alpha, dst_factor: wgpu::BlendFactor::OneMinusSrc1Alpha, operation: wgpu::BlendOperation::Add },
-                alpha: wgpu::BlendComponent::REPLACE,
-            }),
-            Some(wgpu::BlendState::REPLACE),
-            // Add: the shader's product (`blended`) plus Cd.
-            Some(wgpu::BlendState {
-                color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
-                alpha: wgpu::BlendComponent::REPLACE,
-            }),
-            Some(wgpu::BlendState {
-                color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Constant, dst_factor: wgpu::BlendFactor::OneMinusConstant, operation: wgpu::BlendOperation::Add },
-                alpha: wgpu::BlendComponent::REPLACE,
-            }),
-            // AddAlpha: the shader's product plus Cd.
-            Some(wgpu::BlendState {
-                color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
-                alpha: wgpu::BlendComponent::REPLACE,
-            }),
-            Some(wgpu::BlendState {
-                color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
-                alpha: wgpu::BlendComponent::REPLACE,
-            }),
-            // Scale: the shader's product.
-            Some(wgpu::BlendState::REPLACE),
-            // Sub: Cd less the shader's product.
-            Some(wgpu::BlendState {
-                color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::ReverseSubtract },
-                alpha: wgpu::BlendComponent::REPLACE,
-            }),
-            // Gs (index 8) draws with `gs`; this entry is not used.
-            Some(wgpu::BlendState::REPLACE),
-            add_dst,
-        ];
+        let blends = blend_states();
+        let add_dst = blends[Blend::AddDst.index()];
         // A moby vertex's place in the frame before (`vs_moby`), buffer 1.
         let prev_attrs = wgpu::vertex_attr_array![4 => Float32x3];
         // A moby vertex's per-pixel lighting (`lighting::MobyLit`), buffer 2.
@@ -1405,6 +1411,11 @@ pub(crate) struct Materials {
     rift: Vec<Option<crate::texnames::RiftMat>>,
     /// Each texture's light (`texnames::light`: boost, glow).
     lights: Vec<[f32; 2]>,
+    /// The textures whose replacement (pack texture or Rift Apart material) the background worker has not landed yet
+    /// (`texnames::replacements`), drawn as the game's own until `get` finds it (`refresh`), and the count of landings
+    /// (`texnames::poll`) it last looked at.
+    pending: Vec<usize>,
+    epoch: u64,
     flat: wgpu::TextureView,
     rift_sampler: std::sync::Arc<wgpu::Sampler>,
     /// Per texture: its PCSX2 name (`texnames::name`; None for one with no GS form), which `uya native --surfaces` counts an
@@ -1434,20 +1445,36 @@ impl Materials {
         Materials { pixel_q: true, ..self }
     }
 
+    /// The materials of `textures` for a holder that calls `get` for what it draws each frame (the mobies, the effects, the 2D
+    /// layer): a replacement not on the GPU yet is decoded by the background worker (`texnames::replacements`), the game's own
+    /// texture drawn until `get` finds it landed.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, textures: &[uyafmt::core::Texture], qlog: f32, aref: u8) -> Result<Materials, String> {
+        Materials::build(device, queue, textures, qlog, aref, true)
+    }
+
+    /// The materials of `textures` for a holder that makes its settings once, as its level loads (the shrubs, the ties): every
+    /// replacement decoded and uploaded before it returns.
+    pub fn new_at_load(device: &wgpu::Device, queue: &wgpu::Queue, textures: &[uyafmt::core::Texture], qlog: f32, aref: u8) -> Result<Materials, String> {
+        Materials::build(device, queue, textures, qlog, aref, false)
+    }
+
+    fn build(device: &wgpu::Device, queue: &wgpu::Queue, textures: &[uyafmt::core::Texture], qlog: f32, aref: u8, background: bool) -> Result<Materials, String> {
         let views = textures.iter().map(|t| Materials::view(device, queue, t)).collect();
         let levels = textures.iter().map(|t| t.levels.len()).collect();
         let sizes = textures.iter().map(|t| (t.width, t.height)).collect();
-        let hd: Vec<_> = textures.iter().map(|t| crate::texnames::hd(device, queue, t)).collect::<Result<_, String>>()?;
-        let alpha_min = textures.iter().zip(&hd).map(|(t, h)| [Self::min_alpha(t), h.as_ref().map_or(0, |h| h.min_alpha)]).collect();
-        let hd = hd.into_iter().map(|h| h.map(|h| (h.view, h.levels))).collect();
-        let rift = textures.iter().map(|t| crate::texnames::rift(device, queue, t)).collect::<Result<_, String>>()?;
+        let got: Vec<crate::texnames::Replacements> = textures
+            .iter()
+            .map(|t| if background { crate::texnames::replacements(device, queue, t) } else { Ok((crate::texnames::hd(device, queue, t)?, crate::texnames::rift(device, queue, t)?, false)) })
+            .collect::<Result<_, String>>()?;
+        let pending = got.iter().enumerate().filter(|(_, g)| g.2).map(|(i, _)| i).collect();
+        let alpha_min = textures.iter().zip(&got).map(|(t, g)| [Self::min_alpha(t), g.0.as_ref().map_or(0, |h| h.min_alpha)]).collect();
+        let (hd, rift): (Vec<_>, Vec<_>) = got.into_iter().map(|g| (g.0.map(|h| (h.view, h.levels)), g.1)).unzip();
         let lights = textures.iter().map(crate::texnames::light).collect::<Result<_, String>>()?;
         let flat = crate::texnames::flat_material(device, queue)?;
         let rift_sampler = std::sync::Arc::new(crate::texnames::hd_sampler(device, false, false, false, 16));
         // A texture that cannot be named (`texnames::name`'s error, which `texnames::hd` counts) is unnamed here.
         let names = textures.iter().map(|t| crate::texnames::name(t).ok().flatten()).collect();
-        Ok(Materials { views, levels, alpha_min, sizes, hd, rift, lights, flat, rift_sampler, names, samplers: FastMap::default(), keys: FastMap::default(), batch_inputs: None, qlog, aref: aref as u16, keep: false, fb_only: false, rgb_only: false, tfx: 0, pixel_q: false })
+        Ok(Materials { views, levels, alpha_min, sizes, hd, rift, lights, pending, epoch: if background { crate::texnames::poll()? } else { 0 }, flat, rift_sampler, names, samplers: FastMap::default(), keys: FastMap::default(), batch_inputs: None, qlog, aref: aref as u16, keep: false, fb_only: false, rgb_only: false, tfx: 0, pixel_q: false })
     }
 
     /// The textures and their texels' bytes (every mip level, four bytes a texel).
@@ -1458,19 +1485,19 @@ impl Materials {
 
     /// Adds a texture (shared with `other`, the same textures' other material sets); returns its index.
     pub fn push(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, t: &uyafmt::core::Texture, others: &mut [&mut Materials]) -> Result<u32, String> {
-        let hd = crate::texnames::hd(device, queue, t)?;
-        let rift = crate::texnames::rift(device, queue, t)?;
+        let (hd, rift, later) = crate::texnames::replacements(device, queue, t)?;
         let light = crate::texnames::light(t)?;
-        Ok(self.add(device, queue, t, hd, rift, light, others))
+        Ok(self.add(device, queue, t, hd, rift, later, light, others))
     }
 
     /// Adds a texture the port made (no GS texels, so no pack name: the prompt icons' atlas, the vector font's), shared with
     /// `others`; returns its index.
     pub fn push_made(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, t: &uyafmt::core::Texture, others: &mut [&mut Materials]) -> u32 {
-        self.add(device, queue, t, None, None, [0.0; 2], others)
+        self.add(device, queue, t, None, None, false, [0.0; 2], others)
     }
 
-    fn add(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, t: &uyafmt::core::Texture, hd: Option<crate::texnames::HdView>, rift: Option<crate::texnames::RiftMat>, light: [f32; 2], others: &mut [&mut Materials]) -> u32 {
+    #[allow(clippy::too_many_arguments)]
+    fn add(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, t: &uyafmt::core::Texture, hd: Option<crate::texnames::HdView>, rift: Option<crate::texnames::RiftMat>, later: bool, light: [f32; 2], others: &mut [&mut Materials]) -> u32 {
         let view = Materials::view(device, queue, t);
         let alpha = [Self::min_alpha(t), hd.as_ref().map_or(0, |h| h.min_alpha)];
         let hd = hd.map(|h| (h.view, h.levels));
@@ -1485,6 +1512,9 @@ impl Materials {
             m.rift.push(rift.clone());
             m.lights.push(light);
             m.names.push(name);
+            if later {
+                m.pending.push(m.views.len() - 1);
+            }
         }
         self.views.push(view);
         self.levels.push(t.levels.len());
@@ -1494,6 +1524,9 @@ impl Materials {
         self.rift.push(rift);
         self.lights.push(light);
         self.names.push(name);
+        if later {
+            self.pending.push(self.views.len() - 1);
+        }
         self.views.len() as u32 - 1
     }
 
@@ -1573,7 +1606,7 @@ impl Materials {
 
     /// The same textures (shared on the GPU) for another TEST_1 AREF.
     pub fn with_aref(&self, aref: u16) -> Materials {
-        Materials { views: self.views.clone(), levels: self.levels.clone(), alpha_min: self.alpha_min.clone(), sizes: self.sizes.clone(), hd: self.hd.clone(), rift: self.rift.clone(), lights: self.lights.clone(), flat: self.flat.clone(), rift_sampler: self.rift_sampler.clone(), names: self.names.clone(), samplers: FastMap::default(), keys: FastMap::default(), batch_inputs: None, qlog: self.qlog, aref, keep: false, fb_only: false, rgb_only: false, tfx: 0, pixel_q: self.pixel_q }
+        Materials { views: self.views.clone(), levels: self.levels.clone(), alpha_min: self.alpha_min.clone(), sizes: self.sizes.clone(), hd: self.hd.clone(), rift: self.rift.clone(), lights: self.lights.clone(), pending: self.pending.clone(), epoch: self.epoch, flat: self.flat.clone(), rift_sampler: self.rift_sampler.clone(), names: self.names.clone(), samplers: FastMap::default(), keys: FastMap::default(), batch_inputs: None, qlog: self.qlog, aref, keep: false, fb_only: false, rgb_only: false, tfx: 0, pixel_q: self.pixel_q }
     }
 
     /// The same textures with TEST_1 `test`'s alpha test (ATE, ATST ALWAYS, GEQUAL or GREATER, AREF, AFAIL); its depth test
@@ -1637,9 +1670,42 @@ impl Materials {
         Ok((hd.map_or(view, |h| &h.0).clone(), cs, ct, self.aref, fails, self.rift[t].clone()))
     }
 
+    /// Takes the replacements the background worker has landed since the last look (`texnames::poll`) for the textures waiting for
+    /// one: the textures' settings made so far are made again with them, from the next draw on.
+    fn refresh(&mut self, device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> Result<(), String> {
+        let epoch = crate::texnames::poll()?;
+        if epoch == self.epoch {
+            return Ok(());
+        }
+        self.epoch = epoch;
+        let mut changed = Vec::new();
+        for t in std::mem::take(&mut self.pending) {
+            let name = self.names[t].ok_or("native: a texture waiting for its replacement has no name")?;
+            let (hd, rift, later) = crate::texnames::replacements_named(&name)?;
+            if hd.is_some() || rift.is_some() {
+                self.alpha_min[t][1] = hd.as_ref().map_or(0, |h| h.min_alpha);
+                self.hd[t] = hd.map(|h| (h.view, h.levels));
+                self.rift[t] = rift;
+                changed.push(t);
+            }
+            if later {
+                self.pending.push(t);
+            }
+        }
+        let stale: Vec<Key> = self.keys.keys().filter(|k| changed.contains(&(k.0 as usize))).copied().collect();
+        for key in stale {
+            self.keys.remove(&key);
+            self.get(device, layout, key)?;
+        }
+        Ok(())
+    }
+
     /// The bind group of setting `key` (made now if new) and whether its pixels can fail the alpha test.
     pub fn get(&mut self, device: &wgpu::Device, layout: &wgpu::BindGroupLayout, key: Key) -> Result<&(wgpu::BindGroup, bool), String> {
         use wgpu::util::DeviceExt;
+        if !self.pending.is_empty() {
+            self.refresh(device, layout)?;
+        }
         if !self.keys.contains_key(&key) {
             let (texture, cs, ct, mmin, k, _, region) = key;
             let t = texture as usize;
@@ -1683,6 +1749,13 @@ impl Materials {
                     ..Default::default()
                 })
             });
+            // The sampler's filters, which the vegetation's one texture array takes (`shrub_batch::Batch::layered`).
+            let filter = if mmin >= HD_MMIN {
+                let aniso = if mmin >= ANISO_MMIN { crate::enhance::aniso().expect("the option is on") } else { 16 };
+                crate::shrub_batch::Filter { min, mip, aniso, lod_max: if mmin == HD_MMIN0 || mmin == ANISO_MMIN0 { 0.0 } else { 32.0 } }
+            } else {
+                crate::shrub_batch::Filter { min, mip, aniso: 1, lod_max: 32.0 }
+            };
             // REGION_CLAMP (MINU, MAXU, MINV, MAXV in texels): the texel centres at the region's edges, so that filtering stays in it.
             let (w, h) = (self.sizes[t].0 as f32, self.sizes[t].1 as f32);
             let axis = |mode: u64, min: u64, max: u64, n: f32| if mode == 2 { [(min as f32 + 0.5) / n, (max as f32 + 0.5) / n] } else { [-1e30, 1e30] };
@@ -1728,6 +1801,8 @@ impl Materials {
                     uniform: u,
                     textures: [view.clone(), tex(&e3), tex(&e5), tex(&e6), tex(&e7), tex(&e8), tex(&e9)],
                     samplers: [sampler.clone(), (*self.rift_sampler).clone()],
+                    clamp: [cs, ct],
+                    filter,
                 });
             }
             let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1890,8 +1965,8 @@ impl Shrubs {
             .collect::<Result<Vec<_>, String>>()?;
         let records: Vec<[u8; 16]> = records.iter().map(|c| c.textures).collect();
         // TEST_1 0x5340B before the shrubs (Veldin field 2400, the GS stream): AREF 0x40. Program 4's 1/Q is a 32nd of the depth.
-        let mut materials = Materials::new(device, queue, textures, -5.0, 0x40)?;
-        if crate::shrub_batch::supported(device) && !crate::surfaces::on() {
+        let mut materials = Materials::new_at_load(device, queue, textures, -5.0, 0x40)?;
+        if !crate::surfaces::on() {
             materials.batch_inputs = Some(FastMap::default());
         }
         // Every texture setting the classes use, made now (the frame only reads them).
@@ -1922,7 +1997,7 @@ impl Shrubs {
             held += n;
         }
         chunks.push(from..instance_class.len());
-        let batch = materials.batch_inputs.take().filter(|inputs| !inputs.is_empty()).map(|inputs| crate::shrub_batch::Batch::new(device, view_layout, fog_layout, inputs)).transpose()?.flatten();
+        let batch = materials.batch_inputs.take().filter(|inputs| !inputs.is_empty()).map(|inputs| if crate::shrub_batch::supported(device) { crate::shrub_batch::Batch::new(device, view_layout, fog_layout, inputs) } else { crate::shrub_batch::Batch::layered(device, queue, view_layout, fog_layout, inputs) }).transpose()?.flatten();
         Ok(Shrubs { classes, records, instance_class, class_reach, materials, chunks, built: std::sync::Mutex::new(None), batch })
     }
 
@@ -2389,6 +2464,9 @@ pub(crate) struct Ties {
     /// Per class, each light position's normal as the tie light pass makes it from the position's two angles (func_L01_004B3368:
     /// (cos a cos b, sin a cos b, sin b), class space).
     normals: Vec<Vec<[f32; 3]>>,
+    /// The ties' draws in spans on GPUs with texture binding arrays (`tie_batch.rs`): their material table, pipelines and index
+    /// lists; None where the GPU or the level cannot (`draw_ties`).
+    pub batch: Option<crate::tie_batch::TieBatch>,
 }
 
 /// What building a range of ties took (`Ties::frame`, `UYA_NATIVE_TIMES`): the tie programs' decisions (`tievu::decide`), the
@@ -2407,6 +2485,12 @@ pub(crate) struct TieStats {
     pub sway: usize,
     pub second: usize,
     pub rebuilt: usize,
+    /// The spans and indices of the ranges' batch draws (`tie_batch.rs`).
+    pub spans: usize,
+    pub indices: usize,
+    /// The batch's index lists made and written (ns).
+    pub gather_ns: u64,
+    pub write_ns: u64,
 }
 
 impl TieStats {
@@ -2421,6 +2505,10 @@ impl TieStats {
         self.sway += o.sway;
         self.second += o.second;
         self.rebuilt += o.rebuilt;
+        self.spans += o.spans;
+        self.indices += o.indices;
+        self.gather_ns += o.gather_ns;
+        self.write_ns += o.write_ns;
     }
 }
 
@@ -2430,6 +2518,9 @@ impl TieStats {
 struct PacketTriangles {
     first: Vec<Key>,
     second: Vec<Key>,
+    /// The same triangles' materials in the batch's table (`TieCorner::material`; 0 where the level has no batch).
+    first_id: Vec<u32>,
+    second_id: Vec<u32>,
     adc: Vec<usize>,
 }
 
@@ -2601,7 +2692,7 @@ fn tie_key(c: &uyafmt::tie::TieClass, pk: &uyafmt::tie::TiePacket, tri: &uyafmt:
 
 impl Ties {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::BindGroupLayout, tie_layout: &wgpu::BindGroupLayout, classes: Vec<uyafmt::tie::TieClass>, textures: &[uyafmt::core::Texture], records: &[uyafmt::core::ClassRecord], gameplay: &uyafmt::gameplay::Gameplay, tests: [u64; 2]) -> Result<Ties, String> {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::BindGroupLayout, tie_layout: &wgpu::BindGroupLayout, view_layout: &wgpu::BindGroupLayout, classes: Vec<uyafmt::tie::TieClass>, textures: &[uyafmt::core::Texture], records: &[uyafmt::core::ClassRecord], gameplay: &uyafmt::gameplay::Gameplay, tests: [u64; 2]) -> Result<Ties, String> {
         let instance_class = gameplay
             .ties
             .iter()
@@ -2610,8 +2701,14 @@ impl Ties {
             .collect::<Result<Vec<_>, String>>()?;
         let records: Vec<[u8; 16]> = records.iter().map(|c| c.textures).collect();
         // Program 2's 1/Q is a 32nd of the depth.
-        let base = Materials::new(device, queue, textures, -5.0, 0)?;
+        let base = Materials::new_at_load(device, queue, textures, -5.0, 0)?;
         let mut materials = [base.with_test(tests[0])?, base.with_test(tests[1])?];
+        // The batch's material table is made from the settings `get` makes (the shrubs', `Shrubs::new`), but not for the ids' shader.
+        if crate::shrub_batch::supported(device) && !crate::surfaces::on() {
+            for m in &mut materials {
+                m.batch_inputs = Some(FastMap::default());
+            }
+        }
         for (c, rec) in classes.iter().zip(&records) {
             for lod in &c.lods {
                 for pk in lod {
@@ -2624,6 +2721,16 @@ impl Ties {
                 }
             }
         }
+        let mut inputs = Vec::new();
+        for (test, m) in materials.iter_mut().enumerate() {
+            if let Some(found) = m.batch_inputs.take() {
+                for (key, input) in found {
+                    inputs.push((test, key, input, m.keys[&key].1, m.fb_only));
+                }
+            }
+        }
+        let mut batch = if inputs.is_empty() { None } else { crate::tie_batch::TieBatch::new(device, view_layout, tie_layout, inputs)? };
+        let batch_id = |test: usize, key: &Key| -> Result<u32, String> { batch.as_ref().map_or(Ok(0), |b| b.id(test, key)) };
         let packets = classes
             .iter()
             .zip(&records)
@@ -2633,8 +2740,8 @@ impl Ties {
                     .map(|lod| {
                         lod.iter()
                             .map(|pk| -> Result<PacketTriangles, String> {
-                                let first = pk.triangles.iter().map(|tri| tie_key(c, pk, tri, rec)).collect::<Result<_, _>>()?;
-                                let second = match pk.second.as_ref().filter(|_| has_second_uvs(pk)) {
+                                let first: Vec<Key> = pk.triangles.iter().map(|tri| tie_key(c, pk, tri, rec)).collect::<Result<_, _>>()?;
+                                let second: Vec<Key> = match pk.second.as_ref().filter(|_| has_second_uvs(pk)) {
                                     Some(second) => pk.triangles.iter().map(|tri| tie_second_key(c, second, tri, rec)).collect::<Result<_, _>>()?,
                                     None => Vec::new(),
                                 };
@@ -2650,7 +2757,9 @@ impl Ties {
                                     }
                                     adc.push(starts[tri.strip] + places[t] + 2);
                                 }
-                                Ok(PacketTriangles { first, second, adc })
+                                let first_id = first.iter().map(|k| batch_id(first_test(pk), k)).collect::<Result<_, _>>()?;
+                                let second_id = second.iter().map(|k| batch_id(1, k)).collect::<Result<_, _>>()?;
+                                Ok(PacketTriangles { first, second, first_id, second_id, adc })
                             })
                             .collect::<Result<Vec<_>, String>>()
                     })
@@ -2688,6 +2797,9 @@ impl Ties {
             at = TieBlock { corners: at.corners + corners.next_multiple_of(96) as u32, slots: at.slots + slots.next_multiple_of(4) as u32, seconds: at.seconds + seconds as u32 };
         }
         blocks.push(at);
+        if let Some(b) = &mut batch {
+            b.allocate(device, at.corners as u64, crate::native::SETS);
+        }
         let corners_size = (at.corners as u64 * std::mem::size_of::<TieCorner>() as u64).max(32);
         if corners_size > device.limits().max_buffer_size {
             return Err(format!("native: the level's tie corners ({} of them, {corners_size} bytes) pass the GPU's largest buffer ({})", at.corners, device.limits().max_buffer_size));
@@ -2724,7 +2836,14 @@ impl Ties {
                     .collect()
             })
             .collect();
-        Ok(Ties { classes, instance_class, materials, packets, weights, colour_extent, blocks, corners, sets, built, normals })
+        Ok(Ties { classes, instance_class, materials, packets, weights, colour_extent, blocks, corners, sets, built, normals, batch })
+    }
+
+    /// A new frame in set `set`: the batch's index list is empty again.
+    pub fn begin(&self, set: usize) {
+        if let Some(b) = &self.batch {
+            b.begin(set);
+        }
     }
 
     /// The level's tie corners (`TieCorner`, vertex buffer 0 of `vs_tie`) and frame set `set`'s values' group (group 2).
@@ -3003,6 +3122,7 @@ impl Ties {
         let mut draws = std::mem::take(&mut room.draws);
         draws.draws.clear();
         draws.ranges.clear();
+        draws.base = b0.corners;
         for i in range.clone() {
             let (c, lod, k, runs) = match instance(i)? {
                 None => continue,
@@ -3133,7 +3253,7 @@ impl Ties {
                             let uv = pk.vertices[vi as usize].uv;
                             let (n, s, light) = lit[vi as usize];
                             let light = light | ((has_second_uvs(pk) as u32) << 30);
-                            room.up[first_up + (cbase + 3 * t as u32) as usize + q] = TieCorner { pos, st: uv.map(f32::to_bits), colour, slot: blk.slots + vbase + vi, n, s, light };
+                            room.up[first_up + (cbase + 3 * t as u32) as usize + q] = TieCorner { pos, st: uv.map(f32::to_bits), colour, slot: blk.slots + vbase + vi, n, s, light, material: pt.first_id[t] };
                         }
                         run(b, test, pt.first[t], corner, false);
                     }
@@ -3144,7 +3264,7 @@ impl Ties {
                             let corner = blk.corners + cbase + 3 * t as u32;
                             for (q, &vi) in tri.v.iter().enumerate() {
                                 let pos = verts.get(vi as usize).ok_or("native: tie triangle vertex")?.0;
-                                room.up[first_up + (cbase + 3 * t as u32) as usize + q] = TieCorner { pos, st: [blk.seconds + sbase + vi, 0], colour, slot: (blk.slots + vbase + vi) | 1 << 31, n: [0; 4], s: [0.0; 2], light: 0 };
+                                room.up[first_up + (cbase + 3 * t as u32) as usize + q] = TieCorner { pos, st: [blk.seconds + sbase + vi, 0], colour, slot: (blk.slots + vbase + vi) | 1 << 31, n: [0; 4], s: [0.0; 2], light: 0, material: pt.second_id[t] };
                             }
                             run(b, 1, pt.second[t], corner, true);
                         }
@@ -3193,6 +3313,12 @@ impl Ties {
                 }
                 cbase += 3 * pk.triangles.len() as u32;
                 if has_second_uvs(pk) {
+                    // A second draw's triangles are always drawn: their bits are set too (`vs_tie` reads the first draw's alone), for
+                    // the batch's index lists (`tie_batch.rs`).
+                    for t in 0..pk.triangles.len() as u32 {
+                        let tri = (blk.corners + cbase) / 3 + t - b0.corners / 3;
+                        room.bits[(tri / 32) as usize] |= 1 << (tri % 32);
+                    }
                     let second = pk.second.as_ref().expect("has_second_uvs");
                     let at = record_of(i).ok_or_else(|| format!("native: tie {i} is drawn and not in the game's list of ties drawn"))?;
                     let sent = sent_uvs.get(nth).ok_or_else(|| format!("native: tie {i} (record {at:#x}) run {dn}: its second part {nth} with coordinates, the chain sent {}", sent_uvs.len()))?;
@@ -3357,6 +3483,8 @@ pub(crate) struct TieDraw {
 pub(crate) struct TieDraws {
     pub draws: Vec<TieDraw>,
     pub ranges: Vec<(u32, u32)>,
+    /// The first corner of the range of instances the draws are of (the first bit of `TieRoom::bits` is its triangle).
+    pub base: u32,
 }
 
 /// One corner of a tie triangle as the level keeps it on the GPU (`Ties::frame`, vertex buffer 0 of `vs_tie`): the vertex's
@@ -3375,6 +3503,8 @@ pub(crate) struct TieCorner {
     pub n: [i8; 4],
     pub s: [f32; 2],
     pub light: u32,
+    /// The corner's texture setting in the batch's material table (`tie_batch.rs`; 0 where the level has no batch).
+    pub material: u32,
 }
 
 /// A range's room for its frame (`Ties::frame`), kept from frame to frame: its values before they are written, the corners of
@@ -3383,7 +3513,8 @@ pub(crate) struct TieCorner {
 pub(crate) struct TieRoom {
     colours: Vec<u32>,
     colour_spans: Vec<usize>,
-    bits: Vec<u32>,
+    /// A bit a triangle of the range: drawn (a first draw's the game's program draws, every second draw's).
+    pub(crate) bits: Vec<u32>,
     st: Vec<[f32; 2]>,
     up: Vec<TieCorner>,
     spans: Vec<usize>,
@@ -3394,4 +3525,5 @@ pub(crate) struct TieRoom {
     adc: Vec<bool>,
     decide: crate::tievu::DecideRoom,
     pub(crate) draws: TieDraws,
+    pub(crate) batch: crate::tie_batch::Room,
 }

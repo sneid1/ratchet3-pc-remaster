@@ -110,6 +110,7 @@ impl PalettedNames {
     }
 
     pub(crate) fn preload(&self, device: &wgpu::Device, queue: &wgpu::Queue, label: &str) -> Result<(), String> {
+        note_ui(self.images.iter().copied())?;
         let names: Vec<TexName> = {
             let g = HD.lock().map_err(|_| "texnames: the pack folder's lock is poisoned")?;
             let Some(hd) = g.as_ref() else { return Ok(()) };
@@ -289,6 +290,60 @@ struct Hd {
     named: usize,
     replaced: usize,
     errors: Vec<String>,
+    /// Play only (`open_in_play`): the GPU the background worker uploads to, the worker's queue, what it has been asked for and not
+    /// yet landed (`request`), and the first decode that failed (`poll` stops the game with it).
+    gpu: Option<(wgpu::Device, wgpu::Queue)>,
+    worker: Option<std::sync::mpsc::Sender<Job>>,
+    inflight: HashSet<Want>,
+    failed: Option<String>,
+}
+
+/// What the background worker is asked for: a pack file's replacement or a Rift Apart material's map (by its key).
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Want {
+    Pack(TexName),
+    Map(String),
+}
+
+/// A decode the worker is asked for: of the level `level_no` (`GENERATION`), a stale one is dropped.
+struct Job {
+    level_no: u64,
+    want: Want,
+    file: PathBuf,
+}
+
+/// A decode the worker finished: its replacement on the GPU or the file's error.
+struct Landed {
+    level_no: u64,
+    want: Want,
+    result: Result<Done, String>,
+}
+
+enum Done {
+    Pack(HdView),
+    Map(wgpu::TextureView),
+}
+
+/// Whether textures first drawn after their level's load are decoded by the background worker (`uya play`: `open_in_play`) rather
+/// than where they are asked for (`uya native`, whose pictures wait for every replacement).
+static BACKGROUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The level the worker's decodes are for: each level's load (`preload`) makes a new one.
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Counts the landings `poll` has taken into the level's textures: a `Materials` with a replacement to wait for looks again when it
+/// changes.
+static EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Set when the worker has landed something `poll` has not taken.
+static LANDED_FLAG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LANDED: std::sync::Mutex<Vec<Landed>> = std::sync::Mutex::new(Vec::new());
+/// Set when a decode failed (`Hd::failed`).
+static FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The result of a lookup by name that may be waiting for the worker.
+enum Got<T> {
+    /// The replacement, or none for the texture.
+    Now(Option<T>),
+    /// Asked of the worker, not landed yet: the game's own texture until it has.
+    Later,
 }
 
 /// One level of a replacement: RGBA8, alpha on the GS scale (0x80 = opaque).
@@ -298,9 +353,13 @@ struct Level {
     rgba: Vec<u8>,
 }
 
-/// A replacement: the file's image as level 0, then each level half the size (`half`) down to 1 x 1.
+/// A replacement: the file's image as level 0, then each level half the size (`half`) down to 1 x 1, less the top levels the
+/// UPDATED TEXTURES level's cap drops (`capped`).
 struct Repl {
     levels: Vec<Level>,
+    /// The least alpha of the file's own image (GS scale, 0x80 opaque), before any level is dropped: a hole a dropped level had
+    /// stays one for the alpha test.
+    min_alpha: u8,
 }
 
 /// A replacement on the GPU: its view, its level count and the least alpha of its level 0 (GS scale, 0x80 opaque).
@@ -649,14 +708,42 @@ pub(crate) fn open(dir: &Path, rift: Option<&Path>) -> Result<(), String> {
         scan(&replacements, &mut rift_files, &mut d, &mut o)?;
         println!("textures: {} remaster replacements in {} ({d} duplicates, {o} other files), drawn while UPDATED TEXTURES is on", rift_files.len(), replacements.display());
     }
-    *HD.lock().map_err(|_| "texnames: the pack folder's lock is poisoned")? = Some(Hd { files, rift_dir, rift, rift_files, lights, relief, views: HashMap::new(), materials: HashMap::new(), named: 0, replaced: 0, errors: Vec::new() });
+    *HD.lock().map_err(|_| "texnames: the pack folder's lock is poisoned")? = Some(Hd { files, rift_dir, rift, rift_files, lights, relief, views: HashMap::new(), materials: HashMap::new(), named: 0, replaced: 0, errors: Vec::new(), gpu: None, worker: None, inflight: HashSet::new(), failed: None });
     Ok(())
 }
 
+/// `open` for `uya play`: what is first drawn after its level's load is decoded and uploaded by a worker at below normal priority
+/// (`replacements`), the game's own texture drawn until it has landed.
+pub(crate) fn open_in_play(dir: &Path, rift: Option<&Path>) -> Result<(), String> {
+    open(dir, rift)?;
+    BACKGROUND.store(true, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+
+/// The images (a texture's `tex0` and `bits`, whatever its palette) the 2D layer draws: the HUD's and the menus' (`eedraw`'s
+/// textures, noted by `dump_ui` as each is made) and the HUD's and resident images found as a level loads
+/// (`PalettedNames::image`). UPDATED TEXTURES at HUD ONLY draws replacements for these alone.
+static UI_IMAGES: std::sync::Mutex<Option<HashSet<(u64, u32)>>> = std::sync::Mutex::new(None);
+
+fn note_ui(images: impl IntoIterator<Item = (u64, u32)>) -> Result<(), String> {
+    UI_IMAGES.lock().map_err(|_| "texnames: the 2D layer's lock is poisoned")?.get_or_insert_with(HashSet::new).extend(images);
+    Ok(())
+}
+
+fn is_ui(n: &TexName) -> bool {
+    UI_IMAGES.lock().expect("texnames: the 2D layer's lock is poisoned").as_ref().is_some_and(|u| u.contains(&(n.tex0, n.bits)))
+}
+
 impl Hd {
-    /// The file drawn in place of `n`: the remaster's own (`rift_files`) while UPDATED TEXTURES is on, else the pack's.
+    /// The file drawn in place of `n` at the UPDATED TEXTURES level now (`enhance::texture_level`): none at OFF; at HUD ONLY one
+    /// for a texture of the 2D layer alone; else any. The remaster's own (`rift_files`) first, then the pack's.
     fn file(&self, n: &TexName) -> Option<&PathBuf> {
-        crate::enhance::rift_apart().then(|| self.rift_files.get(n)).flatten().or_else(|| self.files.get(n))
+        use crate::enhance::{TEXTURES_HUD, TEXTURES_OFF};
+        match crate::enhance::texture_level() {
+            TEXTURES_OFF => None,
+            TEXTURES_HUD if !is_ui(n) => None,
+            _ => self.rift_files.get(n).or_else(|| self.files.get(n)),
+        }
     }
 }
 
@@ -682,6 +769,11 @@ pub(crate) fn dump_ui_to(dir: &Path) -> Result<(), String> {
 
 /// A 2D-layer texture made (`eedraw`), dumped when `--dump-ui` asked.
 pub(crate) fn dump_ui(t: &uyafmt::core::Texture) -> Result<(), String> {
+    // A texture of the 2D layer (UPDATED TEXTURES at HUD ONLY draws replacements for these alone): a name made here is noted
+    // whether or not a dump is asked for; one the port cannot name has no replacement to draw.
+    if let Ok(Some(n)) = name(t) {
+        note_ui([(n.tex0, n.bits)])?;
+    }
     if let Some(dir) = DUMP_UI.lock().map_err(|_| "texnames: the dump lock is poisoned")?.as_ref() {
         if let Some(n) = name(t)? {
             dump(dir, t, &n.stem())?;
@@ -692,36 +784,46 @@ pub(crate) fn dump_ui(t: &uyafmt::core::Texture) -> Result<(), String> {
 
 /// The replacement of `t` on the GPU when the pack folder has one: uploaded by `preload` as its level loaded, else (a texture
 /// first drawn after the load, as Clank's skin is with the level's first frame) decoded and uploaded now, once for the level. A
-/// file that cannot be read or decoded stops the game, naming it.
+/// file that cannot be read or decoded stops the game, naming it. (`replacements` is the lookup of a texture drawn while playing.)
 pub(crate) fn hd(device: &wgpu::Device, queue: &wgpu::Queue, t: &uyafmt::core::Texture) -> Result<Option<HdView>, String> {
+    Ok(hd_get(device, queue, t, false)?.0)
+}
+
+/// `hd`, or with `background` the replacement asked of the worker when it is not there yet: the second is whether it is to come.
+fn hd_get(device: &wgpu::Device, queue: &wgpu::Queue, t: &uyafmt::core::Texture, background: bool) -> Result<(Option<HdView>, bool), String> {
     // `uya native --surfaces`: the terrain's and the ties' textures drawn as their id colours (`surfaces`).
     if crate::surfaces::on() {
-        return crate::surfaces::id_view(device, queue, t);
+        return Ok((crate::surfaces::id_view(device, queue, t)?, false));
     }
     let mut g = HD.lock().map_err(|_| "texnames: the pack folder's lock is poisoned")?;
-    let Some(hd) = g.as_mut() else { return Ok(None) };
+    let Some(hd) = g.as_mut() else { return Ok((None, false)) };
     let name = match name(t) {
         Ok(Some(n)) => n,
-        Ok(None) => return Ok(None),
+        Ok(None) => return Ok((None, false)),
         Err(e) => {
             hd.errors.push(e);
-            return Ok(None);
+            return Ok((None, false));
         }
     };
     hd.named += 1;
     if let Some(dir) = DUMP.lock().map_err(|_| "texnames: the dump lock is poisoned")?.as_ref() {
         dump(dir, t, &name.stem())?;
     }
-    let Some(file) = hd.file(&name).cloned() else { return Ok(None) };
+    let Some(file) = hd.file(&name).cloned() else { return Ok((None, false)) };
     hd.replaced += 1;
     if let Some(v) = hd.views.get(&name) {
-        return Ok(Some(v.clone()));
+        return Ok((Some(v.clone()), false));
+    }
+    if background {
+        hd.gpu.get_or_insert_with(|| (device.clone(), queue.clone()));
+        hd.request(Want::Pack(name), file)?;
+        return Ok((None, true));
     }
     let t0 = std::time::Instant::now();
-    let v = to_gpu(device, queue, &decode(&file)?)?;
+    let v = to_gpu(device, queue, &decode(&file)?, usize::MAX)?;
     println!("textures: {} decoded when first drawn, not with its level's load: {:.1} ms", file.display(), t0.elapsed().as_secs_f64() * 1e3);
     hd.views.insert(name, v.clone());
-    Ok(Some(v))
+    Ok((Some(v), false))
 }
 
 /// `t`'s Rift Apart material on the GPU while UPDATED TEXTURES is on and the Rift Apart folder pairs it: its map uploaded by `preload`
@@ -740,38 +842,212 @@ pub(crate) fn rift(device: &wgpu::Device, queue: &wgpu::Queue, t: &uyafmt::core:
     if surface.is_none() && relief.is_none() {
         return Ok(None);
     }
-    let mut view = |key: &str| -> Result<wgpu::TextureView, String> {
-        if let Some(v) = hd.materials.get(key) {
-            return Ok(v.clone());
+    for key in rift_maps(surface.as_ref(), relief.as_ref()) {
+        if hd.materials.contains_key(&key) {
+            continue;
         }
         let t0 = std::time::Instant::now();
-        let mf = material_path(&hd.rift_dir, key);
+        let mf = material_path(&hd.rift_dir, &key);
         let v = upload_levels(device, queue, "Rift Apart material", &decode_map(&mf)?)?;
         println!("textures: {} decoded when first drawn, not with its level's load: {:.1} ms", mf.display(), t0.elapsed().as_secs_f64() * 1e3);
-        hd.materials.insert(key.to_string(), v.clone());
-        Ok(v)
-    };
-    let relief = relief.map(|(k, strength)| Ok::<_, String>((view(&k)?, strength))).transpose()?;
-    let Some(s) = surface else {
-        return Ok(Some(RiftMat { slots: Vec::new(), region: None, normal: 1.0, pbr: false, fur_tiles: [0.0; 2], relief }));
-    };
-    let slots = s.slots.iter().map(|m| Ok((if m.material == FUR { None } else { Some(view(&m.material)?) }, m.clone()))).collect::<Result<_, String>>()?;
-    let region = s.region_map.as_ref().map(|f| format!("region:{f}")).map(|k| Ok::<_, String>((view(&k)?, k))).transpose()?;
-    Ok(Some(RiftMat { slots, region, normal: s.normal, pbr: s.pbr, fur_tiles: s.fur_tiles, relief }))
+        hd.materials.insert(key, v);
+    }
+    Ok(Some(hd.rift_mat(surface, relief)))
 }
 
-/// A Rift Apart material's map decoded: its image as level 0 and the levels below it, as it is (no GS alpha).
+/// Every map a texture's Rift Apart material draws with: its relief's and its surface's (`surface_maps`).
+fn rift_maps(surface: Option<&RiftSurface>, relief: Option<&(String, f32)>) -> Vec<String> {
+    let mut keys: Vec<String> = relief.map(|r| r.0.clone()).into_iter().collect();
+    keys.extend(surface.into_iter().flat_map(surface_maps));
+    keys
+}
+
+impl Hd {
+    /// The material of a surface and relief whose maps are all in `materials`.
+    fn rift_mat(&self, surface: Option<RiftSurface>, relief: Option<(String, f32)>) -> RiftMat {
+        let view = |key: &str| self.materials.get(key).expect("every map of the material is there").clone();
+        let relief = relief.map(|(k, strength)| (view(&k), strength));
+        let Some(s) = surface else {
+            return RiftMat { slots: Vec::new(), region: None, normal: 1.0, pbr: false, fur_tiles: [0.0; 2], relief };
+        };
+        let slots = s.slots.iter().map(|m| (if m.material == FUR { None } else { Some(view(&m.material)) }, m.clone())).collect();
+        let region = s.region_map.as_ref().map(|f| format!("region:{f}")).map(|k| (view(&k), k));
+        RiftMat { slots, region, normal: s.normal, pbr: s.pbr, fur_tiles: s.fur_tiles, relief }
+    }
+
+    /// Asks the worker for `want`, once (the worker is started with the first ask).
+    fn request(&mut self, want: Want, file: PathBuf) -> Result<(), String> {
+        if !self.inflight.insert(want.clone()) {
+            return Ok(());
+        }
+        if self.worker.is_none() {
+            let (device, queue) = self.gpu.clone().ok_or("texnames: a background decode before any texture was looked up")?;
+            let (tx, rx) = std::sync::mpsc::channel::<Job>();
+            std::thread::Builder::new().name("texture decode".into()).spawn(move || decode_worker(rx, device, queue)).map_err(|e| format!("texnames: the decode thread: {e}"))?;
+            self.worker = Some(tx);
+        }
+        let job = Job { level_no: GENERATION.load(std::sync::atomic::Ordering::Relaxed), want, file };
+        self.worker.as_ref().expect("started above").send(job).map_err(|_| "texnames: the decode thread ended".to_string())
+    }
+
+    /// The replacement of `name`: its view when it is there, else asked of the worker.
+    fn pack_by_name(&mut self, name: &TexName) -> Result<Got<HdView>, String> {
+        let Some(file) = self.file(name).cloned() else { return Ok(Got::Now(None)) };
+        if let Some(v) = self.views.get(name) {
+            return Ok(Got::Now(Some(v.clone())));
+        }
+        self.request(Want::Pack(*name), file)?;
+        Ok(Got::Later)
+    }
+
+    /// The Rift Apart material of `name`: when every map of it is there, else the missing ones asked of the worker.
+    fn rift_by_name(&mut self, name: &TexName) -> Result<Got<RiftMat>, String> {
+        let surface = self.surface(name)?.cloned();
+        let relief = self.relief(name);
+        if surface.is_none() && relief.is_none() {
+            return Ok(Got::Now(None));
+        }
+        let mut later = false;
+        for key in rift_maps(surface.as_ref(), relief.as_ref()) {
+            if !self.materials.contains_key(&key) {
+                self.request(Want::Map(key.clone()), material_path(&self.rift_dir, &key))?;
+                later = true;
+            }
+        }
+        Ok(if later { Got::Later } else { Got::Now(Some(self.rift_mat(surface, relief))) })
+    }
+}
+
+/// What a `Materials` holds of a texture's replacements: its pack texture, its Rift Apart material, and whether either is still to
+/// come from the worker (`replacements_named` asks again once `poll`'s count has moved on).
+pub(crate) type Replacements = (Option<HdView>, Option<RiftMat>, bool);
+
+/// `t`'s replacements while playing: as `hd` and `rift`, but what is not on the GPU yet is asked of the worker (decoded and uploaded
+/// at below normal priority, off the render thread) and left out, the game's own texture drawn until it has landed. With no
+/// worker (`uya native`) the same as `hd` and `rift`.
+pub(crate) fn replacements(device: &wgpu::Device, queue: &wgpu::Queue, t: &uyafmt::core::Texture) -> Result<Replacements, String> {
+    if !BACKGROUND.load(std::sync::atomic::Ordering::Relaxed) || crate::surfaces::on() {
+        return Ok((hd(device, queue, t)?, rift(device, queue, t)?, false));
+    }
+    poll()?;
+    let (pack, pack_later) = hd_get(device, queue, t, true)?;
+    let mut g = HD.lock().map_err(|_| "texnames: the pack folder's lock is poisoned")?;
+    let Some(hd) = g.as_mut() else { return Ok((None, None, false)) };
+    let Ok(Some(name)) = name(t) else { return Ok((pack, None, pack_later)) };
+    let (material, material_later) = match hd.rift_by_name(&name)? {
+        Got::Now(m) => (m, false),
+        Got::Later => (None, true),
+    };
+    Ok((pack, material, pack_later || material_later))
+}
+
+/// `replacements` of the texture named `name`, once the worker has landed more (`poll`'s count changed).
+pub(crate) fn replacements_named(name: &TexName) -> Result<Replacements, String> {
+    poll()?;
+    let mut g = HD.lock().map_err(|_| "texnames: the pack folder's lock is poisoned")?;
+    let Some(hd) = g.as_mut() else { return Ok((None, None, false)) };
+    let (pack, pack_later) = match hd.pack_by_name(name)? {
+        Got::Now(v) => (v, false),
+        Got::Later => (None, true),
+    };
+    let (material, material_later) = match hd.rift_by_name(name)? {
+        Got::Now(m) => (m, false),
+        Got::Later => (None, true),
+    };
+    Ok((pack, material, pack_later || material_later))
+}
+
+/// Takes what the worker has landed into the level's textures and returns the count of landings so far (a `Materials` waiting for
+/// a replacement looks again when it has changed). A decode that failed stops the game, naming its file.
+pub(crate) fn poll() -> Result<u64, String> {
+    use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+    if LANDED_FLAG.swap(false, Acquire) {
+        let landed = std::mem::take(&mut *LANDED.lock().map_err(|_| "texnames: the landing lock is poisoned")?);
+        let mut g = HD.lock().map_err(|_| "texnames: the pack folder's lock is poisoned")?;
+        let hd = g.as_mut().ok_or("texnames: a decode landed with no pack folder")?;
+        let level_no = GENERATION.load(Relaxed);
+        let mut any = false;
+        for l in landed.into_iter().filter(|l| l.level_no == level_no) {
+            hd.inflight.remove(&l.want);
+            any = true;
+            match (l.want, l.result) {
+                (Want::Pack(n), Ok(Done::Pack(v))) => {
+                    hd.views.entry(n).or_insert(v);
+                }
+                (Want::Map(k), Ok(Done::Map(v))) => {
+                    hd.materials.entry(k).or_insert(v);
+                }
+                (_, Err(e)) => {
+                    hd.failed.get_or_insert(e);
+                    FAILED.store(true, Release);
+                }
+                _ => return Err("texnames: a decode landed as the other kind".into()),
+            }
+        }
+        if any {
+            EPOCH.fetch_add(1, Release);
+        }
+    }
+    if FAILED.load(Acquire) {
+        let g = HD.lock().map_err(|_| "texnames: the pack folder's lock is poisoned")?;
+        if let Some(e) = g.as_ref().and_then(|h| h.failed.clone()) {
+            return Err(e);
+        }
+    }
+    Ok(EPOCH.load(Acquire))
+}
+
+/// The bytes of one texture write by the background worker (`upload`).
+const UPLOAD_BAND: usize = 512 << 10;
+
+/// The background worker: decodes and uploads what `Hd::request` sends, one at a time at below normal priority (a two-core PC must
+/// not lose its frame builder to it), dropping what a new level made stale.
+fn decode_worker(rx: std::sync::mpsc::Receiver<Job>, device: wgpu::Device, queue: wgpu::Queue) {
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL};
+        // A thread that keeps its priority still decodes, only against the frame builder: the priority is no reason to stop.
+        let _ = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) };
+    }
+    for job in rx {
+        if job.level_no != GENERATION.load(std::sync::atomic::Ordering::Relaxed) {
+            continue;
+        }
+        let t0 = std::time::Instant::now();
+        let result = match &job.want {
+            Want::Pack(_) => decode(&job.file).and_then(|r| to_gpu(&device, &queue, &r, UPLOAD_BAND)).map(Done::Pack),
+            Want::Map(_) => decode_map(&job.file).and_then(|l| upload(&device, &queue, "Rift Apart material", &l.iter().map(|l| (l.w, l.h, &l.rgba[..])).collect::<Vec<_>>(), UPLOAD_BAND)).map(Done::Map),
+        };
+        if result.is_ok() {
+            println!("textures: {} decoded in the background, not with its level's load: {:.1} ms", job.file.display(), t0.elapsed().as_secs_f64() * 1e3);
+        }
+        LANDED.lock().expect("texnames: the landing lock is poisoned").push(Landed { level_no: job.level_no, want: job.want, result });
+        LANDED_FLAG.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// A Rift Apart material's map decoded: its image as level 0 and the levels below it, as it is (no GS alpha), less the top
+/// levels the UPDATED TEXTURES level drops (`capped`: the maps' cap).
 fn decode_map(file: &Path) -> Result<Vec<Level>, String> {
     let (w, h, rgba) = std::fs::read(file).map_err(|e| e.to_string()).and_then(|b| crate::pic::read_png(&b)).map_err(|e| format!("textures: {}: {e}", file.display()))?;
-    let mut levels = vec![Level { w, h, rgba }];
+    Ok(capped(vec![Level { w, h, rgba }], crate::enhance::texture_caps().map(|c| c.1)))
+}
+
+/// `levels` (just level 0) with its chain made down to 1 x 1 and the top levels dropped until the larger side is at most `cap`
+/// texels (`enhance::texture_caps`; None, no cap: the whole chain). A level that is no bigger than the cap is never dropped.
+fn capped(mut levels: Vec<Level>, cap: Option<u32>) -> Vec<Level> {
     while let Some(l) = levels.last().filter(|l| l.w > 1 || l.h > 1) {
         levels.push(half(l));
     }
-    Ok(levels)
+    if let Some(cap) = cap {
+        let drop = levels.iter().take_while(|l| l.w.max(l.h) > cap).count().min(levels.len() - 1);
+        levels.drain(..drop);
+    }
+    levels
 }
 
 fn upload_levels(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, levels: &[Level]) -> Result<wgpu::TextureView, String> {
-    upload(device, queue, label, &levels.iter().map(|l| (l.w, l.h, &l.rgba[..])).collect::<Vec<_>>())
+    upload(device, queue, label, &levels.iter().map(|l| (l.w, l.h, &l.rgba[..])).collect::<Vec<_>>(), usize::MAX)
 }
 
 /// The header of `lights.tsv`.
@@ -864,19 +1140,17 @@ pub(crate) fn water_normal(device: &wgpu::Device, queue: &wgpu::Queue) -> Result
 
 /// The material map every material without a Rift Apart surface binds (not read: the material uniform's `rift.w` is 0).
 pub(crate) fn flat_material(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<wgpu::TextureView, String> {
-    upload(device, queue, "no Rift Apart material", &[(1, 1, &[128, 128, 0, 102][..])])
+    upload(device, queue, "no Rift Apart material", &[(1, 1, &[128, 128, 0, 102][..])], usize::MAX)
 }
 
-/// A pack file decoded: its image as level 0 and the levels below it.
+/// A pack file decoded: its image as level 0 and the levels below it, less the top levels the UPDATED TEXTURES level drops
+/// (`capped`: the textures' cap).
 fn decode(file: &Path) -> Result<Repl, String> {
     let (w, h, mut rgba) = std::fs::read(file).map_err(|e| e.to_string()).and_then(|b| crate::pic::read_png(&b)).map_err(|e| format!("textures: {}: {e}", file.display()))?;
     // A pack's alpha is the GS's (0x80 opaque): above 0x80 is opaque.
     rgba.chunks_exact_mut(4).for_each(|p| p[3] = p[3].min(0x80));
-    let mut levels = vec![Level { w, h, rgba }];
-    while let Some(l) = levels.last().filter(|l| l.w > 1 || l.h > 1) {
-        levels.push(half(l));
-    }
-    Ok(Repl { levels })
+    let min_alpha = rgba.chunks_exact(4).map(|p| p[3]).min().ok_or_else(|| format!("textures: {}: an empty image", file.display()))?;
+    Ok(Repl { levels: capped(vec![Level { w, h, rgba }], crate::enhance::texture_caps().map(|c| c.0)), min_alpha })
 }
 
 /// A level's replacements (`textures`: every texture of its scene) decoded by at most four workers (the game runs on while
@@ -898,6 +1172,9 @@ fn preload_names(device: &wgpu::Device, queue: &wgpu::Queue, names: &[TexName], 
         if reset {
             hd.views.clear();
             hd.materials.clear();
+            // What the worker still holds for the level that went is dropped (`decode_worker`, `poll`).
+            GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            hd.inflight.clear();
         }
         let mut seen = HashSet::new();
         let (mut jobs, mut maps) = (Vec::new(), Vec::new());
@@ -969,7 +1246,7 @@ fn preload_names(device: &wgpu::Device, queue: &wgpu::Queue, names: &[TexName], 
         drop(tx);
         for r in rx {
             let (n, r) = r?;
-            views.push((n, to_gpu(device, queue, &r)?));
+            views.push((n, to_gpu(device, queue, &r, usize::MAX)?));
         }
         Ok(())
     })?;
@@ -1041,7 +1318,11 @@ static STAGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(
 const STAGING_FLUSH: u64 = 64 << 20;
 
 /// A texture of `levels` (each its width, height and RGBA8 rows) on the GPU.
-fn upload(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, levels: &[(u32, u32, &[u8])]) -> Result<wgpu::TextureView, String> {
+///
+/// With `band` bytes a write, each level is written in bands of rows (the background worker's: one write of a 4096 x 4096 level
+/// holds the GPU queue's staging for about 10 ms, and the render thread's own writes wait on it, so the worker writes in bands the
+/// render thread's writes fit between).
+fn upload(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, levels: &[(u32, u32, &[u8])], band: usize) -> Result<wgpu::TextureView, String> {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d { width: levels[0].0, height: levels[0].1, depth_or_array_layers: 1 },
@@ -1053,12 +1334,19 @@ fn upload(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, levels: &[(u3
         view_formats: &[],
     });
     for (l, &(w, h, px)) in levels.iter().enumerate() {
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: l as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            px,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(h) },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        );
+        let rows = (band / (4 * w as usize)).clamp(1, h as usize) as u32;
+        for y in (0..h).step_by(rows as usize) {
+            let n = rows.min(h - y);
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: l as u32, origin: wgpu::Origin3d { x: 0, y, z: 0 }, aspect: wgpu::TextureAspect::All },
+                &px[(y * w * 4) as usize..((y + n) * w * 4) as usize],
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(n) },
+                wgpu::Extent3d { width: w, height: n, depth_or_array_layers: 1 },
+            );
+            if rows < h {
+                std::thread::sleep(std::time::Duration::from_micros(100));
+            }
+        }
     }
     let bytes: u64 = levels.iter().map(|l| l.2.len() as u64).sum();
     if STAGED.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed) + bytes >= STAGING_FLUSH {
@@ -1072,14 +1360,13 @@ fn upload(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, levels: &[(u3
 /// A one-level texture on the GPU as a replacement is (`surfaces`' id textures).
 pub(crate) fn upload_level0(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, w: u32, h: u32, rgba: Vec<u8>) -> Result<HdView, String> {
     let min_alpha = rgba.chunks_exact(4).map(|p| p[3]).min().ok_or("texnames: an empty texture")?;
-    Ok(HdView { view: upload(device, queue, label, &[(w, h, &rgba[..])])?, levels: 1, min_alpha })
+    Ok(HdView { view: upload(device, queue, label, &[(w, h, &rgba[..])], usize::MAX)?, levels: 1, min_alpha })
 }
 
 /// A decoded replacement on the GPU.
-fn to_gpu(device: &wgpu::Device, queue: &wgpu::Queue, r: &Repl) -> Result<HdView, String> {
+fn to_gpu(device: &wgpu::Device, queue: &wgpu::Queue, r: &Repl, band: usize) -> Result<HdView, String> {
     let levels: Vec<(u32, u32, &[u8])> = r.levels.iter().map(|l| (l.w, l.h, &l.rgba[..])).collect();
-    let min_alpha = r.levels.iter().flat_map(|l| l.rgba.chunks_exact(4)).map(|p| p[3]).min().expect("a level of at least one texel");
-    Ok(HdView { view: upload(device, queue, "pack texture", &levels)?, levels: levels.len(), min_alpha })
+    Ok(HdView { view: upload(device, queue, "pack texture", &levels, band)?, levels: levels.len(), min_alpha: r.min_alpha })
 }
 
 /// `t`'s replacement on the GPU, with its level count, when there is one (`hd`).

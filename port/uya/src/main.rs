@@ -32,10 +32,17 @@
 //!   uya sounds <disc.iso> <level|fe> <out dir> [--sound LABEL:N,...], uya sndreplay <disc.iso> [--wav FILE], uya sndbanks <disc.iso>
 //!       the port's own sound engine on its own: a bank's sounds into WAVs, the boot's recorded sound calls replayed and checked,
 //!       every bank of the disc decoded (src/snd/tool.rs).
+//!
+//! A windowed program: started by a double-click or a launcher, Windows opens no console window beside the game (a v0.1.8 player:
+//! "whats up with recomps opening and leaving open console windows?"). Started from a terminal it writes there, and with its
+//! output redirected (uyactl's pipes) it writes where that goes (`uya::attach_console`); with neither, `play` keeps play.log.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    #[cfg(windows)]
+    uya::attach_console();
     // Bandicam's Vulkan layer (VK_LAYER_bandicam_helper) is registered for every Vulkan program on the PC and loads whether or not
     // Bandicam runs, hooking the commands: with OBS's it took 4 % of the game's CPU on the player's Crash Site profile (23 November
     // 2026). Its manifest names the variable that keeps it out of a program; the Vulkan loader reads it when the instance is made.
