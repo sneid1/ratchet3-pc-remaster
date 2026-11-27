@@ -570,6 +570,9 @@ impl Engine {
             let gone = self.streams.list[si].voices.iter().any(|&vi| self.voices[vi].is_none());
             if gone {
                 let s = self.streams.list.remove(si);
+                if !super::log_on() {
+                    println!("sound: tick {}: stream {:#x} played its last part out", self.ticks, s.handle);
+                }
                 for vi in s.voices {
                     self.voices[vi] = None;
                 }

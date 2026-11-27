@@ -17,8 +17,8 @@ fn rd32(ram: &[u8], a: u32) -> u32 {
 }
 
 /// The sound module's two servers (0x123456, 0x123457) on the runtime: each call goes to the port's sound engine, which the
-/// live audio's mixer also pulls (`Audio::engine`).
-struct SndModule(Arc<Mutex<crate::snd::Engine>>);
+/// live audio's mixer also pulls (`Audio::engine`). With it, every level's globals: `respawn_music`.
+struct SndModule(Arc<Mutex<crate::snd::Engine>>, Vec<uyafmt::levelcode::LevelGlobals>);
 
 /// The runtime's EE memory and disc as the sound engine reaches them.
 struct SndHost<'a>(&'a mut dyn uyart::iop::SoundHost);
@@ -44,8 +44,50 @@ impl crate::snd::rpc::Host for SndHost<'_> {
 impl uyart::iop::Sound for SndModule {
     fn call(&mut self, host: &mut dyn uyart::iop::SoundHost, sid: u32, fno: u32, send: &[u8]) -> Result<Vec<u8>, String> {
         let mut e = self.0.lock().map_err(|_| "the sound engine's lock is poisoned (the mixer thread panicked)")?;
-        e.call(&mut SndHost(host), sid, fno, send)
+        let stops = e.stops();
+        let r = e.call(&mut SndHost(host), sid, fno, send)?;
+        if e.stops() != stops {
+            respawn_music(host, &self.1)?;
+        }
+        Ok(r)
     }
+}
+
+/// The music a respawn starts, looked at as the game stops everything (command 0x18: the respawn, func_L01_003EF740, stops
+/// every sound at +0x28 (func_003A0010), and reads the track it will start only after, at +0x38 to +0x50). With a continue point taken, the
+/// respawn starts the track the snapshot was taken with (`levelcode::CONTINUE_TRACK`), never the one playing; a snapshot taken
+/// with no track (-1) starts nothing, and nothing starts music again until a continue point is taken with music playing:
+/// func_0039C8A8 takes no negative track, and the music's own restart (func_0039CEA8) wants the flag that only a start sets.
+/// The music record's track is -1 whenever no stream plays (func_0039CC98's last lines), so a continue point taken before
+/// the level's music starts is such a one: the player's save on level 9 loads with it (28 November 2026: "I loaded in, died
+/// about a minute in, the music was gone"; the play.log of that death: track 8 playing, the snapshot's track -1).
+///
+/// Such a snapshot is given the track playing as everything stops, so the respawn starts that one; a snapshot with a track is
+/// the game's, and stays. The write is made at once (`SoundHost::poke_ee`): through `write_ee` it landed at the next vertical
+/// blank, after the respawn had read the snapshot, and the music stayed off (the same day: "Its not fixed btw"). What the stop
+/// found is said in the play log.
+fn respawn_music(host: &mut dyn uyart::iop::SoundHost, levels: &[uyafmt::levelcode::LevelGlobals]) -> Result<(), String> {
+    use uyafmt::levelcode::{CONTINUE_TRACK, MUSIC_TRACK};
+    let word = |host: &mut dyn uyart::iop::SoundHost, a: u32| -> Result<u32, String> { Ok(u32::from_le_bytes(host.read_ee(a, 4)?.try_into().expect("4 bytes"))) };
+    let level = word(host, crate::LEVEL_CURRENT)?;
+    // A level whose code is in RAM (not the front end, nor a level still loading over the last one's).
+    let Some(g) = levels.iter().find(|g| g.level as u32 == level) else { return Ok(()) };
+    if [word(host, g.anchor)?, word(host, g.anchor + 4)?] != g.anchor_words {
+        return Ok(());
+    }
+    let (track, flags_state, handle) = (word(host, MUSIC_TRACK)? as u16 as i16, word(host, MUSIC_TRACK + 4)?, word(host, MUSIC_TRACK - 4)?);
+    let (taken, kept) = (word(host, g.continue_point)?, word(host, g.continue_point + CONTINUE_TRACK)? as i32);
+    let given = taken == 1 && kept == -1 && (0..256).contains(&track);
+    if given {
+        host.poke_ee(g.continue_point + CONTINUE_TRACK, &(track as i32).to_le_bytes());
+    }
+    println!(
+        "sound: level {level}: everything stops with music track {track} (state {}, flags {:#x}, handle {handle:#x}); continue point taken {taken}, its track {kept}{}",
+        (flags_state >> 16) as u16 as i16,
+        flags_state as u16,
+        if given { format!(": none, so it has track {track} now, for the respawn to start") } else { String::new() }
+    );
+    Ok(())
 }
 
 /// The game's movie player (`uyart::machine::movie_player`: a0 the PSS's sector, a1 its bytes, a3 the language) to the port's
@@ -423,7 +465,7 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
     let mut audio = crate::audio::Audio::open(audio, iso)?;
     audio.set_hq(menus.settings.get("audio_mixing") == 1);
     audio.set_clean_reverb(menus.settings.get("reverb") == 1);
-    m.iop.sound = Some(Box::new(SndModule(audio.engine())));
+    m.iop.sound = Some(Box::new(SndModule(audio.engine(), levels.clone())));
     // The game's movies into the window when `play` attached the movie player (not with --fast unless --movies): else the game's
     // player skips each movie as it starts.
     if crate::cinema::attached() {

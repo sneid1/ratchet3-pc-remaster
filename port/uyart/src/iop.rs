@@ -49,6 +49,10 @@ pub trait Sound: Send {
 pub trait SoundHost {
     fn read_ee(&mut self, addr: u32, len: usize) -> Result<Vec<u8>, String>;
     fn write_ee(&mut self, addr: u32, bytes: &[u8]) -> Result<(), String>;
+    /// EE memory written at once: a change the port itself makes to the game's state inside a sound call. `write_ee` is the
+    /// module's own write, which lands at the next vertical blank: too late for what the game's code reads right after the
+    /// call returns.
+    fn poke_ee(&mut self, addr: u32, bytes: &[u8]);
     fn read_disc(&mut self, lba: u32, sectors: u32) -> Result<Vec<u8>, String>;
     /// The disc's sectors: the CD driver refuses a read past them.
     fn disc_sectors(&mut self) -> u64;
@@ -502,6 +506,9 @@ impl SoundHost for Host<'_> {
         note(format!("field {field} thread {thread} the sound module's write queued for {addr:08x}..{:08x}", addr.wrapping_add(bytes.len() as u32)));
         self.c.mach().iop.sound_writes.push((addr, bytes.to_vec()));
         Ok(())
+    }
+    fn poke_ee(&mut self, addr: u32, bytes: &[u8]) {
+        ee_write(self.c, addr, bytes);
     }
     fn read_disc(&mut self, lba: u32, sectors: u32) -> Result<Vec<u8>, String> {
         let (field, thread) = (self.c.mach().field, self.c.thread);

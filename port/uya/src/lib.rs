@@ -183,9 +183,16 @@ fn no_output() -> bool {
 /// not from a terminal, and not by a script that reads its output through a pipe) writes what it prints, its errors and a
 /// panic's message with the rest, to the profile's `play.log`, and the run before's is kept as `play-previous.log` (the player,
 /// 16 November 2026: "game crashed check logs").
+///
+/// A program Explorer starts (a double-click, a shortcut) has the shell's monitor in its start information's hStdOutput, marked
+/// by STARTF_HASSHELLDATA in the start flags, and while the mark stands GetStdHandle gives no standard output, whatever
+/// SetStdHandle set (the error output is given): every `println!` was dropped and the log held the error output's lines alone,
+/// from v0.1.9, the windowed program, to v0.2.1 (the player, 28 November 2026: a play.log of one line, the sound device's). A
+/// console program never met it: Windows had set its console's handles up before `main`. The log is the output now, so the mark
+/// comes off (`shell_data_off`), and the log is kept only once Windows gives it back as the standard output.
 #[cfg(windows)]
 pub fn keep_log(profile: &str, args: &[String]) -> Result<(), String> {
-    use windows::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
+    use windows::Win32::System::Console::{GetStdHandle, SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
     // Under RecompLauncher (it sets RECOMPLAUNCHER) the output may be its pipe, so the check below would skip the log; but the
     // launcher's crash report shows the newest .log in the game's folder, and the game's own last lines are what names a crash:
     // keep the log there anyway.
@@ -205,9 +212,32 @@ pub fn keep_log(profile: &str, args: &[String]) -> Result<(), String> {
         SetStdHandle(STD_OUTPUT_HANDLE, handle).map_err(|e| format!("play: the log: {e}"))?;
         SetStdHandle(STD_ERROR_HANDLE, handle).map_err(|e| format!("play: the log: {e}"))?;
     }
+    shell_data_off();
+    if !unsafe { GetStdHandle(STD_OUTPUT_HANDLE) }.is_ok_and(|h| h == handle) {
+        return Err(format!("play: {}: Windows does not give the log back as the standard output: what the game prints would be lost", log.display()));
+    }
     let exe = std::env::current_exe().map_err(|e| format!("play: the executable: {e}"))?;
     println!("play: {} {}", exe.display(), args.join(" "));
     Ok(())
+}
+
+/// STARTF_HASSHELLDATA taken off the process's start flags (`keep_log`). The flags GetStdHandle reads are the process
+/// parameters' WindowFlags (STARTUPINFO's dwFlags as CreateProcess left them), which SetStdHandle leaves as they were.
+#[cfg(windows)]
+fn shell_data_off() {
+    // RTL_USER_PROCESS_PARAMETERS' WindowFlags in 64-bit Windows.
+    const WINDOW_FLAGS: usize = 0xa4;
+    // hStdOutput holds the monitor the shell started the program on, not a file.
+    const STARTF_HASSHELLDATA: u32 = 0x400;
+    let peb: *const windows::Win32::System::Threading::PEB;
+    // SAFETY: in 64-bit Windows gs is the thread's TEB, and the TEB's pointer to the process's PEB is at 0x60 (winnt.h's
+    // NtCurrentTeb, winternl.h's TEB).
+    unsafe { std::arch::asm!("mov {}, gs:[0x60]", out(reg) peb, options(nostack, readonly, preserves_flags)) };
+    // SAFETY: the process's own parameters, there for its whole life; `main` calls this before the game's threads start.
+    unsafe {
+        let flags = (*peb).ProcessParameters.cast::<u8>().add(WINDOW_FLAGS).cast::<u32>();
+        *flags &= !STARTF_HASSHELLDATA;
+    }
 }
 
 /// `uya native <disc.iso> <ram.bin>[,<ram.bin>...] <level>[,<level>...] <out.png> [--height H] [--hd DIR [--rift DIR]] [--preset NAME]

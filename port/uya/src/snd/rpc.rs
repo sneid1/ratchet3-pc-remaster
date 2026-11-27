@@ -107,6 +107,7 @@ impl Engine {
                         let n = (len.max(0) as usize + 3) & !3;
                         let args = words(send.get(at + 4..at + 4 + n).ok_or("sound command's arguments run past the batch")?);
                         let r = self.command(host, cid, &args)?;
+                        self.tell_stream(cid, &args, r);
                         if super::log_on() {
                             println!("snd: tick {}: command {cid:#x} {args:x?} -> {r:#x}", self.ticks);
                         }
@@ -117,6 +118,7 @@ impl Engine {
                     Ok(reply(&out))
                 } else {
                     let r = self.command(host, fno, &w)?;
+                    self.tell_stream(fno, &w, r);
                     if super::log_on() {
                         println!("snd: tick {}: command {fno:#x} {w:x?} -> {r:#x}", self.ticks);
                     }
@@ -176,6 +178,30 @@ impl Engine {
         Ok(())
     }
 
+    /// The play log's lines of the music and the other streams, always written (a few a minute): each call that starts, queues,
+    /// holds, lets go or ends a stream, each stop of everything and each pause of voice groups, and a stream query's answer
+    /// when it changes (whether it still plays, has started, how many parts it has). The player's report of 28 November 2026
+    /// ("after a death the music has now stopped playing") could not be read from a play.log that named no stream. UYA_SNDLOG
+    /// writes every command instead.
+    fn tell_stream(&mut self, cid: u32, a: &[u32], r: u32) {
+        if super::log_on() {
+            return;
+        }
+        let h = a.first().copied().unwrap_or(0);
+        let of_stream = super::stream::is_stream(h);
+        match cid {
+            0x2a | 0x2c | 0x18 | 0x34 | 0x35 | 0x16 | 0x17 => {}
+            0x2d | 0x2e | 0x2f | 0x13 | 0x14 | 0x15 if of_stream => {}
+            0x19 | 0x30 | 0x4f if of_stream => {
+                if self.told.insert((cid, h), r) == Some(r) {
+                    return;
+                }
+            }
+            _ => return,
+        }
+        println!("sound: tick {}: stream command {cid:#x} {a:x?} -> {r:#x}", self.ticks);
+    }
+
     /// One command (989snd's handler for `cid`); its result, 0 for one that has none.
     fn command(&mut self, host: &mut dyn Host, cid: u32, a: &[u32]) -> Result<u32, String> {
         let w = |i: usize| a.get(i).copied().unwrap_or(0);
@@ -195,6 +221,10 @@ impl Engine {
             }
             // 9 sets the volume of a voice group (0..0x400); group 0x10 is the master volume.
             0x09 => {
+                // The music's group (1), told to the play log when it changes (`tell_stream`).
+                if w(0) == 1 && !super::log_on() && self.group_vol[1] != (w(1) as i32).clamp(0, 0x400) {
+                    println!("sound: tick {}: the music's voice group volume {:#x} -> {:#x}", self.ticks, self.group_vol[1], (w(1) as i32).clamp(0, 0x400));
+                }
                 self.set_group_volume(w(0) as usize, w(1) as i32)?;
                 0
             }

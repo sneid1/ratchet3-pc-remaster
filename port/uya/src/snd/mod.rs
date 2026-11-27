@@ -230,6 +230,10 @@ pub struct Engine {
     gone: HashMap<u32, (usize, usize, u64, String)>,
     long_told: std::collections::HashSet<(usize, u64)>,
     census_told: u32,
+    /// The answer the play log last told for a stream's query (command, handle): `tell_stream`.
+    told: HashMap<(u32, u32), u32>,
+    /// How many times the game has stopped everything (`stop_all`).
+    stops: u64,
 }
 
 /// The restarts of held sounds the log tells of in a run.
@@ -318,6 +322,8 @@ impl Engine {
             gone: HashMap::new(),
             long_told: std::collections::HashSet::new(),
             census_told: 0,
+            told: HashMap::new(),
+            stops: 0,
         })
     }
 
@@ -1182,8 +1188,15 @@ impl Engine {
         }
     }
 
+    /// How many times the game has stopped everything (command 0x18): a death's respawn, a level's start and end
+    /// (`rtgame::SndModule` looks at the game's music then).
+    pub fn stops(&self) -> u64 {
+        self.stops
+    }
+
     /// Stops every sound and every voice at once (989snd FUN_0000e7a0).
     pub fn stop_all(&mut self) {
+        self.stops += 1;
         self.stream_end_all();
         self.insts.clear();
         self.lfo_list.clear();

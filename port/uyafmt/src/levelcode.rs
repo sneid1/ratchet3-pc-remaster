@@ -217,7 +217,18 @@ pub struct LevelGlobals {
     pub menu_entry: Option<MenuEntry>,
     /// The WAD streaming slots (`StreamSlots`).
     pub stream_slots: StreamSlots,
+    /// The continue point's snapshot (0x237880 on Veldin, 0x236800 on level 9): func_L01_003EF740 (the respawn) +0x44, the
+    /// `addiu $a1, $v0, lo` after the `lui` at +0x38. +0 is whether one was taken (1) and `CONTINUE_TRACK` the music track it
+    /// was taken with: the respawn starts that track when there is a snapshot (+0x50 `lw $s0, 0xC64($a1)`), else the one the
+    /// music record holds (`MUSIC_TRACK`: +0x4C `lh $s0, lo($a0)`, the `lui` at +0x3C).
+    pub continue_point: u32,
 }
+
+/// The track the game's music plays (the main program's music record at 0x1CD000, +0x18: -1 none), the same in every level.
+pub const MUSIC_TRACK: u32 = 0x1C_D018;
+/// The music track a continue point's snapshot was taken with, from `LevelGlobals::continue_point` (func_L01_0049FDB0 stores
+/// the music record's there).
+pub const CONTINUE_TRACK: u32 = 0xC64;
 
 /// The slots the game streams WAD entries through (func_003AED40, the front end's function, in every level: on Veldin at
 /// 0x490968, `lui $s3` at +0x10 and `addiu $v0, $s3, lo` at +0x5C form the first; +0x30 `addiu $s0, $zero, 3` counts four,
@@ -324,8 +335,9 @@ const MENU_ENTRY: Func = Func { name: "func_003A9B10", address: 0x4C_E920, size:
 const STREAM_SLOTS: Func = Func { name: "func_003AED40", address: 0x49_0968, size: 0x84 };
 const CLASS_LOAD: Func = Func { name: "func_L01_00424368", address: 0x42_4368, size: 0x110 };
 const GADGET_INSTALL: Func = Func { name: "func_L01_0042A058", address: 0x42_A058, size: 0x2A8 };
+const RESPAWN: Func = Func { name: "func_L01_003EF740", address: 0x3E_F740, size: 0xBC };
 
-const ALL: [&Func; 22] = [&STREAM_SLOTS, &HUD_LOAD, &CLANK_TEXTURE, &SHIP_TEXTURE, &SETUP, &CAMERA, &VIEW, &ZONES, &SKY, &SHRUB_CULL, &TIE_CULL, &TIE_DMA, &CHUNK, &VIEW_MATRIX, &MOBY_JOBS, &LEVEL_LOAD, &ARMOR_LOAD, &ARMOR_INSTALL, &ARMOR_CHANGE, &WRENCH_LOAD, &CLASS_LOAD, &GADGET_INSTALL];
+const ALL: [&Func; 23] = [&STREAM_SLOTS, &HUD_LOAD, &CLANK_TEXTURE, &SHIP_TEXTURE, &SETUP, &CAMERA, &VIEW, &ZONES, &SKY, &SHRUB_CULL, &TIE_CULL, &TIE_DMA, &CHUNK, &VIEW_MATRIX, &MOBY_JOBS, &LEVEL_LOAD, &ARMOR_LOAD, &ARMOR_INSTALL, &ARMOR_CHANGE, &WRENCH_LOAD, &CLASS_LOAD, &GADGET_INSTALL, &RESPAWN];
 
 /// Each function's start address in `ov`, by name: how `from_overlay` finds them (the menu entry loader's when the level has
 /// it).
@@ -549,6 +561,19 @@ pub fn from_overlay(reference: &Overlay, ov: &Overlay) -> Result<LevelGlobals, S
             GadgetAddrs { buffer: formed(ov, s, f, 0x1C, None, 0x80)?, index: formed(ov, s, f, 0x24, Some(0x19C), 0x1D8)?, class_ids: at(&CLASS_LOAD, 0x6C, 0x80)?, classes, table: (sector - copy - 4) as u32 }
         },
         hud_header: formed(ov, st(&HUD_LOAD), &HUD_LOAD, 0xB4, None, 0xB8)?,
+        continue_point: {
+            let (f, s) = (&RESPAWN, st(&RESPAWN));
+            let track = formed(ov, s, f, 0x3C, None, 0x4C)?;
+            if track != MUSIC_TRACK {
+                return Err(format!("L{:02} {} +0x4C reads {track:#x}, not the music record's track", ov.level, f.name));
+            }
+            // lw $s0, 0xC64($a1)
+            let w = ov.word(s + 0x50).ok_or_else(|| format!("L{:02} {} +0x50: no word", ov.level, f.name))?;
+            if w != 0x8CB0_0000 | CONTINUE_TRACK {
+                return Err(format!("L{:02} {} +0x50: {w:08x} does not read the snapshot's music track", ov.level, f.name));
+            }
+            formed(ov, s, f, 0x38, None, 0x44)?
+        },
         stream_slots: {
             let (s, f) = (st(&STREAM_SLOTS), &STREAM_SLOTS);
             let w = |off: u32| ov.word(s + off).ok_or_else(|| format!("L{:02} {} +{off:#x}: no word", ov.level, f.name));

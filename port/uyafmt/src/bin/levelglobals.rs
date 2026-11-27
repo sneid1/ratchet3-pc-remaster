@@ -43,6 +43,7 @@ fn fields(g: &LevelGlobals) -> Vec<(&'static str, u32)> {
         ("clankskin", g.clank_texture.skin),
         ("shipskin", g.ship_texture.skin),
         ("hudheader", g.hud_header),
+        ("continue", g.continue_point),
     ]
 }
 
@@ -106,7 +107,7 @@ fn main() -> Result<(), String> {
 
     let mut all: Vec<LevelGlobals> = Vec::new();
     let mut fails = Vec::new();
-    println!("lv  gp       {}", ["camera", "tangents", "zones", "sky", "shr.count", "shr.inst", "shr.mat", "shr.col", "shr.limit", "tie.count", "tie.inst", "tie.mat", "tie.col", "tie.limit", "mobies", "mobyend", "lights", "chunk", "viewcam", "tie.list", "tie.lbytes", "tie.recs", "mobyjobs", "core", "armorent", "armorbuf", "wrench", "clankskin", "shipskin", "hudheader"].iter().map(|n| format!("{n:>9}")).collect::<Vec<_>>().join(" "));
+    println!("lv  gp       {}", ["camera", "tangents", "zones", "sky", "shr.count", "shr.inst", "shr.mat", "shr.col", "shr.limit", "tie.count", "tie.inst", "tie.mat", "tie.col", "tie.limit", "mobies", "mobyend", "lights", "chunk", "viewcam", "tie.list", "tie.lbytes", "tie.recs", "mobyjobs", "core", "armorent", "armorbuf", "wrench", "clankskin", "shipskin", "hudheader", "continue"].iter().map(|n| format!("{n:>9}")).collect::<Vec<_>>().join(" "));
     for &lv in STORY_LEVELS.iter() {
         let ov = levelcode::overlay(&mut d, &tc, lv)?;
         let g = match levelcode::from_overlay(&reference, &ov) {
