@@ -730,6 +730,12 @@ impl Menus {
         FRONT_ENDS.iter().find(|f| Menus::front_end(ram) && at(f.ui_sound as usize))
     }
 
+    /// Whether the front end shows its main menu (either front end, its screen word at `MAIN_MENU`; not Options, the save slots or
+    /// a box over them): the update notice's place (`update::plate`).
+    pub fn main_menu(&self, ram: &[u8]) -> bool {
+        Menus::front(ram).is_some_and(|f| r32(ram, f.screen) == MAIN_MENU)
+    }
+
     /// The pointer's highlight: `v` into the cursor word at `a`, with the cursor's sound when the highlight moved.
     fn point(&mut self, ram: &mut [u8], a: usize, v: u32) {
         if r32(ram, a) != v {

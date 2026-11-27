@@ -8,13 +8,118 @@
 //! (`Env`).
 
 use super::RATE;
+use std::cell::RefCell;
 use std::sync::Arc;
 
-/// A decoded sample: 16-bit mono PCM at the rate it was recorded at (the tone's centre note says which), and where it goes back
-/// to when it reaches its end (None: it stops).
+/// A sample: 16-bit mono PCM at the rate it was recorded at (the tone's centre note says which), and where it goes back to when it
+/// reaches its end (None: it stops). A bank's tone is decoded whole; a stream's clip stays the disc's PS-ADPCM and the voice decodes
+/// the part it reads (`Adpcm`).
 pub struct Pcm {
-    pub s: Vec<i16>,
+    src: Source,
     pub loop_to: Option<usize>,
+}
+
+enum Source {
+    Decoded(Vec<i16>),
+    Adpcm(Adpcm),
+}
+
+impl Pcm {
+    pub fn decoded(s: Vec<i16>, loop_to: Option<usize>) -> Pcm {
+        Pcm { src: Source::Decoded(s), loop_to }
+    }
+
+    /// A stream's clip: `frames` (a whole number of 16-byte frames) read as `len` samples, the stream engine's length for it: a
+    /// longer clip ends there and a shorter one is silent for the rest.
+    pub fn adpcm(frames: Vec<u8>, len: usize, loop_to: Option<usize>) -> Pcm {
+        Pcm { src: Source::Adpcm(Adpcm::new(frames, len)), loop_to }
+    }
+
+    /// The sample's length in samples.
+    pub fn len(&self) -> usize {
+        match &self.src {
+            Source::Decoded(s) => s.len(),
+            Source::Adpcm(a) => a.len,
+        }
+    }
+
+    fn at(&self, cache: &RefCell<Cache>, j: usize) -> i16 {
+        match &self.src {
+            Source::Decoded(s) => s[j],
+            Source::Adpcm(a) => a.at(&mut cache.borrow_mut(), j),
+        }
+    }
+}
+
+/// A clip's frames in segments of `SEG` frames, with the filter history (the two samples before it) at each segment's start,
+/// found once when the clip is made: a voice decodes the segment it reads, whatever order it reads them in (the window of the
+/// resampler, the loop's wrap), and every sample is the one the clip's decode in a row gave.
+struct Adpcm {
+    frames: Vec<u8>,
+    hist: Vec<(i32, i32)>,
+    /// The samples the clip counts (the stream engine's length) and how many of them the frames give: the rest are silent.
+    len: usize,
+    decoded: usize,
+}
+
+const SEG: usize = 64;
+const SEG_SAMPLES: usize = SEG * 28;
+const CACHE: usize = 8;
+
+impl Adpcm {
+    fn new(frames: Vec<u8>, len: usize) -> Adpcm {
+        let mut hist = Vec::with_capacity(frames.len() / 16 / SEG + 1);
+        let (mut a, mut b) = (0i32, 0i32);
+        let mut scratch = Vec::with_capacity(28);
+        for (i, f) in frames.chunks_exact(16).enumerate() {
+            if i % SEG == 0 {
+                hist.push((a, b));
+            }
+            scratch.clear();
+            frame(f, &mut a, &mut b, &mut scratch);
+        }
+        let decoded = (frames.len() / 16 * 28).min(len);
+        Adpcm { frames, hist, len, decoded }
+    }
+
+    fn at(&self, c: &mut Cache, j: usize) -> i16 {
+        if j >= self.decoded {
+            return 0;
+        }
+        let k = j / SEG_SAMPLES;
+        let slot = match c.segs.iter().position(|(s, _)| *s == k) {
+            Some(p) => p,
+            None => {
+                let d = self.segment(k);
+                if c.segs.len() < CACHE {
+                    c.segs.push((k, d));
+                    c.segs.len() - 1
+                } else {
+                    let p = c.next;
+                    c.next = (p + 1) % CACHE;
+                    c.segs[p] = (k, d);
+                    p
+                }
+            }
+        };
+        c.segs[slot].1[j - k * SEG_SAMPLES]
+    }
+
+    fn segment(&self, k: usize) -> Vec<i16> {
+        let (mut a, mut b) = self.hist[k];
+        let mut s = Vec::with_capacity(SEG_SAMPLES);
+        for f in self.frames[k * SEG * 16..].chunks_exact(16).take(SEG) {
+            frame(f, &mut a, &mut b, &mut s);
+        }
+        s
+    }
+}
+
+/// The segments of a clip a voice has decoded and still holds.
+#[derive(Default)]
+struct Cache {
+    segs: Vec<(usize, Vec<i16>)>,
+    next: usize,
 }
 
 /// One 16-byte frame's 28 samples appended to `s`; `a` and `b` are the two samples before it (the filters' taps, in 1/64).
@@ -22,7 +127,7 @@ pub struct Pcm {
 /// takes no taps (its coefficient rows are zero), as PCSX2's SPU2 decodes them (Mixer.cpp XA_decode_block: the header's shift
 /// plus 16 on the nibble in the top bits, tbl_XA_Factor's rows 5 to 15 zero). Such a frame stopped the game (the player,
 /// 18 November 2026, on level 3: "game crashed"; frame 0x5E20 of a bank: shift 13, filter 6).
-fn frame(f: &[u8], a: &mut i32, b: &mut i32, s: &mut Vec<i16>) -> Result<(), String> {
+fn frame(f: &[u8], a: &mut i32, b: &mut i32, s: &mut Vec<i16>) {
     const F: [(i32, i32); 16] = [(0, 0), (60, 0), (115, -52), (98, -55), (122, -60), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0)];
     let (shift, filter) = ((f[0] & 15) as u32, (f[0] >> 4) as usize);
     for k in 0..28 {
@@ -33,18 +138,6 @@ fn frame(f: &[u8], a: &mut i32, b: &mut i32, s: &mut Vec<i16>) -> Result<(), Str
         *a = v;
         s.push(v as i16);
     }
-    Ok(())
-}
-
-/// A stream's clip: every frame of `frames` (a whole number of them), decoded in a row. The stream engine ends a clip by its data
-/// size, not by the frames' flags.
-pub fn decode_clip(frames: &[u8]) -> Result<Vec<i16>, String> {
-    let mut s = Vec::with_capacity(frames.len() / 16 * 28);
-    let (mut a, mut b) = (0i32, 0i32);
-    for (i, f) in frames.chunks_exact(16).enumerate() {
-        frame(f, &mut a, &mut b, &mut s).map_err(|e| format!("frame {i} of the clip: {e}"))?;
-    }
-    Ok(s)
 }
 
 /// The sample whose first frame is at byte `start` of `frames`, to its last frame.
@@ -59,10 +152,10 @@ pub fn decode(frames: &[u8], start: usize) -> Result<Pcm, String> {
         if flags & 4 != 0 {
             loop_start = s.len();
         }
-        frame(f, &mut a, &mut b, &mut s).map_err(|e| format!("frame at {p:#x}: {e}"))?;
+        frame(f, &mut a, &mut b, &mut s);
         p += 16;
         if flags & 1 != 0 {
-            return Ok(Pcm { s, loop_to: (flags & 2 != 0).then_some(loop_start) });
+            return Ok(Pcm::decoded(s, (flags & 2 != 0).then_some(loop_start)));
         }
     }
 }
@@ -208,6 +301,8 @@ pub const ORIGINAL: Out = Out { k: 1.0, hq: false };
 /// A sounding voice.
 pub struct Voice {
     pcm: Arc<Pcm>,
+    /// The segments of `pcm` decoded for the reads (a stream's clip).
+    cache: RefCell<Cache>,
     /// The read position in the sample (fractional) and how far it moves per 48 kHz output sample (`Out::k` scales it).
     pos: f64,
     pub step: f64,
@@ -245,6 +340,7 @@ impl Voice {
     pub fn new(pcm: Arc<Pcm>, tone: uyafmt::sbank::Tone, owner: u32, priority: i32, born: u64, tone_volume: i32, tone_pan: i32) -> Voice {
         Voice {
             pcm,
+            cache: RefCell::default(),
             pos: 0.0,
             step: 1.0,
             env: Env::new(tone.adsr1, tone.adsr2),
@@ -328,9 +424,10 @@ impl Voice {
             }
             self.noise_val
         } else {
-            let s = &self.pcm.s;
+            let (pcm, cache) = (&*self.pcm, &self.cache);
+            let n = pcm.len();
             let at = |i: i64| -> f32 {
-                let n = s.len() as i64;
+                let n = n as i64;
                 let j = if i < 0 {
                     0
                 } else if i < n {
@@ -341,7 +438,7 @@ impl Voice {
                         None => return 0.0,
                     }
                 };
-                s[j as usize] as f32 / 32768.0
+                pcm.at(cache, j as usize) as f32 / 32768.0
             };
             let v = if o.hq {
                 super::sinc::kernel().read(at, self.pos, step)
@@ -352,7 +449,7 @@ impl Voice {
                 let (c1, c2, c3) = (0.5 * (y[2] - y[0]), y[0] - 2.5 * y[1] + 2.0 * y[2] - 0.5 * y[3], 0.5 * (y[3] - y[0]) + 1.5 * (y[1] - y[2]));
                 ((c3 * t + c2) * t + c1) * t + y[1]
             };
-            let (n, loop_to) = (s.len() as f64, self.pcm.loop_to);
+            let (n, loop_to) = (n as f64, self.pcm.loop_to);
             self.pos += step;
             if self.pos >= n {
                 if let Some(l) = loop_to {
@@ -360,6 +457,7 @@ impl Voice {
                 } else if let Some((next, step)) = self.chain.take() {
                     self.pos -= n;
                     self.pcm = next;
+                    self.cache.get_mut().segs.clear();
                     self.step = step;
                     self.advanced += 1;
                 } else {

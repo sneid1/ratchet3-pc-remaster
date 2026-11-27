@@ -169,6 +169,9 @@ pub(crate) enum Cmd {
     Mirror(crate::reflections::Plane, u8),
     /// The light shafts of the level's sun over the picture so far, at their level (`shafts.rs`).
     Shafts(crate::shafts::Sun, u8),
+    /// The picture's depth into its alpha (`eedraw::DepthAlpha`, `eedraw::Pipelines::depth_alpha`): program 6's o.z and k, the
+    /// threshold's Z' and alpha, NEAR and FAR, the view's tangents, Z's coefficients (`effects::Projection::gs_depth`).
+    DepthAlpha([f32; 16]),
     /// DLSS (`dlss.rs`): the world drawn so far at its render size made the picture by DLSS, with the mobies' motion from these
     /// draws (`objects::Pipelines::draw_motion`); the commands after it draw into the picture at its own size.
     Upscale(Vec<Cmd>),
@@ -677,6 +680,7 @@ pub(crate) fn play(cmds: &[Cmd], enc: &mut wgpu::CommandEncoder, t_out: &Target,
                 };
                 ctx.shadows.downsample(ctx.device, enc, t.tex, to, map)
             }
+            Cmd::DepthAlpha(params) => ctx.shadows.depth_alpha(ctx.device, enc, t.depth, t.tv, t.size, params),
             Cmd::Ao(level, mask) => ao = Some(ctx.ao.begin(ctx.device, enc, t.depth, mask, t.tv, t.size, ctx.cam, ctx.fog, (crate::native::NEAR, crate::native::FAR), *level)),
             Cmd::AoMobies => ctx.ao.mobies(enc, t.tv, ao.as_ref().ok_or("native: the mobies' ambient occlusion before the picture's")?),
             Cmd::Shadows(f, mask, mobies) => ctx.light_shadows.apply(ctx.device, enc, f, t.depth, mask, t.tv, t.size, ctx.cam, ctx.fog, (crate::native::NEAR, crate::native::FAR), *mobies),

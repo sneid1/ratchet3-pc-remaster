@@ -163,6 +163,9 @@ pub struct Kbm {
     /// While the settings page shows, its tab bar (`menus::Menus::tab_bar`), for the window to draw over the picture (`play.rs`
     /// `Screen::tab_bar`); empty otherwise.
     pub tab_bar: Vec<crate::menus::TabShown>,
+    /// While the main menu shows and a newer release is known, the update notice's plate (`update::plate`), for the window to draw
+    /// (`play.rs` `NoticePlate`); None otherwise.
+    pub notice: Option<crate::update::Shown>,
 }
 
 /// The quick-select ring held open in play (`Input::ring`): the mouse points at a slot as a PC weapon wheel does. Its raw motion

@@ -62,6 +62,7 @@
 
 use crate::{Cpu, Ext};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use uycpu::vu0::{m_fmac, m_mac, m_put};
 
 // ---- the code in RAM ------------------------------------------------------------------------------------------------------
 
@@ -128,6 +129,33 @@ const GP: usize = 28;
 const SP: usize = 29;
 const FP: usize = 30;
 const RA: usize = 31;
+
+const ACC: usize = 32;
+
+/// An FMAC macro instruction (K: 0 ADD, 1 SUB, 2 MADD, 3 MSUB, 4 MAX, 5 MINI, 6 MUL) on lanes D into VF `fd` or ACC (`ACC`;
+/// `fd` 0 writes nothing), with the MAC and status flags it makes: `uycpu::vu0::fmac`'s result on four lanes at once
+/// (`m_fmac` under the game's MXCSR is the VU's arithmetic, `fin` on each operand by DAZ and the exponent-255 clamp).
+#[inline(always)]
+fn fm<const K: u8, const D: u32>(c: &mut Cpu, fd: usize, fs: usize, t: [u32; 4]) {
+    let r = m_fmac::<K, D>(c.vf[fs], t, c.vacc);
+    if K != 4 && K != 5 {
+        flags(c, m_mac::<D>(r));
+    }
+    if fd == ACC {
+        m_put::<D>(&mut c.vacc, r);
+    } else if fd != 0 {
+        m_put::<D>(&mut c.vf[fd], r);
+    }
+}
+
+/// A macro instruction's MAC flags (VI17) and the status flag's zero and sign bits with their sticky copies (VI16), as
+/// `uycpu::vu0` sets them.
+#[inline(always)]
+fn flags(c: &mut Cpu, mac: u32) {
+    c.vi[17] = mac;
+    let st = ((mac & 0xf != 0) as u32) | (((mac & 0xf0 != 0) as u32) << 1);
+    c.vi[16] = (c.vi[16] & !0x3) | st | (st << 6);
+}
 
 /// A 32-bit result as the R5900 keeps it in 64 bits.
 #[inline(always)]
@@ -650,7 +678,7 @@ c.vf[1] = [r[V0] as u32, (r[V0] >> 32) as u32, h[V0] as u32, (h[V0] >> 32) as u3
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x00000110)); c.vf[13] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x00000120)); c.vf[14] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x00000130)); c.vf[15] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
-uycpu::vu0::fmac::<6, 1>(c, 24, 0, uycpu::vu0::bcast(c.vf[1][0]));
+fm::<6, 1>(c, 24, 0, uycpu::vu0::bcast(c.vf[1][0]));
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x000000c0)); c.vf[1] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x000000d0)); c.vf[2] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x000000e0)); c.vf[3] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
@@ -668,8 +696,8 @@ r[AT] = add32(r[AT], k.lo(c, 0x004afbb4) as u64);
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x00000200)); c.vf[23] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 r[AT] = 0x000000003a800000;
 c.vf[1] = [r[AT] as u32, (r[AT] >> 32) as u32, h[AT] as u32, (h[AT] >> 32) as u32];
-uycpu::vu0::fmac::<6, 12>(c, 19, 19, uycpu::vu0::bcast(c.vf[1][0]));
-uycpu::vu0::fmac::<6, 12>(c, 23, 23, uycpu::vu0::bcast(c.vf[1][0]));
+fm::<6, 12>(c, 19, 19, uycpu::vu0::bcast(c.vf[1][0]));
+fm::<6, 12>(c, 23, 23, uycpu::vu0::bcast(c.vf[1][0]));
 { let (a, b) = c.rd128(k.gp(c, gp, 0x004afbdc)); c.vf[21] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 c.wr128((r[SP] as u32), 0u64, 0u64);
 r[V0] = sx(k.hi(c, 0x004afbe4));
@@ -748,46 +776,46 @@ n[1] += 1;
 r[S6] = add32(r[S6], 0x00000020);
 { let (a, b) = uycpu::mmi::pminw((r[V0], h[V0]), (r[S1], h[S1])); r[V0] = a; h[V0] = b; }
 r[AT] = c.rd8((r[S6] as u32).wrapping_add(0x00000011)) as u64;
-uycpu::vu0::fmac::<1, 14>(c, 2, 1, c.vf[24]);
+fm::<1, 14>(c, 2, 1, c.vf[24]);
 r[V0] = r[V0] << 36;
-uycpu::vu0::fmac::<0, 8>(c, 3, 0, uycpu::vu0::bcast(c.vf[1][3]));
+fm::<0, 8>(c, 3, 0, uycpu::vu0::bcast(c.vf[1][3]));
 r[V1] = c.rd8((r[S6] as u32).wrapping_add(0x00000010)) as u64;
 c.vf[4] = [r[V0] as u32, (r[V0] >> 32) as u32, h[V0] as u32, (h[V0] >> 32) as u32];
 r[AT] = add32(r[AT], r[RA]);
-uycpu::vu0::fmac::<1, 4>(c, 3, 0, uycpu::vu0::bcast(c.vf[1][3]));
+fm::<1, 4>(c, 3, 0, uycpu::vu0::bcast(c.vf[1][3]));
 r[AT] = c.rd8((r[AT] as u32).wrapping_add(0x00003c00)) as u64;
 uycpu::vu0::itof::<0, 4>(c, 4, 4);
 r[T9] = c.rd16((r[S6] as u32).wrapping_add(0x00000012)) as u64;
-uycpu::vu0::fmac::<6, 14>(c, 32, 25, uycpu::vu0::bcast(c.vf[2][0]));
-uycpu::vu0::fmac::<2, 14>(c, 32, 26, uycpu::vu0::bcast(c.vf[2][1]));
+fm::<6, 14>(c, 32, 25, uycpu::vu0::bcast(c.vf[2][0]));
+fm::<2, 14>(c, 32, 26, uycpu::vu0::bcast(c.vf[2][1]));
 r[AT] = r[AT] & r[V1];
-let t = r[AT] == 0u64;  uycpu::vu0::fmac::<2, 14>(c, 2, 27, uycpu::vu0::bcast(c.vf[2][2]));
+let t = r[AT] == 0u64;  fm::<2, 14>(c, 2, 27, uycpu::vu0::bcast(c.vf[2][2]));
  if t { l = 0x004afce0; continue; }
-uycpu::vu0::fmac::<6, 12>(c, 8, 22, uycpu::vu0::bcast(c.vf[1][3]));
+fm::<6, 12>(c, 8, 22, uycpu::vu0::bcast(c.vf[1][3]));
 r[AT] = c.rd32((r[RA] as u32).wrapping_add(0x00003f8c)) as i32 as i64 as u64;
-uycpu::vu0::fmac::<1, 4>(c, 19, 4, uycpu::vu0::bcast(c.vf[1][3]));
+fm::<1, 4>(c, 19, 4, uycpu::vu0::bcast(c.vf[1][3]));
 r[T7] = sll(r[T9], 6);
 r[T7] = add32(r[T7], r[AT]);
 r[T6] = sx(0x00000001);
-uycpu::vu0::fmac::<0, 12>(c, 1, 3, uycpu::vu0::bcast(c.vf[2][2]));
+fm::<0, 12>(c, 1, 3, uycpu::vu0::bcast(c.vf[2][2]));
 r[AT] = add32(r[RA], 0x00001800);
-let t = r[AT] == r[S5];  uycpu::vu0::fmac::<6, 12>(c, 5, 20, uycpu::vu0::bcast(c.vf[2][2]));
+let t = r[AT] == r[S5];  fm::<6, 12>(c, 5, 20, uycpu::vu0::bcast(c.vf[2][2]));
  if t { l = 0x004afce0; continue; }
 uycpu::vu0::abs::<12>(c, 2, 2);
 r[AT] = c.rd8((r[S6] as u32).wrapping_add(0x0000001e)) as u64;
 let out = budget.as_mut().is_some_and(|b| { let o = b.next_out(); if o { b.left_out(); } o });
 let t = (r[T4] as i64) <= 0 || out;   if t { l = 0x004afce0; continue; }
-uycpu::vu0::fmac::<1, 12>(c, 3, 19, c.vf[1]);
+fm::<1, 12>(c, 3, 19, c.vf[1]);
 r[AT] = r[AT] & 0x4;
-let t = r[AT] != 0u64;  uycpu::vu0::fmac::<1, 12>(c, 4, 1, c.vf[23]);
+let t = r[AT] != 0u64;  fm::<1, 12>(c, 4, 1, c.vf[23]);
  if t { l = 0x004afce0; continue; }
-uycpu::vu0::fmac::<1, 12>(c, 6, 2, c.vf[8]);
-uycpu::vu0::fmac::<0, 12>(c, 8, 2, c.vf[8]);
-uycpu::vu0::fmac::<4, 2>(c, 1, 0, c.vf[2]);
+fm::<1, 12>(c, 6, 2, c.vf[8]);
+fm::<0, 12>(c, 8, 2, c.vf[8]);
+fm::<4, 2>(c, 1, 0, c.vf[2]);
 { let (a, b) = { let v = c.vf[3]; (v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32) }; r[AT] = a; h[AT] = b; }
-uycpu::vu0::fmac::<1, 12>(c, 7, 5, c.vf[6]);
+fm::<1, 12>(c, 7, 5, c.vf[6]);
 r[A1] = 0x0000000040000000;
-uycpu::vu0::fmac::<1, 12>(c, 8, 5, c.vf[8]);
+fm::<1, 12>(c, 8, 5, c.vf[8]);
 r[V0] = r[AT] << 32;
 let t = (r[AT] as i64) < 0;  { let (a, b) = { let v = c.vf[4]; (v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32) }; r[A0] = a; h[A0] = b; }
  if t { l = 0x004afce0; continue; }
@@ -809,12 +837,12 @@ l = 0x004afdf8; continue; }
 0x004afdf8 => {
 uycpu::vu0::ftoi::<0, 4>(c, 11, 1);
 r[V1] = 0u64 | 0xffff;
-uycpu::vu0::fmac::<1, 14>(c, 2, 16, uycpu::vu0::bcast(c.vf[1][1]));
-uycpu::vu0::fmac::<6, 8>(c, 3, 1, uycpu::vu0::bcast(c.vf[24][3]));
+fm::<1, 14>(c, 2, 16, uycpu::vu0::bcast(c.vf[1][1]));
+fm::<6, 8>(c, 3, 1, uycpu::vu0::bcast(c.vf[24][3]));
 r[AT] = c.rd8((r[S6] as u32).wrapping_add(0x0000001e)) as u64;
-uycpu::vu0::fmac::<0, 4>(c, 32, 0, c.vf[18]);
+fm::<0, 4>(c, 32, 0, c.vf[18]);
 r[V0] = c.rd16((r[S6] as u32).wrapping_add(0x0000001a)) as u64;
-uycpu::vu0::fmac::<2, 4>(c, 4, 1, uycpu::vu0::bcast(c.vf[18][0]));
+fm::<2, 4>(c, 4, 1, uycpu::vu0::bcast(c.vf[18][0]));
 r[AT] = r[AT] & 0x1;
 let t = r[AT] != 0u64;  { let (a, b) = { let v = c.vf[11]; (v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32) }; r[T1] = a; h[T1] = b; }
  if t { l = 0x004afe30; continue; }
@@ -834,47 +862,47 @@ if let Some(b) = budget.as_mut() { b.listed(); }
 { let (a, b) = { let v = c.vf[2]; (v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32) }; r[V0] = a; h[V0] = b; }
 r[T4] = add32(r[T4], 0xffffffff);
 r[A1] = c.rd8((r[S6] as u32).wrapping_add(0x0000001f)) as u64;
-uycpu::vu0::fmac::<5, 8>(c, 17, 3, c.vf[17]);
+fm::<5, 8>(c, 17, 3, c.vf[17]);
 { let (a, b) = { let v = c.vf[19]; (v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32) }; r[T2] = a; h[T2] = b; }
 r[AT] = r[V0] << 32;
 let t = (r[AT] as i64) >= 0;  { let (a, b) = uycpu::mmi::prot3w((r[V0], h[V0])); r[V1] = a; h[V1] = b; }
  if t { l = 0x004aff40; continue; }
 let t = (r[V1] as i64) < 0;   if t { l = 0x004aff80; continue; }
 let t = (r[V0] as i64) >= 0;   if t { l = 0x004afee0; continue; }
-uycpu::vu0::fmac::<1, 2>(c, 3, 16, uycpu::vu0::bcast(c.vf[16][1]));
+fm::<1, 2>(c, 3, 16, uycpu::vu0::bcast(c.vf[16][1]));
 r[T0] = r[S5];
-uycpu::vu0::fmac::<1, 4>(c, 3, 0, c.vf[2]);
-uycpu::vu0::fmac::<5, 4>(c, 4, 4, uycpu::vu0::bcast(c.vf[18][2]));
+fm::<1, 4>(c, 3, 0, c.vf[2]);
+fm::<5, 4>(c, 4, 4, uycpu::vu0::bcast(c.vf[18][2]));
 c.wr32((r[S5] as u32).wrapping_add(0x00000004), r[S3] as u32);
 r[S3] = r[S5];
 r[S5] = add32(r[S5], 0x00000008);
 uycpu::vu0::qop::<0>(c, c.vf[3][1], c.vf[3][2]);
 r[A1] = r[A1] ^ 0x1;
-uycpu::vu0::fmac::<4, 1>(c, 4, 18, uycpu::vu0::bcast(c.vf[4][1]));
+fm::<4, 1>(c, 4, 18, uycpu::vu0::bcast(c.vf[4][1]));
 r[A2] = sx(0x00000001);
-uycpu::vu0::fmac::<6, 7>(c, 3, 0, uycpu::vu0::bcast(c.vf[0][0]));
-uycpu::vu0::fmac::<0, 14>(c, 4, 0, c.vf[0]);
-uycpu::vu0::fmac::<0, 8>(c, 3, 0, uycpu::vu0::bcast(c.vi[22]));
+fm::<6, 7>(c, 3, 0, uycpu::vu0::bcast(c.vf[0][0]));
+fm::<0, 14>(c, 4, 0, c.vf[0]);
+fm::<0, 8>(c, 3, 0, uycpu::vu0::bcast(c.vi[22]));
 let t = r[T6] == 0u64;  { let v = c.vf[4]; c.wr128((r[SP] as u32).wrapping_add(0x00000050), v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32); }
  if t { l = 0x004b05b4; continue; }
 { let v = c.vf[3]; c.wr128((r[SP] as u32).wrapping_add(0x00000040), v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32); }
  l = 0x004affc0; continue;
 }
 0x004afee0 => {
-uycpu::vu0::fmac::<1, 4>(c, 3, 16, uycpu::vu0::bcast(c.vf[16][0]));
+fm::<1, 4>(c, 3, 16, uycpu::vu0::bcast(c.vf[16][0]));
 r[T0] = r[S5];
-uycpu::vu0::fmac::<1, 8>(c, 3, 0, c.vf[2]);
-uycpu::vu0::fmac::<5, 4>(c, 4, 4, uycpu::vu0::bcast(c.vf[18][2]));
+fm::<1, 8>(c, 3, 0, c.vf[2]);
+fm::<5, 4>(c, 4, 4, uycpu::vu0::bcast(c.vf[18][2]));
 c.wr32((r[S5] as u32).wrapping_add(0x00000004), r[S2] as u32);
 r[S2] = r[S5];
 r[S5] = add32(r[S5], 0x00000008);
 uycpu::vu0::qop::<0>(c, c.vf[3][0], c.vf[3][1]);
 r[A1] = r[A1] ^ 0x0;
-uycpu::vu0::fmac::<4, 1>(c, 4, 18, uycpu::vu0::bcast(c.vf[4][1]));
+fm::<4, 1>(c, 4, 18, uycpu::vu0::bcast(c.vf[4][1]));
 r[A2] = sx(0x00000000);
-uycpu::vu0::fmac::<6, 7>(c, 3, 0, uycpu::vu0::bcast(c.vf[0][0]));
-uycpu::vu0::fmac::<0, 14>(c, 4, 0, c.vf[0]);
-uycpu::vu0::fmac::<0, 8>(c, 3, 0, uycpu::vu0::bcast(c.vi[22]));
+fm::<6, 7>(c, 3, 0, uycpu::vu0::bcast(c.vf[0][0]));
+fm::<0, 14>(c, 4, 0, c.vf[0]);
+fm::<0, 8>(c, 3, 0, uycpu::vu0::bcast(c.vi[22]));
 let t = r[T6] == 0u64;  { let v = c.vf[4]; c.wr128((r[SP] as u32).wrapping_add(0x00000050), v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32); }
  if t { l = 0x004b0594; continue; }
 { let v = c.vf[3]; c.wr128((r[SP] as u32).wrapping_add(0x00000040), v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32); }
@@ -882,11 +910,11 @@ let t = r[T6] == 0u64;  { let v = c.vf[4]; c.wr128((r[SP] as u32).wrapping_add(0
 }
 0x004aff40 => {
 { let (a, b) = uycpu::mmi::por((0u64, 0u64), (0u64, 0u64)); r[AT] = a; h[AT] = b; }
-uycpu::vu0::fmac::<5, 4>(c, 4, 4, uycpu::vu0::bcast(c.vf[18][2]));
+fm::<5, 4>(c, 4, 4, uycpu::vu0::bcast(c.vf[18][2]));
 r[T0] = r[S5];
-uycpu::vu0::fmac::<0, 14>(c, 3, 0, c.vf[0]);
+fm::<0, 14>(c, 3, 0, c.vf[0]);
 c.wr32((r[S5] as u32).wrapping_add(0x00000004), r[S2] as u32);
-uycpu::vu0::fmac::<4, 1>(c, 3, 18, uycpu::vu0::bcast(c.vf[4][1]));
+fm::<4, 1>(c, 3, 18, uycpu::vu0::bcast(c.vf[4][1]));
 r[A1] = r[A1] ^ 0x0;
 r[A2] = sx(0x00000000);
 r[S2] = r[S5];
@@ -898,11 +926,11 @@ let t = r[T6] == 0u64;  c.wr128((r[SP] as u32).wrapping_add(0x00000040), 0u64, 0
 }
 0x004aff80 => {
 { let (a, b) = uycpu::mmi::por((0u64, 0u64), (0u64, 0u64)); r[AT] = a; h[AT] = b; }
-uycpu::vu0::fmac::<5, 4>(c, 4, 4, uycpu::vu0::bcast(c.vf[18][2]));
+fm::<5, 4>(c, 4, 4, uycpu::vu0::bcast(c.vf[18][2]));
 r[T0] = r[S5];
-uycpu::vu0::fmac::<0, 14>(c, 3, 0, c.vf[0]);
+fm::<0, 14>(c, 3, 0, c.vf[0]);
 c.wr32((r[S5] as u32).wrapping_add(0x00000004), r[S4] as u32);
-uycpu::vu0::fmac::<4, 1>(c, 3, 18, uycpu::vu0::bcast(c.vf[4][1]));
+fm::<4, 1>(c, 3, 18, uycpu::vu0::bcast(c.vf[4][1]));
 r[A1] = r[A1] ^ 0x2;
 r[A2] = sx(0x00000002);
 r[S4] = r[S5];
@@ -942,32 +970,32 @@ l = 0x004b0010; continue; }
 0x004b0010 => {
 { let (a, b) = c.rd128((r[T7] as u32).wrapping_add(0x00000020)); c.vf[11] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = uycpu::mmi::pminw((r[T2], h[T2]), (r[AT], h[AT])); r[T2] = a; h[T2] = b; }
-uycpu::vu0::fmac::<6, 14>(c, 1, 9, uycpu::vu0::bcast(c.vf[4][3]));
+fm::<6, 14>(c, 1, 9, uycpu::vu0::bcast(c.vf[4][3]));
 c.wr32((r[SP] as u32).wrapping_add(0x00000044), r[T2] as u32);
-uycpu::vu0::fmac::<6, 14>(c, 2, 10, uycpu::vu0::bcast(c.vf[4][3]));
-uycpu::vu0::fmac::<6, 14>(c, 3, 11, uycpu::vu0::bcast(c.vf[4][3]));
-let t = r[T5] != 0u64;  uycpu::vu0::fmac::<1, 14>(c, 4, 4, c.vf[24]);
+fm::<6, 14>(c, 2, 10, uycpu::vu0::bcast(c.vf[4][3]));
+fm::<6, 14>(c, 3, 11, uycpu::vu0::bcast(c.vf[4][3]));
+let t = r[T5] != 0u64;  fm::<1, 14>(c, 4, 4, c.vf[24]);
  if t { l = 0x004b01d4; continue; }
 l = 0x004b0030; continue; }
 0x004b0030 => {
 let t = r[T6] == 0u64;  r[FP] = add32(r[FP], 0x00000060);
  if t { l = 0x004b0624; continue; }
-uycpu::vu0::fmac::<6, 15>(c, 32, 28, uycpu::vu0::bcast(c.vf[1][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 29, uycpu::vu0::bcast(c.vf[1][1]));
-uycpu::vu0::fmac::<2, 15>(c, 1, 30, uycpu::vu0::bcast(c.vf[1][2]));
+fm::<6, 15>(c, 32, 28, uycpu::vu0::bcast(c.vf[1][0]));
+fm::<2, 15>(c, 32, 29, uycpu::vu0::bcast(c.vf[1][1]));
+fm::<2, 15>(c, 1, 30, uycpu::vu0::bcast(c.vf[1][2]));
 l = 0x004b0044; continue; }
 0x004b0044 => {
-uycpu::vu0::fmac::<6, 14>(c, 4, 4, uycpu::vu0::bcast(c.vf[24][3]));
-uycpu::vu0::fmac::<6, 15>(c, 32, 28, uycpu::vu0::bcast(c.vf[2][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 29, uycpu::vu0::bcast(c.vf[2][1]));
-uycpu::vu0::fmac::<2, 15>(c, 2, 30, uycpu::vu0::bcast(c.vf[2][2]));
-uycpu::vu0::fmac::<6, 15>(c, 32, 28, uycpu::vu0::bcast(c.vf[3][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 29, uycpu::vu0::bcast(c.vf[3][1]));
-uycpu::vu0::fmac::<2, 15>(c, 3, 30, uycpu::vu0::bcast(c.vf[3][2]));
-uycpu::vu0::fmac::<6, 15>(c, 32, 28, uycpu::vu0::bcast(c.vf[4][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 29, uycpu::vu0::bcast(c.vf[4][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 30, uycpu::vu0::bcast(c.vf[4][2]));
-uycpu::vu0::fmac::<2, 15>(c, 4, 31, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 14>(c, 4, 4, uycpu::vu0::bcast(c.vf[24][3]));
+fm::<6, 15>(c, 32, 28, uycpu::vu0::bcast(c.vf[2][0]));
+fm::<2, 15>(c, 32, 29, uycpu::vu0::bcast(c.vf[2][1]));
+fm::<2, 15>(c, 2, 30, uycpu::vu0::bcast(c.vf[2][2]));
+fm::<6, 15>(c, 32, 28, uycpu::vu0::bcast(c.vf[3][0]));
+fm::<2, 15>(c, 32, 29, uycpu::vu0::bcast(c.vf[3][1]));
+fm::<2, 15>(c, 3, 30, uycpu::vu0::bcast(c.vf[3][2]));
+fm::<6, 15>(c, 32, 28, uycpu::vu0::bcast(c.vf[4][0]));
+fm::<2, 15>(c, 32, 29, uycpu::vu0::bcast(c.vf[4][1]));
+fm::<2, 15>(c, 32, 30, uycpu::vu0::bcast(c.vf[4][2]));
+fm::<2, 15>(c, 4, 31, uycpu::vu0::bcast(c.vf[0][3]));
 l = 0x004b0078; continue; }
 0x004b0078 => {
 r[V1] = c.rd16((r[S0] as u32).wrapping_add(0x0000003c)) as u64;
@@ -984,29 +1012,29 @@ let t = r[V1] == 0u64;  { let v = c.vf[4]; c.wr128((r[SP] as u32).wrapping_add(0
 r[V1] = r[V1] & 0x40;
 let t = r[V1] != 0u64;  { let (a, b) = c.rd128((r[T7] as u32).wrapping_add(0x00000030)); c.vf[4] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
  if t { l = 0x004b0138; continue; }
-uycpu::vu0::fmac::<6, 14>(c, 9, 9, uycpu::vu0::bcast(c.vf[9][3]));
-uycpu::vu0::fmac::<6, 14>(c, 10, 10, uycpu::vu0::bcast(c.vf[10][3]));
-uycpu::vu0::fmac::<6, 14>(c, 11, 11, uycpu::vu0::bcast(c.vf[11][3]));
-uycpu::vu0::fmac::<6, 14>(c, 32, 25, uycpu::vu0::bcast(c.vf[9][0]));
-uycpu::vu0::fmac::<2, 14>(c, 32, 26, uycpu::vu0::bcast(c.vf[9][1]));
+fm::<6, 14>(c, 9, 9, uycpu::vu0::bcast(c.vf[9][3]));
+fm::<6, 14>(c, 10, 10, uycpu::vu0::bcast(c.vf[10][3]));
+fm::<6, 14>(c, 11, 11, uycpu::vu0::bcast(c.vf[11][3]));
+fm::<6, 14>(c, 32, 25, uycpu::vu0::bcast(c.vf[9][0]));
+fm::<2, 14>(c, 32, 26, uycpu::vu0::bcast(c.vf[9][1]));
 l = 0x004b00c4; continue; }
 0x004b00c4 => {
-uycpu::vu0::fmac::<2, 14>(c, 1, 27, uycpu::vu0::bcast(c.vf[9][2]));
-uycpu::vu0::fmac::<6, 14>(c, 32, 25, uycpu::vu0::bcast(c.vf[10][0]));
-uycpu::vu0::fmac::<2, 14>(c, 32, 26, uycpu::vu0::bcast(c.vf[10][1]));
-uycpu::vu0::fmac::<2, 14>(c, 2, 27, uycpu::vu0::bcast(c.vf[10][2]));
-uycpu::vu0::fmac::<6, 14>(c, 32, 25, uycpu::vu0::bcast(c.vf[11][0]));
-uycpu::vu0::fmac::<2, 14>(c, 32, 26, uycpu::vu0::bcast(c.vf[11][1]));
-uycpu::vu0::fmac::<2, 14>(c, 3, 27, uycpu::vu0::bcast(c.vf[11][2]));
-uycpu::vu0::fmac::<1, 15>(c, 4, 24, c.vf[4]);
-uycpu::vu0::fmac::<4, 15>(c, 5, 0, uycpu::vu0::bcast(c.vf[0][3]));
-uycpu::vu0::fmac::<6, 14>(c, 32, 25, uycpu::vu0::bcast(c.vf[4][0]));
-uycpu::vu0::fmac::<2, 14>(c, 32, 26, uycpu::vu0::bcast(c.vf[4][1]));
-uycpu::vu0::fmac::<2, 14>(c, 4, 27, uycpu::vu0::bcast(c.vf[4][2]));
-uycpu::vu0::fmac::<1, 15>(c, 4, 0, c.vf[4]);
-uycpu::vu0::fmac::<6, 15>(c, 6, 4, c.vf[4]);
-uycpu::vu0::fmac::<0, 2>(c, 32, 6, uycpu::vu0::bcast(c.vf[6][1]));
-uycpu::vu0::fmac::<2, 2>(c, 6, 5, uycpu::vu0::bcast(c.vf[6][0]));
+fm::<2, 14>(c, 1, 27, uycpu::vu0::bcast(c.vf[9][2]));
+fm::<6, 14>(c, 32, 25, uycpu::vu0::bcast(c.vf[10][0]));
+fm::<2, 14>(c, 32, 26, uycpu::vu0::bcast(c.vf[10][1]));
+fm::<2, 14>(c, 2, 27, uycpu::vu0::bcast(c.vf[10][2]));
+fm::<6, 14>(c, 32, 25, uycpu::vu0::bcast(c.vf[11][0]));
+fm::<2, 14>(c, 32, 26, uycpu::vu0::bcast(c.vf[11][1]));
+fm::<2, 14>(c, 3, 27, uycpu::vu0::bcast(c.vf[11][2]));
+fm::<1, 15>(c, 4, 24, c.vf[4]);
+fm::<4, 15>(c, 5, 0, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 14>(c, 32, 25, uycpu::vu0::bcast(c.vf[4][0]));
+fm::<2, 14>(c, 32, 26, uycpu::vu0::bcast(c.vf[4][1]));
+fm::<2, 14>(c, 4, 27, uycpu::vu0::bcast(c.vf[4][2]));
+fm::<1, 15>(c, 4, 0, c.vf[4]);
+fm::<6, 15>(c, 6, 4, c.vf[4]);
+fm::<0, 2>(c, 32, 6, uycpu::vu0::bcast(c.vf[6][1]));
+fm::<2, 2>(c, 6, 5, uycpu::vu0::bcast(c.vf[6][0]));
 uycpu::vu0::qop::<2>(c, c.vf[0][3], c.vf[6][2]);
 l = 0x004b0108; continue; }
 0x004b0108 => {
@@ -1015,31 +1043,31 @@ r[T8] = add32(r[T8], 0x00000004);
 { let v = c.vf[2]; c.wr128((r[SP] as u32).wrapping_add(0x00000070), v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32); }
 r[FP] = add32(r[FP], 0x00000040);
 { let v = c.vf[3]; c.wr128((r[SP] as u32).wrapping_add(0x00000080), v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32); }
-uycpu::vu0::fmac::<6, 15>(c, 4, 4, uycpu::vu0::bcast(c.vi[22]));
+fm::<6, 15>(c, 4, 4, uycpu::vu0::bcast(c.vi[22]));
 { let v = c.vf[4]; c.wr128((r[SP] as u32).wrapping_add(0x00000090), v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32); }
 r[SP] = add32(r[SP], 0x00000040);
  l = 0x004b0194; continue;
 }
 0x004b0138 => {
-uycpu::vu0::fmac::<6, 14>(c, 9, 9, uycpu::vu0::bcast(c.vf[9][3]));
-uycpu::vu0::fmac::<6, 14>(c, 10, 10, uycpu::vu0::bcast(c.vf[10][3]));
-uycpu::vu0::fmac::<6, 14>(c, 11, 11, uycpu::vu0::bcast(c.vf[11][3]));
-uycpu::vu0::fmac::<1, 14>(c, 4, 24, c.vf[4]);
-uycpu::vu0::fmac::<0, 8>(c, 5, 0, uycpu::vu0::bcast(c.vf[9][0]));
-uycpu::vu0::fmac::<0, 4>(c, 6, 0, uycpu::vu0::bcast(c.vf[10][1]));
-uycpu::vu0::fmac::<0, 2>(c, 7, 0, uycpu::vu0::bcast(c.vf[11][2]));
-uycpu::vu0::fmac::<0, 4>(c, 5, 0, uycpu::vu0::bcast(c.vf[10][0]));
-uycpu::vu0::fmac::<0, 8>(c, 6, 0, uycpu::vu0::bcast(c.vf[9][1]));
-uycpu::vu0::fmac::<0, 8>(c, 7, 0, uycpu::vu0::bcast(c.vf[9][2]));
-uycpu::vu0::fmac::<0, 2>(c, 5, 0, uycpu::vu0::bcast(c.vf[11][0]));
-uycpu::vu0::fmac::<0, 2>(c, 6, 0, uycpu::vu0::bcast(c.vf[11][1]));
-uycpu::vu0::fmac::<0, 4>(c, 7, 0, uycpu::vu0::bcast(c.vf[10][2]));
-uycpu::vu0::fmac::<6, 14>(c, 32, 5, uycpu::vu0::bcast(c.vf[4][0]));
-uycpu::vu0::fmac::<2, 14>(c, 32, 6, uycpu::vu0::bcast(c.vf[4][1]));
-uycpu::vu0::fmac::<2, 14>(c, 4, 7, uycpu::vu0::bcast(c.vf[4][2]));
-uycpu::vu0::fmac::<6, 8>(c, 4, 4, uycpu::vu0::bcast(c.vf[9][3]));
-uycpu::vu0::fmac::<6, 4>(c, 4, 4, uycpu::vu0::bcast(c.vf[10][3]));
-uycpu::vu0::fmac::<6, 2>(c, 4, 4, uycpu::vu0::bcast(c.vf[11][3]));
+fm::<6, 14>(c, 9, 9, uycpu::vu0::bcast(c.vf[9][3]));
+fm::<6, 14>(c, 10, 10, uycpu::vu0::bcast(c.vf[10][3]));
+fm::<6, 14>(c, 11, 11, uycpu::vu0::bcast(c.vf[11][3]));
+fm::<1, 14>(c, 4, 24, c.vf[4]);
+fm::<0, 8>(c, 5, 0, uycpu::vu0::bcast(c.vf[9][0]));
+fm::<0, 4>(c, 6, 0, uycpu::vu0::bcast(c.vf[10][1]));
+fm::<0, 2>(c, 7, 0, uycpu::vu0::bcast(c.vf[11][2]));
+fm::<0, 4>(c, 5, 0, uycpu::vu0::bcast(c.vf[10][0]));
+fm::<0, 8>(c, 6, 0, uycpu::vu0::bcast(c.vf[9][1]));
+fm::<0, 8>(c, 7, 0, uycpu::vu0::bcast(c.vf[9][2]));
+fm::<0, 2>(c, 5, 0, uycpu::vu0::bcast(c.vf[11][0]));
+fm::<0, 2>(c, 6, 0, uycpu::vu0::bcast(c.vf[11][1]));
+fm::<0, 4>(c, 7, 0, uycpu::vu0::bcast(c.vf[10][2]));
+fm::<6, 14>(c, 32, 5, uycpu::vu0::bcast(c.vf[4][0]));
+fm::<2, 14>(c, 32, 6, uycpu::vu0::bcast(c.vf[4][1]));
+fm::<2, 14>(c, 4, 7, uycpu::vu0::bcast(c.vf[4][2]));
+fm::<6, 8>(c, 4, 4, uycpu::vu0::bcast(c.vf[9][3]));
+fm::<6, 4>(c, 4, 4, uycpu::vu0::bcast(c.vf[10][3]));
+fm::<6, 2>(c, 4, 4, uycpu::vu0::bcast(c.vf[11][3]));
 { let v = c.vf[4]; c.wr128((r[SP] as u32).wrapping_add(0x00000060), v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32); }
 r[T8] = add32(r[T8], 0x00000001);
 r[FP] = add32(r[FP], 0x00000010);
@@ -1066,28 +1094,28 @@ r[SP] = r[V0];
 { let (a, b) = c.rd128((r[RA] as u32).wrapping_add(0x00003e10)); c.vf[9] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[RA] as u32).wrapping_add(0x00003e00)); c.vf[8] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let v = c.vf[12]; c.wr128((r[RA] as u32).wrapping_add(0x00003e30), v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32); }
-uycpu::vu0::fmac::<0, 8>(c, 11, 0, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<0, 8>(c, 11, 0, uycpu::vu0::bcast(c.vf[0][3]));
 r[A1] = c.rd32((r[RA] as u32).wrapping_add(0x00003e20)) as i32 as i64 as u64;
 r[AT] = srl(r[T5], 1);
-uycpu::vu0::fmac::<6, 14>(c, 12, 4, c.vf[4]);
+fm::<6, 14>(c, 12, 4, c.vf[4]);
 r[A2] = r[RA] | 0x3d00;
-uycpu::vu0::fmac::<0, 8>(c, 32, 12, uycpu::vu0::bcast(c.vf[12][1]));
-uycpu::vu0::fmac::<2, 8>(c, 12, 11, uycpu::vu0::bcast(c.vf[12][2]));
-uycpu::vu0::fmac::<1, 4>(c, 0, 9, uycpu::vu0::bcast(c.vf[12][0]));
+fm::<0, 8>(c, 32, 12, uycpu::vu0::bcast(c.vf[12][1]));
+fm::<2, 8>(c, 12, 11, uycpu::vu0::bcast(c.vf[12][2]));
+fm::<1, 4>(c, 0, 9, uycpu::vu0::bcast(c.vf[12][0]));
 r[A0] = c.cfc2(17) as i32 as i64 as u64;
-uycpu::vu0::fmac::<6, 8>(c, 12, 12, uycpu::vu0::bcast(c.vf[9][2]));
+fm::<6, 8>(c, 12, 12, uycpu::vu0::bcast(c.vf[9][2]));
 r[A0] = r[A0] & 0x40;
-let t = r[A0] != 0u64;  uycpu::vu0::fmac::<1, 1>(c, 12, 0, uycpu::vu0::bcast(c.vf[12][0]));
+let t = r[A0] != 0u64;  fm::<1, 1>(c, 12, 0, uycpu::vu0::bcast(c.vf[12][0]));
  if t { l = 0x004b034c; continue; }
-uycpu::vu0::fmac::<6, 15>(c, 5, 0, uycpu::vu0::bcast(c.vf[0][0]));
+fm::<6, 15>(c, 5, 0, uycpu::vu0::bcast(c.vf[0][0]));
 r[A3] = srl(r[A3], 9);
-uycpu::vu0::fmac::<6, 15>(c, 6, 0, uycpu::vu0::bcast(c.vf[0][0]));
+fm::<6, 15>(c, 6, 0, uycpu::vu0::bcast(c.vf[0][0]));
 r[A3] = r[A3] & 0x1ff;
 { let v = c.vf[0]; uycpu::vu0::mov::<15>(c, 7, [v[1], v[2], v[3], v[0]]); }
 r[V0] = sll(r[A3], 6);
-uycpu::vu0::fmac::<0, 8>(c, 5, 5, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<0, 8>(c, 5, 5, uycpu::vu0::bcast(c.vf[0][3]));
 r[A0] = sll(r[A3], 1);
-uycpu::vu0::fmac::<0, 4>(c, 6, 6, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<0, 4>(c, 6, 6, uycpu::vu0::bcast(c.vf[0][3]));
 r[V0] = add32(r[V0], r[A0]);
 r[V0] = add32(r[V0], r[A3]);
 r[V1] = sll(r[A3], 7);
@@ -1113,13 +1141,13 @@ r[A0] = c.rd8((r[A0] as u32)) as i8 as i64 as u64;
 r[A0] = sll(r[A0], 5);
 c.vf[11] = [r[A0] as u32, (r[A0] >> 32) as u32, h[A0] as u32, (h[A0] >> 32) as u32];
 uycpu::vu0::itof::<2, 15>(c, 11, 11);
-uycpu::vu0::fmac::<6, 8>(c, 7, 10, c.vf[11]);
+fm::<6, 8>(c, 7, 10, c.vf[11]);
 r[A0] = add32(r[V1], 0x00000040);
-uycpu::vu0::fmac::<1, 1>(c, 7, 0, uycpu::vu0::bcast(c.vf[9][0]));
+fm::<1, 1>(c, 7, 0, uycpu::vu0::bcast(c.vf[9][0]));
 r[A0] = r[A0] & 0xff;
-uycpu::vu0::fmac::<6, 8>(c, 7, 7, uycpu::vu0::bcast(c.vf[9][0]));
+fm::<6, 8>(c, 7, 7, uycpu::vu0::bcast(c.vf[9][0]));
 r[A0] = add32(r[A0], r[A2]);
-uycpu::vu0::fmac::<0, 8>(c, 7, 7, uycpu::vu0::bcast(c.vf[7][3]));
+fm::<0, 8>(c, 7, 7, uycpu::vu0::bcast(c.vf[7][3]));
 r[A0] = c.rd8((r[A0] as u32)) as i8 as i64 as u64;
 r[A0] = sll(r[A0], 5);
 c.vf[10] = [r[A0] as u32, (r[A0] >> 32) as u32, h[A0] as u32, (h[A0] >> 32) as u32];
@@ -1131,29 +1159,29 @@ r[A0] = c.rd8((r[A0] as u32)) as i8 as i64 as u64;
 r[A0] = sll(r[A0], 5);
 c.vf[11] = [r[A0] as u32, (r[A0] >> 32) as u32, h[A0] as u32, (h[A0] >> 32) as u32];
 uycpu::vu0::itof::<2, 15>(c, 11, 11);
-uycpu::vu0::fmac::<6, 8>(c, 7, 7, uycpu::vu0::bcast(c.vf[8][0]));
-uycpu::vu0::fmac::<6, 8>(c, 32, 10, uycpu::vu0::bcast(c.vf[8][1]));
-uycpu::vu0::fmac::<2, 8>(c, 10, 7, uycpu::vu0::bcast(c.vf[8][2]));
-uycpu::vu0::fmac::<6, 8>(c, 10, 10, uycpu::vu0::bcast(c.vf[12][3]));
-uycpu::vu0::fmac::<6, 8>(c, 32, 11, uycpu::vu0::bcast(c.vf[8][1]));
-uycpu::vu0::fmac::<2, 8>(c, 11, 7, uycpu::vu0::bcast(c.vf[8][3]));
-let t = r[AT] != 0u64;  uycpu::vu0::fmac::<6, 8>(c, 11, 11, uycpu::vu0::bcast(c.vf[12][3]));
+fm::<6, 8>(c, 7, 7, uycpu::vu0::bcast(c.vf[8][0]));
+fm::<6, 8>(c, 32, 10, uycpu::vu0::bcast(c.vf[8][1]));
+fm::<2, 8>(c, 10, 7, uycpu::vu0::bcast(c.vf[8][2]));
+fm::<6, 8>(c, 10, 10, uycpu::vu0::bcast(c.vf[12][3]));
+fm::<6, 8>(c, 32, 11, uycpu::vu0::bcast(c.vf[8][1]));
+fm::<2, 8>(c, 11, 7, uycpu::vu0::bcast(c.vf[8][3]));
+let t = r[AT] != 0u64;  fm::<6, 8>(c, 11, 11, uycpu::vu0::bcast(c.vf[12][3]));
  if t { l = 0x004b031c; continue; }
-uycpu::vu0::fmac::<6, 8>(c, 10, 10, uycpu::vu0::bcast(c.vf[9][3]));
-uycpu::vu0::fmac::<6, 8>(c, 11, 11, uycpu::vu0::bcast(c.vf[9][3]));
+fm::<6, 8>(c, 10, 10, uycpu::vu0::bcast(c.vf[9][3]));
+fm::<6, 8>(c, 11, 11, uycpu::vu0::bcast(c.vf[9][3]));
 l = 0x004b031c; continue; }
 0x004b031c => {
-uycpu::vu0::fmac::<0, 8>(c, 7, 0, uycpu::vu0::bcast(c.vf[10][0]));
-uycpu::vu0::fmac::<0, 4>(c, 7, 0, uycpu::vu0::bcast(c.vf[11][0]));
-uycpu::vu0::fmac::<6, 14>(c, 32, 5, uycpu::vu0::bcast(c.vf[1][0]));
-uycpu::vu0::fmac::<2, 14>(c, 32, 6, uycpu::vu0::bcast(c.vf[1][1]));
-uycpu::vu0::fmac::<2, 14>(c, 1, 7, uycpu::vu0::bcast(c.vf[1][2]));
-uycpu::vu0::fmac::<6, 14>(c, 32, 5, uycpu::vu0::bcast(c.vf[2][0]));
-uycpu::vu0::fmac::<2, 14>(c, 32, 6, uycpu::vu0::bcast(c.vf[2][1]));
-uycpu::vu0::fmac::<2, 14>(c, 2, 7, uycpu::vu0::bcast(c.vf[2][2]));
-uycpu::vu0::fmac::<6, 14>(c, 32, 5, uycpu::vu0::bcast(c.vf[3][0]));
-uycpu::vu0::fmac::<2, 14>(c, 32, 6, uycpu::vu0::bcast(c.vf[3][1]));
-uycpu::vu0::fmac::<2, 14>(c, 3, 7, uycpu::vu0::bcast(c.vf[3][2]));
+fm::<0, 8>(c, 7, 0, uycpu::vu0::bcast(c.vf[10][0]));
+fm::<0, 4>(c, 7, 0, uycpu::vu0::bcast(c.vf[11][0]));
+fm::<6, 14>(c, 32, 5, uycpu::vu0::bcast(c.vf[1][0]));
+fm::<2, 14>(c, 32, 6, uycpu::vu0::bcast(c.vf[1][1]));
+fm::<2, 14>(c, 1, 7, uycpu::vu0::bcast(c.vf[1][2]));
+fm::<6, 14>(c, 32, 5, uycpu::vu0::bcast(c.vf[2][0]));
+fm::<2, 14>(c, 32, 6, uycpu::vu0::bcast(c.vf[2][1]));
+fm::<2, 14>(c, 2, 7, uycpu::vu0::bcast(c.vf[2][2]));
+fm::<6, 14>(c, 32, 5, uycpu::vu0::bcast(c.vf[3][0]));
+fm::<2, 14>(c, 32, 6, uycpu::vu0::bcast(c.vf[3][1]));
+fm::<2, 14>(c, 3, 7, uycpu::vu0::bcast(c.vf[3][2]));
 l = 0x004b034c; continue; }
 0x004b034c => {
 { let (a, b) = c.rd128((r[RA] as u32).wrapping_add(0x00003e30)); c.vf[12] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
@@ -1179,57 +1207,57 @@ c.wr32((r[RA] as u32).wrapping_add(0x00003f94), r[V0] as u32);
 }
 0x004b039c => {
 n[3] += 1;
-uycpu::vu0::fmac::<6, 15>(c, 9, 1, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 9, 1, uycpu::vu0::bcast(c.vf[0][3]));
 { let (a, b) = c.rd128((r[T7] as u32).wrapping_add(0x00000030)); c.vf[4] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[T7] as u32)); c.vf[1] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[T7] as u32).wrapping_add(0x00000010)); c.vf[2] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[T7] as u32).wrapping_add(0x00000020)); c.vf[3] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[S0] as u32).wrapping_add(0x00000080)); c.vf[5] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[S0] as u32).wrapping_add(0x00000090)); c.vf[6] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
-uycpu::vu0::fmac::<6, 14>(c, 1, 1, uycpu::vu0::bcast(c.vf[4][3]));
-uycpu::vu0::fmac::<6, 14>(c, 2, 2, uycpu::vu0::bcast(c.vf[4][3]));
-uycpu::vu0::fmac::<6, 14>(c, 3, 3, uycpu::vu0::bcast(c.vf[4][3]));
-uycpu::vu0::fmac::<1, 14>(c, 4, 4, c.vf[24]);
-uycpu::vu0::fmac::<6, 15>(c, 32, 12, uycpu::vu0::bcast(c.vf[1][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 13, uycpu::vu0::bcast(c.vf[1][1]));
-uycpu::vu0::fmac::<2, 15>(c, 1, 14, uycpu::vu0::bcast(c.vf[1][2]));
-uycpu::vu0::fmac::<6, 14>(c, 4, 4, uycpu::vu0::bcast(c.vf[24][3]));
-uycpu::vu0::fmac::<6, 15>(c, 32, 12, uycpu::vu0::bcast(c.vf[2][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 13, uycpu::vu0::bcast(c.vf[2][1]));
-uycpu::vu0::fmac::<2, 15>(c, 2, 14, uycpu::vu0::bcast(c.vf[2][2]));
+fm::<6, 14>(c, 1, 1, uycpu::vu0::bcast(c.vf[4][3]));
+fm::<6, 14>(c, 2, 2, uycpu::vu0::bcast(c.vf[4][3]));
+fm::<6, 14>(c, 3, 3, uycpu::vu0::bcast(c.vf[4][3]));
+fm::<1, 14>(c, 4, 4, c.vf[24]);
+fm::<6, 15>(c, 32, 12, uycpu::vu0::bcast(c.vf[1][0]));
+fm::<2, 15>(c, 32, 13, uycpu::vu0::bcast(c.vf[1][1]));
+fm::<2, 15>(c, 1, 14, uycpu::vu0::bcast(c.vf[1][2]));
+fm::<6, 14>(c, 4, 4, uycpu::vu0::bcast(c.vf[24][3]));
+fm::<6, 15>(c, 32, 12, uycpu::vu0::bcast(c.vf[2][0]));
+fm::<2, 15>(c, 32, 13, uycpu::vu0::bcast(c.vf[2][1]));
+fm::<2, 15>(c, 2, 14, uycpu::vu0::bcast(c.vf[2][2]));
 { let (a, b) = c.rd128((r[S0] as u32).wrapping_add(0x000000a0)); c.vf[7] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
-uycpu::vu0::fmac::<6, 15>(c, 32, 12, uycpu::vu0::bcast(c.vf[3][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 13, uycpu::vu0::bcast(c.vf[3][1]));
-uycpu::vu0::fmac::<2, 15>(c, 3, 14, uycpu::vu0::bcast(c.vf[3][2]));
+fm::<6, 15>(c, 32, 12, uycpu::vu0::bcast(c.vf[3][0]));
+fm::<2, 15>(c, 32, 13, uycpu::vu0::bcast(c.vf[3][1]));
+fm::<2, 15>(c, 3, 14, uycpu::vu0::bcast(c.vf[3][2]));
 { let (a, b) = c.rd128((r[S0] as u32).wrapping_add(0x000000b0)); c.vf[8] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
-uycpu::vu0::fmac::<6, 15>(c, 32, 12, uycpu::vu0::bcast(c.vf[4][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 13, uycpu::vu0::bcast(c.vf[4][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 14, uycpu::vu0::bcast(c.vf[4][2]));
-uycpu::vu0::fmac::<2, 15>(c, 4, 15, uycpu::vu0::bcast(c.vf[0][3]));
-uycpu::vu0::fmac::<6, 15>(c, 32, 1, uycpu::vu0::bcast(c.vf[5][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 2, uycpu::vu0::bcast(c.vf[5][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 3, uycpu::vu0::bcast(c.vf[5][2]));
-uycpu::vu0::fmac::<2, 15>(c, 5, 4, uycpu::vu0::bcast(c.vf[0][3]));
-uycpu::vu0::fmac::<6, 15>(c, 32, 1, uycpu::vu0::bcast(c.vf[6][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 2, uycpu::vu0::bcast(c.vf[6][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 3, uycpu::vu0::bcast(c.vf[6][2]));
-uycpu::vu0::fmac::<2, 15>(c, 6, 4, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 12, uycpu::vu0::bcast(c.vf[4][0]));
+fm::<2, 15>(c, 32, 13, uycpu::vu0::bcast(c.vf[4][1]));
+fm::<2, 15>(c, 32, 14, uycpu::vu0::bcast(c.vf[4][2]));
+fm::<2, 15>(c, 4, 15, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 1, uycpu::vu0::bcast(c.vf[5][0]));
+fm::<2, 15>(c, 32, 2, uycpu::vu0::bcast(c.vf[5][1]));
+fm::<2, 15>(c, 32, 3, uycpu::vu0::bcast(c.vf[5][2]));
+fm::<2, 15>(c, 5, 4, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 1, uycpu::vu0::bcast(c.vf[6][0]));
+fm::<2, 15>(c, 32, 2, uycpu::vu0::bcast(c.vf[6][1]));
+fm::<2, 15>(c, 32, 3, uycpu::vu0::bcast(c.vf[6][2]));
+fm::<2, 15>(c, 6, 4, uycpu::vu0::bcast(c.vf[0][3]));
 uycpu::vu0::clip(c, 5, 5);
-uycpu::vu0::fmac::<6, 15>(c, 32, 1, uycpu::vu0::bcast(c.vf[7][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 2, uycpu::vu0::bcast(c.vf[7][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 3, uycpu::vu0::bcast(c.vf[7][2]));
-uycpu::vu0::fmac::<2, 15>(c, 7, 4, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 1, uycpu::vu0::bcast(c.vf[7][0]));
+fm::<2, 15>(c, 32, 2, uycpu::vu0::bcast(c.vf[7][1]));
+fm::<2, 15>(c, 32, 3, uycpu::vu0::bcast(c.vf[7][2]));
+fm::<2, 15>(c, 7, 4, uycpu::vu0::bcast(c.vf[0][3]));
 uycpu::vu0::clip(c, 6, 6);
-uycpu::vu0::fmac::<6, 15>(c, 32, 1, uycpu::vu0::bcast(c.vf[8][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 2, uycpu::vu0::bcast(c.vf[8][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 3, uycpu::vu0::bcast(c.vf[8][2]));
-uycpu::vu0::fmac::<2, 15>(c, 8, 4, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 1, uycpu::vu0::bcast(c.vf[8][0]));
+fm::<2, 15>(c, 32, 2, uycpu::vu0::bcast(c.vf[8][1]));
+fm::<2, 15>(c, 32, 3, uycpu::vu0::bcast(c.vf[8][2]));
+fm::<2, 15>(c, 8, 4, uycpu::vu0::bcast(c.vf[0][3]));
 uycpu::vu0::clip(c, 7, 7);
-uycpu::vu0::fmac::<6, 12>(c, 5, 5, c.vf[21]);
-uycpu::vu0::fmac::<6, 12>(c, 6, 6, c.vf[21]);
+fm::<6, 12>(c, 5, 5, c.vf[21]);
+fm::<6, 12>(c, 6, 6, c.vf[21]);
 uycpu::vu0::clip(c, 8, 8);
-uycpu::vu0::fmac::<6, 12>(c, 7, 7, c.vf[21]);
-uycpu::vu0::fmac::<6, 12>(c, 8, 8, c.vf[21]);
+fm::<6, 12>(c, 7, 7, c.vf[21]);
+fm::<6, 12>(c, 8, 8, c.vf[21]);
 { let (a, b) = c.rd128((r[S0] as u32).wrapping_add(0x000000c0)); c.vf[10] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[S0] as u32).wrapping_add(0x000000d0)); c.vf[11] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 r[AT] = c.cfc2(18) as i32 as i64 as u64;
@@ -1237,34 +1265,34 @@ uycpu::vu0::clip(c, 5, 5);
 uycpu::vu0::clip(c, 6, 6);
 uycpu::vu0::clip(c, 7, 7);
 uycpu::vu0::clip(c, 8, 8);
-uycpu::vu0::fmac::<6, 15>(c, 32, 1, uycpu::vu0::bcast(c.vf[10][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 2, uycpu::vu0::bcast(c.vf[10][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 3, uycpu::vu0::bcast(c.vf[10][2]));
-uycpu::vu0::fmac::<2, 15>(c, 5, 4, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 1, uycpu::vu0::bcast(c.vf[10][0]));
+fm::<2, 15>(c, 32, 2, uycpu::vu0::bcast(c.vf[10][1]));
+fm::<2, 15>(c, 32, 3, uycpu::vu0::bcast(c.vf[10][2]));
+fm::<2, 15>(c, 5, 4, uycpu::vu0::bcast(c.vf[0][3]));
 r[V1] = c.cfc2(18) as i32 as i64 as u64;
 { let (a, b) = c.rd128((r[S0] as u32).wrapping_add(0x000000e0)); c.vf[7] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[S0] as u32).wrapping_add(0x000000f0)); c.vf[8] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
-uycpu::vu0::fmac::<6, 15>(c, 32, 1, uycpu::vu0::bcast(c.vf[11][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 2, uycpu::vu0::bcast(c.vf[11][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 3, uycpu::vu0::bcast(c.vf[11][2]));
-uycpu::vu0::fmac::<2, 15>(c, 6, 4, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 1, uycpu::vu0::bcast(c.vf[11][0]));
+fm::<2, 15>(c, 32, 2, uycpu::vu0::bcast(c.vf[11][1]));
+fm::<2, 15>(c, 32, 3, uycpu::vu0::bcast(c.vf[11][2]));
+fm::<2, 15>(c, 6, 4, uycpu::vu0::bcast(c.vf[0][3]));
 uycpu::vu0::clip(c, 5, 5);
-uycpu::vu0::fmac::<6, 15>(c, 32, 1, uycpu::vu0::bcast(c.vf[7][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 2, uycpu::vu0::bcast(c.vf[7][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 3, uycpu::vu0::bcast(c.vf[7][2]));
-uycpu::vu0::fmac::<2, 15>(c, 7, 4, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 1, uycpu::vu0::bcast(c.vf[7][0]));
+fm::<2, 15>(c, 32, 2, uycpu::vu0::bcast(c.vf[7][1]));
+fm::<2, 15>(c, 32, 3, uycpu::vu0::bcast(c.vf[7][2]));
+fm::<2, 15>(c, 7, 4, uycpu::vu0::bcast(c.vf[0][3]));
 uycpu::vu0::clip(c, 6, 6);
-uycpu::vu0::fmac::<6, 15>(c, 32, 1, uycpu::vu0::bcast(c.vf[8][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 2, uycpu::vu0::bcast(c.vf[8][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 3, uycpu::vu0::bcast(c.vf[8][2]));
-uycpu::vu0::fmac::<2, 15>(c, 8, 4, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 1, uycpu::vu0::bcast(c.vf[8][0]));
+fm::<2, 15>(c, 32, 2, uycpu::vu0::bcast(c.vf[8][1]));
+fm::<2, 15>(c, 32, 3, uycpu::vu0::bcast(c.vf[8][2]));
+fm::<2, 15>(c, 8, 4, uycpu::vu0::bcast(c.vf[0][3]));
 uycpu::vu0::clip(c, 7, 7);
-uycpu::vu0::fmac::<6, 12>(c, 5, 5, c.vf[21]);
-uycpu::vu0::fmac::<6, 12>(c, 6, 6, c.vf[21]);
+fm::<6, 12>(c, 5, 5, c.vf[21]);
+fm::<6, 12>(c, 6, 6, c.vf[21]);
 uycpu::vu0::clip(c, 8, 8);
-uycpu::vu0::fmac::<6, 12>(c, 7, 7, c.vf[21]);
+fm::<6, 12>(c, 7, 7, c.vf[21]);
 r[A1] = srl(r[AT], 6);
-uycpu::vu0::fmac::<6, 12>(c, 8, 8, c.vf[21]);
+fm::<6, 12>(c, 8, 8, c.vf[21]);
 r[A2] = srl(r[AT], 12);
 r[A3] = srl(r[AT], 18);
 r[AT] = r[AT] & r[A1];
@@ -1285,7 +1313,7 @@ r[AT] = r[AT] & r[V0];
 r[AT] = r[AT] & 0x3f;
 let t = r[AT] != 0u64;  r[A0] = c.cfc2(18) as i32 as i64 as u64;
  if t { l = 0x004afce0; continue; }
-uycpu::vu0::fmac::<6, 15>(c, 1, 9, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 1, 9, uycpu::vu0::bcast(c.vf[0][3]));
 r[V1] = r[V1] | r[A0];
 r[T6] = ((r[V1] as i64) < 1) as u64;
  l = 0x004afdf8; continue;
@@ -1339,20 +1367,20 @@ c.wr32((r[RA] as u32).wrapping_add(0x00003f9c), r[AT] as u32);
 { let (a, b) = c.rd128((r[RA] as u32).wrapping_add(0x00003f50)); c.vf[6] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[RA] as u32).wrapping_add(0x00003f60)); c.vf[7] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[RA] as u32).wrapping_add(0x00003f70)); c.vf[8] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
-uycpu::vu0::fmac::<6, 15>(c, 32, 5, uycpu::vu0::bcast(c.vf[1][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 6, uycpu::vu0::bcast(c.vf[1][1]));
-uycpu::vu0::fmac::<2, 15>(c, 1, 7, uycpu::vu0::bcast(c.vf[1][2]));
-uycpu::vu0::fmac::<6, 14>(c, 4, 4, uycpu::vu0::bcast(c.vf[24][3]));
-uycpu::vu0::fmac::<6, 15>(c, 32, 5, uycpu::vu0::bcast(c.vf[2][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 6, uycpu::vu0::bcast(c.vf[2][1]));
-uycpu::vu0::fmac::<2, 15>(c, 2, 7, uycpu::vu0::bcast(c.vf[2][2]));
-uycpu::vu0::fmac::<6, 15>(c, 32, 5, uycpu::vu0::bcast(c.vf[3][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 6, uycpu::vu0::bcast(c.vf[3][1]));
-uycpu::vu0::fmac::<2, 15>(c, 3, 7, uycpu::vu0::bcast(c.vf[3][2]));
-uycpu::vu0::fmac::<6, 15>(c, 32, 5, uycpu::vu0::bcast(c.vf[4][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 6, uycpu::vu0::bcast(c.vf[4][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 7, uycpu::vu0::bcast(c.vf[4][2]));
-uycpu::vu0::fmac::<2, 15>(c, 4, 8, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 5, uycpu::vu0::bcast(c.vf[1][0]));
+fm::<2, 15>(c, 32, 6, uycpu::vu0::bcast(c.vf[1][1]));
+fm::<2, 15>(c, 1, 7, uycpu::vu0::bcast(c.vf[1][2]));
+fm::<6, 14>(c, 4, 4, uycpu::vu0::bcast(c.vf[24][3]));
+fm::<6, 15>(c, 32, 5, uycpu::vu0::bcast(c.vf[2][0]));
+fm::<2, 15>(c, 32, 6, uycpu::vu0::bcast(c.vf[2][1]));
+fm::<2, 15>(c, 2, 7, uycpu::vu0::bcast(c.vf[2][2]));
+fm::<6, 15>(c, 32, 5, uycpu::vu0::bcast(c.vf[3][0]));
+fm::<2, 15>(c, 32, 6, uycpu::vu0::bcast(c.vf[3][1]));
+fm::<2, 15>(c, 3, 7, uycpu::vu0::bcast(c.vf[3][2]));
+fm::<6, 15>(c, 32, 5, uycpu::vu0::bcast(c.vf[4][0]));
+fm::<2, 15>(c, 32, 6, uycpu::vu0::bcast(c.vf[4][1]));
+fm::<2, 15>(c, 32, 7, uycpu::vu0::bcast(c.vf[4][2]));
+fm::<2, 15>(c, 4, 8, uycpu::vu0::bcast(c.vf[0][3]));
  l = 0x004b0078; continue;
 }
 0x004b067c => {
@@ -1615,19 +1643,19 @@ c.vf[1] = [r[V0] as u32, (r[V0] >> 32) as u32, h[V0] as u32, (h[V0] >> 32) as u3
 { let (a, b) = c.rd128((r[AT] as u32)); c.vf[29] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x00000010)); c.vf[30] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x00000020)); c.vf[31] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
-uycpu::vu0::fmac::<6, 15>(c, 28, 28, uycpu::vu0::bcast(c.vf[1][0]));
+fm::<6, 15>(c, 28, 28, uycpu::vu0::bcast(c.vf[1][0]));
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x00000100)); c.vf[12] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x00000110)); c.vf[13] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x00000120)); c.vf[14] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x00000130)); c.vf[15] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
-uycpu::vu0::fmac::<1, 14>(c, 1, 0, c.vf[28]);
-uycpu::vu0::fmac::<6, 15>(c, 18, 12, uycpu::vu0::bcast(c.vf[0][3]));
-uycpu::vu0::fmac::<6, 15>(c, 19, 13, uycpu::vu0::bcast(c.vf[0][3]));
-uycpu::vu0::fmac::<6, 15>(c, 20, 14, uycpu::vu0::bcast(c.vf[0][3]));
-uycpu::vu0::fmac::<6, 15>(c, 32, 12, uycpu::vu0::bcast(c.vf[1][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 13, uycpu::vu0::bcast(c.vf[1][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 14, uycpu::vu0::bcast(c.vf[1][2]));
-uycpu::vu0::fmac::<2, 15>(c, 21, 15, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<1, 14>(c, 1, 0, c.vf[28]);
+fm::<6, 15>(c, 18, 12, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 19, 13, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 20, 14, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 12, uycpu::vu0::bcast(c.vf[1][0]));
+fm::<2, 15>(c, 32, 13, uycpu::vu0::bcast(c.vf[1][1]));
+fm::<2, 15>(c, 32, 14, uycpu::vu0::bcast(c.vf[1][2]));
+fm::<2, 15>(c, 21, 15, uycpu::vu0::bcast(c.vf[0][3]));
 r[AT] = sx(k.hi(c, 0x004add98));
 r[AT] = add32(r[AT], k.lo(c, 0x004add9c) as u64);
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x000000a0)); c.vf[23] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
@@ -1638,7 +1666,7 @@ r[AT] = add32(r[AT], k.lo(c, 0x004add9c) as u64);
 { let (a, b) = c.rd128(k.gp(c, gp, 0x004addb4)); c.vf[22] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 r[AT] = c.rd32(k.gp(c, gp, 0x004addb8)) as i32 as i64 as u64;
 c.vf[1] = [r[AT] as u32, (r[AT] >> 32) as u32, h[AT] as u32, (h[AT] >> 32) as u32];
-uycpu::vu0::fmac::<0, 4>(c, 23, 0, uycpu::vu0::bcast(c.vf[1][0]));
+fm::<0, 4>(c, 23, 0, uycpu::vu0::bcast(c.vf[1][0]));
 { let (a, b) = c.rd128(k.gp(c, gp, 0x004addc8)); r[AT] = a; h[AT] = b; }
 c.wr128((r[RA] as u32).wrapping_add(0x00003f00), r[AT], h[AT]);
 { let (a, b) = c.rd128(k.gp(c, gp, 0x004addd0)); r[T4] = a; h[T4] = b; }
@@ -1707,35 +1735,35 @@ l = 0x004adec0; continue; }
 let t = r[S6] == r[S7];  r[S4] = add32(r[S6], 0x00000000);
  if t { l = 0x004ade50; continue; }
 n[5] += 1;
-uycpu::vu0::fmac::<1, 14>(c, 2, 1, c.vf[28]);
+fm::<1, 14>(c, 2, 1, c.vf[28]);
 r[S6] = add32(r[S6], 0x00000040);
-uycpu::vu0::fmac::<0, 8>(c, 3, 0, uycpu::vu0::bcast(c.vf[1][3]));
+fm::<0, 8>(c, 3, 0, uycpu::vu0::bcast(c.vf[1][3]));
 r[S3] = add32(r[S3], 0x00000040);
-uycpu::vu0::fmac::<1, 4>(c, 3, 0, uycpu::vu0::bcast(c.vf[1][3]));
+fm::<1, 4>(c, 3, 0, uycpu::vu0::bcast(c.vf[1][3]));
 r[T2] = c.rd16((r[S4] as u32).wrapping_add(0x0000003e)) as u64;
 r[T3] = c.rd32((r[S4] as u32).wrapping_add(0x00000010)) as i32 as i64 as u64;
-uycpu::vu0::fmac::<6, 14>(c, 32, 29, uycpu::vu0::bcast(c.vf[2][0]));
+fm::<6, 14>(c, 32, 29, uycpu::vu0::bcast(c.vf[2][0]));
 r[A2] = c.rd8((r[S4] as u32).wrapping_add(0x0000003b)) as u64;
-uycpu::vu0::fmac::<2, 14>(c, 32, 30, uycpu::vu0::bcast(c.vf[2][1]));
+fm::<2, 14>(c, 32, 30, uycpu::vu0::bcast(c.vf[2][1]));
 r[A3] = c.rd8((r[S4] as u32).wrapping_add(0x0000003a)) as u64;
-uycpu::vu0::fmac::<2, 14>(c, 2, 31, uycpu::vu0::bcast(c.vf[2][2]));
+fm::<2, 14>(c, 2, 31, uycpu::vu0::bcast(c.vf[2][2]));
 r[A2] = add32(r[A2], r[RA]);
 r[A2] = c.rd8((r[A2] as u32).wrapping_add(0x00003b00)) as u64;
-uycpu::vu0::fmac::<6, 12>(c, 8, 26, uycpu::vu0::bcast(c.vf[1][3]));
-uycpu::vu0::fmac::<0, 12>(c, 1, 3, uycpu::vu0::bcast(c.vf[2][2]));
+fm::<6, 12>(c, 8, 26, uycpu::vu0::bcast(c.vf[1][3]));
+fm::<0, 12>(c, 1, 3, uycpu::vu0::bcast(c.vf[2][2]));
 r[A3] = r[A3] & r[A2];
-let t = r[A3] == 0u64;  uycpu::vu0::fmac::<6, 12>(c, 5, 24, uycpu::vu0::bcast(c.vf[2][2]));
+let t = r[A3] == 0u64;  fm::<6, 12>(c, 5, 24, uycpu::vu0::bcast(c.vf[2][2]));
  if t { l = 0x004adec0; continue; }
 uycpu::vu0::abs::<12>(c, 2, 2);
-uycpu::vu0::fmac::<1, 12>(c, 3, 23, c.vf[1]);
-uycpu::vu0::fmac::<1, 12>(c, 6, 2, c.vf[8]);
-uycpu::vu0::fmac::<0, 12>(c, 8, 2, c.vf[8]);
-uycpu::vu0::fmac::<1, 12>(c, 4, 1, c.vf[27]);
+fm::<1, 12>(c, 3, 23, c.vf[1]);
+fm::<1, 12>(c, 6, 2, c.vf[8]);
+fm::<0, 12>(c, 8, 2, c.vf[8]);
+fm::<1, 12>(c, 4, 1, c.vf[27]);
 { let (a, b) = { let v = c.vf[3]; (v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32) }; r[AT] = a; h[AT] = b; }
 r[A2] = 0x0000000040000000;
-uycpu::vu0::fmac::<1, 12>(c, 7, 5, c.vf[6]);
+fm::<1, 12>(c, 7, 5, c.vf[6]);
 r[A2] = r[A2].wrapping_add(r[A2]);
-uycpu::vu0::fmac::<1, 12>(c, 8, 5, c.vf[8]);
+fm::<1, 12>(c, 8, 5, c.vf[8]);
 r[V0] = r[AT] << 32;
 let t = (r[AT] as i64) < 0;  uycpu::vu0::ftoi::<0, 12>(c, 1, 1);
  if t { l = 0x004adec0; continue; }
@@ -1963,30 +1991,30 @@ let t = (r[V1] as i64) > 0;  { let v = c.vf[5]; c.wr128((r[V0] as u32).wrapping_
 { let (a, b) = c.rd128((r[RA] as u32).wrapping_add(0x00003c10)); c.vf[6] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[RA] as u32).wrapping_add(0x00003c20)); c.vf[7] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[RA] as u32).wrapping_add(0x00003c30)); c.vf[8] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
-uycpu::vu0::fmac::<6, 15>(c, 32, 18, uycpu::vu0::bcast(c.vf[5][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 19, uycpu::vu0::bcast(c.vf[5][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 20, uycpu::vu0::bcast(c.vf[5][2]));
-uycpu::vu0::fmac::<2, 15>(c, 5, 21, uycpu::vu0::bcast(c.vf[0][3]));
-uycpu::vu0::fmac::<6, 15>(c, 32, 18, uycpu::vu0::bcast(c.vf[6][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 19, uycpu::vu0::bcast(c.vf[6][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 20, uycpu::vu0::bcast(c.vf[6][2]));
-uycpu::vu0::fmac::<2, 15>(c, 6, 21, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 18, uycpu::vu0::bcast(c.vf[5][0]));
+fm::<2, 15>(c, 32, 19, uycpu::vu0::bcast(c.vf[5][1]));
+fm::<2, 15>(c, 32, 20, uycpu::vu0::bcast(c.vf[5][2]));
+fm::<2, 15>(c, 5, 21, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 18, uycpu::vu0::bcast(c.vf[6][0]));
+fm::<2, 15>(c, 32, 19, uycpu::vu0::bcast(c.vf[6][1]));
+fm::<2, 15>(c, 32, 20, uycpu::vu0::bcast(c.vf[6][2]));
+fm::<2, 15>(c, 6, 21, uycpu::vu0::bcast(c.vf[0][3]));
 uycpu::vu0::clip(c, 5, 5);
-uycpu::vu0::fmac::<6, 15>(c, 32, 18, uycpu::vu0::bcast(c.vf[7][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 19, uycpu::vu0::bcast(c.vf[7][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 20, uycpu::vu0::bcast(c.vf[7][2]));
-uycpu::vu0::fmac::<2, 15>(c, 7, 21, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 18, uycpu::vu0::bcast(c.vf[7][0]));
+fm::<2, 15>(c, 32, 19, uycpu::vu0::bcast(c.vf[7][1]));
+fm::<2, 15>(c, 32, 20, uycpu::vu0::bcast(c.vf[7][2]));
+fm::<2, 15>(c, 7, 21, uycpu::vu0::bcast(c.vf[0][3]));
 uycpu::vu0::clip(c, 6, 6);
-uycpu::vu0::fmac::<6, 15>(c, 32, 18, uycpu::vu0::bcast(c.vf[8][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 19, uycpu::vu0::bcast(c.vf[8][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 20, uycpu::vu0::bcast(c.vf[8][2]));
-uycpu::vu0::fmac::<2, 15>(c, 8, 21, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 18, uycpu::vu0::bcast(c.vf[8][0]));
+fm::<2, 15>(c, 32, 19, uycpu::vu0::bcast(c.vf[8][1]));
+fm::<2, 15>(c, 32, 20, uycpu::vu0::bcast(c.vf[8][2]));
+fm::<2, 15>(c, 8, 21, uycpu::vu0::bcast(c.vf[0][3]));
 uycpu::vu0::clip(c, 7, 7);
-uycpu::vu0::fmac::<6, 12>(c, 5, 5, c.vf[22]);
-uycpu::vu0::fmac::<6, 12>(c, 6, 6, c.vf[22]);
+fm::<6, 12>(c, 5, 5, c.vf[22]);
+fm::<6, 12>(c, 6, 6, c.vf[22]);
 uycpu::vu0::clip(c, 8, 8);
-uycpu::vu0::fmac::<6, 12>(c, 7, 7, c.vf[22]);
-uycpu::vu0::fmac::<6, 12>(c, 8, 8, c.vf[22]);
+fm::<6, 12>(c, 7, 7, c.vf[22]);
+fm::<6, 12>(c, 8, 8, c.vf[22]);
 { let (a, b) = c.rd128((r[RA] as u32).wrapping_add(0x00003c40)); c.vf[10] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[RA] as u32).wrapping_add(0x00003c50)); c.vf[11] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 r[AT] = c.cfc2(18) as i32 as i64 as u64;
@@ -1994,34 +2022,34 @@ uycpu::vu0::clip(c, 5, 5);
 uycpu::vu0::clip(c, 6, 6);
 uycpu::vu0::clip(c, 7, 7);
 uycpu::vu0::clip(c, 8, 8);
-uycpu::vu0::fmac::<6, 15>(c, 32, 18, uycpu::vu0::bcast(c.vf[10][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 19, uycpu::vu0::bcast(c.vf[10][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 20, uycpu::vu0::bcast(c.vf[10][2]));
-uycpu::vu0::fmac::<2, 15>(c, 5, 21, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 18, uycpu::vu0::bcast(c.vf[10][0]));
+fm::<2, 15>(c, 32, 19, uycpu::vu0::bcast(c.vf[10][1]));
+fm::<2, 15>(c, 32, 20, uycpu::vu0::bcast(c.vf[10][2]));
+fm::<2, 15>(c, 5, 21, uycpu::vu0::bcast(c.vf[0][3]));
 r[V1] = c.cfc2(18) as i32 as i64 as u64;
 { let (a, b) = c.rd128((r[RA] as u32).wrapping_add(0x00003c60)); c.vf[7] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[RA] as u32).wrapping_add(0x00003c70)); c.vf[8] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
-uycpu::vu0::fmac::<6, 15>(c, 32, 18, uycpu::vu0::bcast(c.vf[11][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 19, uycpu::vu0::bcast(c.vf[11][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 20, uycpu::vu0::bcast(c.vf[11][2]));
-uycpu::vu0::fmac::<2, 15>(c, 6, 21, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 18, uycpu::vu0::bcast(c.vf[11][0]));
+fm::<2, 15>(c, 32, 19, uycpu::vu0::bcast(c.vf[11][1]));
+fm::<2, 15>(c, 32, 20, uycpu::vu0::bcast(c.vf[11][2]));
+fm::<2, 15>(c, 6, 21, uycpu::vu0::bcast(c.vf[0][3]));
 uycpu::vu0::clip(c, 5, 5);
-uycpu::vu0::fmac::<6, 15>(c, 32, 18, uycpu::vu0::bcast(c.vf[7][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 19, uycpu::vu0::bcast(c.vf[7][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 20, uycpu::vu0::bcast(c.vf[7][2]));
-uycpu::vu0::fmac::<2, 15>(c, 7, 21, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 18, uycpu::vu0::bcast(c.vf[7][0]));
+fm::<2, 15>(c, 32, 19, uycpu::vu0::bcast(c.vf[7][1]));
+fm::<2, 15>(c, 32, 20, uycpu::vu0::bcast(c.vf[7][2]));
+fm::<2, 15>(c, 7, 21, uycpu::vu0::bcast(c.vf[0][3]));
 uycpu::vu0::clip(c, 6, 6);
-uycpu::vu0::fmac::<6, 15>(c, 32, 18, uycpu::vu0::bcast(c.vf[8][0]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 19, uycpu::vu0::bcast(c.vf[8][1]));
-uycpu::vu0::fmac::<2, 15>(c, 32, 20, uycpu::vu0::bcast(c.vf[8][2]));
-uycpu::vu0::fmac::<2, 15>(c, 8, 21, uycpu::vu0::bcast(c.vf[0][3]));
+fm::<6, 15>(c, 32, 18, uycpu::vu0::bcast(c.vf[8][0]));
+fm::<2, 15>(c, 32, 19, uycpu::vu0::bcast(c.vf[8][1]));
+fm::<2, 15>(c, 32, 20, uycpu::vu0::bcast(c.vf[8][2]));
+fm::<2, 15>(c, 8, 21, uycpu::vu0::bcast(c.vf[0][3]));
 uycpu::vu0::clip(c, 7, 7);
-uycpu::vu0::fmac::<6, 12>(c, 5, 5, c.vf[22]);
-uycpu::vu0::fmac::<6, 12>(c, 6, 6, c.vf[22]);
+fm::<6, 12>(c, 5, 5, c.vf[22]);
+fm::<6, 12>(c, 6, 6, c.vf[22]);
 uycpu::vu0::clip(c, 8, 8);
-uycpu::vu0::fmac::<6, 12>(c, 7, 7, c.vf[22]);
+fm::<6, 12>(c, 7, 7, c.vf[22]);
 r[A1] = srl(r[AT], 6);
-uycpu::vu0::fmac::<6, 12>(c, 8, 8, c.vf[22]);
+fm::<6, 12>(c, 8, 8, c.vf[22]);
 r[A2] = srl(r[AT], 12);
 r[A3] = srl(r[AT], 18);
 r[AT] = r[AT] & r[A1];

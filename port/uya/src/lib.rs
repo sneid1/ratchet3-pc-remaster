@@ -21,6 +21,9 @@ pub mod effects;
 pub mod enhance;
 pub mod gsmem;
 mod gpu_profile;
+// UYA_HEAP_LOG=SECONDS: the Rust heap's live bytes by owner, every SECONDS and at the end (an instrument: the binary's global allocator).
+#[cfg(windows)]
+pub mod heaplog;
 pub mod icon;
 pub mod input;
 pub mod jobs;
@@ -55,6 +58,7 @@ pub mod surfaces;
 pub mod snd;
 pub mod texnames;
 pub mod text;
+pub mod update;
 pub mod tievu;
 pub mod vif;
 pub mod vufloat;
@@ -70,6 +74,22 @@ pub const LEVEL_CURRENT: u32 = 0x1D_545C;
 
 /// The level being left during a level change (request_level_change stores it).
 pub const LEVEL_LEFT: u32 = 0x1D_4CF0;
+
+/// The main program (`SCUS_973.53`, 23 MB laid out as the loader lays it) of the disc at `iso`, read once for the process: the
+/// renderer (`Native::open`), the render thread's text and the game thread's read-back each held a copy of their own (70 MB of
+/// a laptop's memory, the heap census's UYA_HEAP_LOG showed), and it is only ever read.
+pub fn boot_image(iso: &str) -> Result<std::sync::Arc<uyafmt::boot::Boot>, String> {
+    static IMAGE: std::sync::Mutex<Option<(String, std::sync::Arc<uyafmt::boot::Boot>)>> = std::sync::Mutex::new(None);
+    let mut image = IMAGE.lock().expect("the main program's lock");
+    if let Some((path, boot)) = &*image {
+        if path == iso {
+            return Ok(boot.clone());
+        }
+    }
+    let boot = std::sync::Arc::new(uyafmt::boot::boot(iso)?);
+    *image = Some((iso.to_string(), boot.clone()));
+    Ok(boot)
+}
 
 /// `level_current` in RAM `ram`: for a front end's frame, the level being entered (0 or -1: none).
 pub fn level_current(ram: &[u8]) -> u32 {

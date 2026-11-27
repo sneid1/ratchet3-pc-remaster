@@ -166,12 +166,17 @@ const TARGETS_MB: f64 = 175.0;
 /// The share of the budget the game plans to use: the budget moves with the other programs' use of the GPU.
 const BUDGET_USE: f64 = 0.95;
 
+/// The system memory an integrated GPU's textures leave to the rest: Windows' own (about 2 GB on a laptop) and the game's besides
+/// its textures (1.35 GB standing in Veldin to 1.7 GB after crossing it at the weak profile, the census of 27 November 2026).
+const IGPU_KEPT_MB: f64 = 3584.0;
+
 /// AUTO's level for a GPU with `budget` MB of video memory (an integrated GPU's with `ram` MB of system memory beside it) at
 /// `height` picture lines: the highest level whose textures and the game's other memory fit (HUD ONLY's uncapped pictures take
 /// more than LOW's); OFF when none does.
 fn auto_level(budget: f64, integrated: bool, ram: f64, height: u32) -> u8 {
-    // An integrated GPU's memory is the PC's: no more than a quarter of it (the game's own 1.4 GB and Windows keep the rest).
-    let budget = if integrated { budget.min(ram / 4.0) } else { budget } * BUDGET_USE;
+    // An integrated GPU's memory is the PC's: no more than a quarter of it, nor more than Windows and the game's own memory
+    // leave (`IGPU_KEPT_MB`). A quarter alone gave a 4 GB laptop LOW's 0.7-0.8 GB on top of the game's 1.4-1.7 GB and Windows.
+    let budget = if integrated { budget.min(ram / 4.0).min(ram - IGPU_KEPT_MB) } else { budget } * BUDGET_USE;
     let targets = TARGETS_MB * ((height as f64 / 1080.0).powi(2) - 1.0);
     [TEXTURES_MAX, TEXTURES_MEDIUM, TEXTURES_LOW, TEXTURES_HUD]
         .into_iter()
@@ -213,7 +218,12 @@ fn video_memory(vendor: u32, device: u32) -> Result<(f64, f64), String> {
 #[cfg(windows)]
 pub(crate) fn auto_textures(info: &wgpu::AdapterInfo, height: u32) -> Result<(), String> {
     let (budget, ram) = video_memory(info.vendor, info.device)?;
-    let integrated = info.device_type == wgpu::DeviceType::IntegratedGpu;
+    // UYA_IGPU_RAM_MB=N: the GPU taken as an integrated one on a PC with N MB of memory (for a check of what such laptops are
+    // given, on this PC; as UYA_NO_RT and UYA_NO_ARRAYS stand in for other GPUs).
+    let (integrated, ram) = match std::env::var("UYA_IGPU_RAM_MB") {
+        Ok(n) => (true, n.parse::<f64>().map_err(|e| format!("UYA_IGPU_RAM_MB={n}: {e}"))?),
+        Err(_) => (info.device_type == wgpu::DeviceType::IntegratedGpu, ram),
+    };
     let level = auto_level(budget, integrated, ram, height);
     let name = ["OFF", "HUD ONLY", "LOW", "MEDIUM", "MAX"][level as usize];
     println!("textures: AUTO: {} budget {budget:.0} MB{}: {name}", info.name, if integrated { format!(" (integrated, {ram:.0} MB of system memory)") } else { String::new() });

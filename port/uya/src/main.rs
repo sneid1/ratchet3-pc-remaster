@@ -29,6 +29,9 @@
 //!       names every texture of each level's native scene as PCSX2 does (src/texnames.rs) and counts, per kind, the names the
 //!       dump folder holds a file for; --write dumps the others there.
 //!
+//!   uya --version
+//!       the build's release (port/uya/Cargo.toml's version), which the update notice compares (src/update.rs).
+//!
 //!   uya sounds <disc.iso> <level|fe> <out dir> [--sound LABEL:N,...], uya sndreplay <disc.iso> [--wav FILE], uya sndbanks <disc.iso>
 //!       the port's own sound engine on its own: a bank's sounds into WAVs, the boot's recorded sound calls replayed and checked,
 //!       every bank of the disc decoded (src/snd/tool.rs).
@@ -40,9 +43,18 @@
 
 use std::process::ExitCode;
 
+/// std's allocator with UYA_HEAP_LOG's bookkeeping (`heaplog.rs`, an instrument): live bytes by owner printed on "heap:" lines every
+/// SECONDS seconds and at the end. Without the variable an allocation costs one relaxed atomic load more.
+#[cfg(windows)]
+#[global_allocator]
+static ALLOCATOR: uya::heaplog::Tracker = uya::heaplog::Tracker;
+
 fn main() -> ExitCode {
     #[cfg(windows)]
     uya::attach_console();
+    // UYA_HEAP_LOG=SECONDS: the Rust heap by owner (`heaplog.rs`, an instrument), read once before the game starts.
+    #[cfg(windows)]
+    uya::heaplog::start();
     // Bandicam's Vulkan layer (VK_LAYER_bandicam_helper) is registered for every Vulkan program on the PC and loads whether or not
     // Bandicam runs, hooking the commands: with OBS's it took 4 % of the game's CPU on the player's Crash Site profile (23 November
     // 2026). Its manifest names the variable that keeps it out of a program; the Vulkan loader reads it when the instance is made.
@@ -97,6 +109,11 @@ fn main() -> ExitCode {
                 Err(e) => Err(e),
             }
         }
+        // uya --version: the build's release (port/uya/Cargo.toml's version), which scripts/package-release.ps1 checks.
+        Some("--version") => {
+            println!("v{}", uya::update::VERSION);
+            Ok(())
+        }
         Some("scene") if a.len() >= 3 => match a[2].parse::<u32>() {
             Ok(level) => uya::native::Scene::decode(&a[1], level).map(|_| ()),
             Err(_) => Err("uya scene <disc.iso> <level>: the level is a number".into()),
@@ -116,6 +133,8 @@ fn main() -> ExitCode {
        uya sndbanks <disc.iso>
        uya sndlog <play.log> <disc.iso> <from tick> <to tick>".into()),
     };
+    #[cfg(windows)]
+    uya::heaplog::finish();
     match r {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

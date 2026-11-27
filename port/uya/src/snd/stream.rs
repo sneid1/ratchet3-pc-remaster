@@ -33,7 +33,7 @@
 //! of a trigger group plays, a mask of other groups' volumes falls to a floor, and rises back when it is over.
 
 use super::rpc::Host;
-use super::voice::{self, Pcm, Voice};
+use super::voice::{Pcm, Voice};
 use super::{pan, Engine, RATE};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -113,9 +113,9 @@ pub struct Duck {
     cur: i32,
 }
 
-/// The decoded clip at sector `lba`, its header `ring` bytes into the sector: the samples and the rate (989snd reads the header
+/// The clip at sector `lba`, its header `ring` bytes into the sector: its PS-ADPCM frames and the rate (989snd reads the header
 /// from the first sector, then the data).
-fn read_clip(host: &mut dyn Host, lba: u32, ring: u16) -> Result<(Vec<i16>, u32), String> {
+fn read_clip(host: &mut dyn Host, lba: u32, ring: u16) -> Result<(Vec<u8>, u32), String> {
     let head = host.read_disc(lba, 1)?;
     let h = head.get(ring as usize..ring as usize + 0x30).ok_or_else(|| format!("stream clip at sector {lba}: its header at +{ring:#x} runs past the sector"))?;
     if &h[0..4] != b"VAGp" {
@@ -126,8 +126,7 @@ fn read_clip(host: &mut dyn Host, lba: u32, ring: u16) -> Result<(Vec<i16>, u32)
     let end = ring as usize + 0x30 + data;
     let bytes = host.read_disc(lba, end.div_ceil(2048) as u32)?;
     let frames = &bytes[ring as usize + 0x30..end];
-    let samples = voice::decode_clip(&frames[..frames.len() / 16 * 16])?;
-    Ok((samples, rate))
+    Ok((frames[..frames.len() / 16 * 16].to_vec(), rate))
 }
 
 /// The pan table's angle of a stream's channel: the stream's own plus the channel's (FUN_00016B50: a doubled voice and a stereo
@@ -189,20 +188,18 @@ impl Engine {
         let mut pcm: Vec<Arc<Pcm>> = Vec::new();
         let mut rate = 0;
         for &(lba, ring) in clips {
-            let (mut s, r) = read_clip(host, lba, ring)?;
+            let (frames, r) = read_clip(host, lba, ring)?;
             if rate != 0 && rate != r {
                 return Err(format!("stream clips at sectors {} and {lba} have rates {rate} and {r}", clips[0].0));
             }
             // 989snd 0x14fe0..0x1500c gives the linked reader the head reader's length
             // and rate. Both voices change parts together. A shorter VAG has keyed off and
             // contributes silence for the rest of that part (level 7, scene 3).
-            if let Some(head) = pcm.first() {
-                s.resize(head.s.len(), 0);
-            }
+            let len = pcm.first().map_or(frames.len() / 16 * 28, |head| head.len());
             rate = r;
-            pcm.push(Arc::new(Pcm { loop_to: (flags & 4 != 0).then_some(0), s }));
+            pcm.push(Arc::new(Pcm::adpcm(frames, len, (flags & 4 != 0).then_some(0))));
         }
-        let samples = pcm[0].s.len() as u32;
+        let samples = pcm[0].len() as u32;
         Ok(Part { pcm, rate, samples, looping: flags & 4 != 0, reverb: flags & 2 != 0, vol, pan })
     }
 

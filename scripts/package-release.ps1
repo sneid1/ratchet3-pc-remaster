@@ -26,6 +26,10 @@ New-Item -ItemType Directory -Force $game | Out-Null
 
 # The game, its level libraries and the DLSS/Streamline DLLs.
 Copy-Item -Force (Join-Path $Build 'uya.exe') $game
+# The game says its release in its update notice (port/uya/src/update.rs): a zip whose uya.exe says another would tell its players
+# to update to the release they have, so port/uya/Cargo.toml's version must be this one.
+$says = & (Join-Path $game 'uya.exe') --version
+if ($says -ne $Version) { throw "package-release: uya.exe says it is '$says', not $Version: set port/uya/Cargo.toml's version and build again" }
 Copy-Item -Force (Join-Path $Build 'tr_l*.dll') $game
 foreach ($f in 'NvLowLatencyVk.dll', 'nvngx_dlss.dll', 'nvngx_dlssg.dll', 'sl.common.dll', 'sl.dlss_g.dll',
     'sl.interposer.dll', 'sl.pcl.dll', 'sl.reflex.dll') {

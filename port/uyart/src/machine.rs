@@ -376,6 +376,8 @@ impl Machine {
             let mp = self as *mut Machine;
             crate::kernel::vblank(mp);
             crate::kernel::run_threads(mp);
+            // The walk of the field's last kicks' GS events on its worker thread (`hw::gsstate`): done, and its panic raised, here.
+            unsafe { &mut *mp }.hw.walk.join();
         }));
         crate::fpu::set_mode(old);
         self.prof[0] += tsc() - t0;
@@ -389,7 +391,7 @@ impl Machine {
         let mut jobs = std::mem::take(&mut self.hw.jobs);
         let earlier = self.hw.frame_from;
         let earlier_jobs: Vec<Job> = jobs.drain(..earlier).collect();
-        let uploads = std::mem::take(&mut self.hw.uploads);
+        let uploads = self.hw.walk.take_uploads();
         let skin = self.hw.skin.take_field(self.preempted.is_some());
         Ok(FieldOut { jobs, skin, earlier, earlier_jobs, uploads, kicked: self.hw.kicked, preempted: self.preempted.take() })
     }

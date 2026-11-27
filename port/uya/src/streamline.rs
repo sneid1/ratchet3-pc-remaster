@@ -1,7 +1,8 @@
 //! NVIDIA Streamline for DLSS Frame Generation (DLSS-G): the FRAME GENERATION option (`settings::OPTIONS`,
 //! `enhance::frame_generation`), through `native/streamline.cpp` (Streamline's headers are C++).
 //!
-//! - **Loaded at every start-up, run only while on.** `dlss::instance` calls `load` before the Vulkan instance exists: Streamline
+//! - **Loaded at every start-up on a PC with an NVIDIA GPU, run only while on.** (Any other PC keeps the plain Vulkan loader and
+//!   frame generation reads unavailable; UYA_NO_NVIDIA=1 stands in for such a PC.) `dlss::instance` calls `load` before the Vulkan instance exists: Streamline
 //!   is initialised (DLSS-G, Reflex, PC Latency; about 1.2 s) and the Vulkan loader becomes `sl.interposer.dll`
 //!   (`wgpu::hal::vulkan::LOADER`), which exports the loader's entry points and, as the instance, device and swapchain are made
 //!   through them, adds DLSS-G's extensions and queues and takes over the swapchain's present. Only a loader chosen before the
@@ -172,6 +173,17 @@ fn result(what: &str, r: i32) -> Result<(), String> {
 /// Before the Vulkan instance: Streamline initialised and the Vulkan loader set to its interposer. A failure is logged and
 /// leaves the loader as it was.
 pub(crate) fn load() {
+    // Streamline's interposer would sit in every Vulkan call of the run and does nothing on a PC without an NVIDIA GPU (DLSS-G,
+    // Reflex and PC Latency are NVIDIA's): there the plain Vulkan loader is used. UYA_NO_NVIDIA: this PC taken as one without
+    // (for a check of what such PCs run, on an NVIDIA PC; as UYA_NO_RT and UYA_NO_ARRAYS stand in for other GPUs).
+    match has_nvidia() {
+        Ok(true) => {}
+        Ok(false) => {
+            fail("no NVIDIA GPU: the standard Vulkan loader is used, without Streamline".into());
+            return;
+        }
+        Err(e) => panic!("streamline: the adapters could not be listed: {e}"),
+    }
     let started = std::time::Instant::now();
     let loaded = (|| -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| format!("the executable's folder: {e}"))?;
@@ -193,6 +205,31 @@ pub(crate) fn load() {
     match loaded {
         Ok(()) => println!("streamline: initialised in {:.0} ms (DLSS-G, Reflex, PC Latency); the Vulkan loader is its interposer", started.elapsed().as_secs_f64() * 1e3),
         Err(e) => fail(e),
+    }
+}
+
+/// Whether a DXGI adapter is an NVIDIA GPU (vendor 0x10DE), asked before any Vulkan instance exists.
+fn has_nvidia() -> Result<bool, String> {
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, DXGI_ERROR_NOT_FOUND};
+    if std::env::var_os("UYA_NO_NVIDIA").is_some() {
+        return Ok(false);
+    }
+    // SAFETY: plain DXGI calls on a factory made here.
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().map_err(|e| format!("CreateDXGIFactory1: {e}"))?;
+        let mut i = 0;
+        loop {
+            match factory.EnumAdapters1(i) {
+                Ok(a) => {
+                    if a.GetDesc1().map_err(|e| format!("GetDesc1: {e}"))?.VendorId == 0x10DE {
+                        return Ok(true);
+                    }
+                    i += 1;
+                }
+                Err(e) if e.code() == DXGI_ERROR_NOT_FOUND => return Ok(false),
+                Err(e) => return Err(format!("EnumAdapters1: {e}")),
+            }
+        }
     }
 }
 

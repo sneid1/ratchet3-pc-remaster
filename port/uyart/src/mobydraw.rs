@@ -337,7 +337,8 @@ const NAMES: [&str; 10] = ["mobies seen", "mobies drawn", "near-list mobies", "d
 
 #[inline(always)]
 fn count(k: usize, n: u32) {
-    DONE[k].fetch_add(n as u64, Relaxed);
+    // Only the game thread counts: a load and a store, not a locked add.
+    DONE[k].store(DONE[k].load(Relaxed) + n as u64, Relaxed);
 }
 
 // ---- the check -------------------------------------------------------------------------------------------------------------
@@ -1201,27 +1202,281 @@ fn rot3(c: &mut Cpu, fd: usize, m: usize, v: usize) {
     vop::<2, 15>(c, ACC, m + 1, bc(c, v, 1));
     vop::<2, 15>(c, fd, m + 2, bc(c, v, 2));
 }
-/// The same plus row `m+3` times vf0.w (VMADDAz, VMADDw).
+/// VU0's VF registers and ACC held in a local, so that the stores through the scratchpad pointer cannot alias them and the
+/// compiler keeps them in registers: `f439e00` works on this and writes it back to the `Cpu` at every exit and around
+/// everything that could run other code (the transfers, the OPMULA / OPMSUB that make flags).
+struct Vm {
+    vf: [V4; 32],
+    acc: V4,
+}
+impl Vm {
+    #[inline(always)]
+    fn load(c: &Cpu) -> Vm {
+        Vm { vf: c.vf, acc: c.vacc }
+    }
+    #[inline(always)]
+    fn store(&self, c: &mut Cpu) {
+        c.vf = self.vf;
+        c.vacc = self.acc;
+    }
+}
+
+/// `m_fmac` over all lanes, except that with `FAST` (every operand known to have no exponent 255, so `fin4` would change
+/// nothing, and the thread's toward-zero rounding gives no result an exponent of 255) the operands are used as they are.
 #[inline(always)]
-fn rot4(c: &mut Cpu, fd: usize, m: usize, v: usize) {
-    vop::<6, 15>(c, ACC, m, bc(c, v, 0));
-    vop::<2, 15>(c, ACC, m + 1, bc(c, v, 1));
-    vop::<2, 15>(c, ACC, m + 2, bc(c, v, 2));
-    vop::<2, 15>(c, fd, m + 3, bc(c, 0, 3));
+fn mfmac<const K: u8, const D: u32, const FAST: bool>(s: V4, t: V4, acc: V4) -> V4 {
+    if !FAST {
+        return m_fmac::<K, D>(s, t, acc);
+    }
+    use std::arch::x86_64::*;
+    unsafe {
+        let ld = |v: V4| _mm_loadu_ps(v.as_ptr() as *const f32);
+        let (a, b) = (ld(s), ld(t));
+        let r = match K {
+            0 => _mm_add_ps(a, b),
+            1 => _mm_sub_ps(a, b),
+            2 => _mm_add_ps(ld(acc), _mm_mul_ps(a, b)),
+            3 => _mm_sub_ps(ld(acc), _mm_mul_ps(a, b)),
+            6 => _mm_mul_ps(a, b),
+            _ => unreachable!(),
+        };
+        let mut o = [0u32; 4];
+        _mm_storeu_ps(o.as_mut_ptr() as *mut f32, r);
+        o
+    }
+}
+/// `vop` on a `Vm`.
+#[inline(always)]
+fn mop<const K: u8, const D: u32, const FAST: bool>(m: &mut Vm, fd: usize, fs: usize, t: V4) {
+    let r = mfmac::<K, D, FAST>(m.vf[fs], t, m.acc);
+    if fd == ACC {
+        m_put::<D>(&mut m.acc, r);
+    } else if fd != 0 {
+        m_put::<D>(&mut m.vf[fd], r);
+    }
+}
+#[inline(always)]
+fn mbc(m: &Vm, ft: usize, l: usize) -> V4 {
+    [m.vf[ft][l]; 4]
+}
+#[inline(always)]
+fn mlq(c: &mut Cpu, m: &mut Vm, v: usize, a: u32) {
+    let q = c.rd128(a);
+    if v != 0 {
+        m.vf[v] = w4(q);
+    }
+}
+#[inline(always)]
+fn msq(c: &mut Cpu, m: &Vm, v: usize, a: u32) {
+    let (lo, hi) = q4(m.vf[v]);
+    c.wr128(a, lo, hi);
+}
+#[inline(always)]
+fn mqmtc2(m: &mut Vm, v: usize, x: Q) {
+    if v != 0 {
+        m.vf[v] = w4(x);
+    }
+}
+#[inline(always)]
+fn mqmfc2(m: &Vm, v: usize) -> Q {
+    q4(m.vf[v])
+}
+#[inline(always)]
+fn mmove<const D: u32>(m: &mut Vm, ft: usize, v: V4) {
+    if ft != 0 {
+        m_put::<D>(&mut m.vf[ft], v);
+    }
+}
+#[inline(always)]
+fn mitof<const N: usize, const D: u32>(m: &mut Vm, ft: usize, fs: usize) {
+    if ft != 0 {
+        let r = uycpu::vu0::m_itof::<N>(m.vf[fs]);
+        m_put::<D>(&mut m.vf[ft], r);
+    }
+}
+/// rows `r`, `r+1`, `r+2` of VF times lanes x, y, z of `v` (VMULAx, VMADDAy, VMADDz) into `fd`.
+#[inline(always)]
+fn mrot3<const FAST: bool>(m: &mut Vm, fd: usize, r: usize, v: usize) {
+    mop::<6, 15, FAST>(m, ACC, r, mbc(m, v, 0));
+    mop::<2, 15, FAST>(m, ACC, r + 1, mbc(m, v, 1));
+    mop::<2, 15, FAST>(m, fd, r + 2, mbc(m, v, 2));
+}
+/// The same plus row `r+3` times vf0.w (VMADDAz, VMADDw).
+#[inline(always)]
+fn mrot4<const FAST: bool>(m: &mut Vm, fd: usize, r: usize, v: usize) {
+    mop::<6, 15, FAST>(m, ACC, r, mbc(m, v, 0));
+    mop::<2, 15, FAST>(m, ACC, r + 1, mbc(m, v, 1));
+    mop::<2, 15, FAST>(m, ACC, r + 2, mbc(m, v, 2));
+    mop::<2, 15, FAST>(m, fd, r + 3, mbc(m, 0, 3));
 }
 /// A quaternion's squared length into lane `l` of `v` (lane `l` of `v` plus the other lanes, each of the last two times vf4's
 /// lane `l`, which is 1.0: VADDA, VMADDA, VMADD).
 #[inline(always)]
-fn sum4y(c: &mut Cpu, v: usize) {
-    vop::<0, 4>(c, ACC, v, bc(c, v, 0));
-    vop::<2, 4>(c, ACC, 4, bc(c, v, 2));
-    vop::<2, 4>(c, v, 4, bc(c, v, 3));
+fn msum4y<const FAST: bool>(m: &mut Vm, v: usize) {
+    mop::<0, 4, FAST>(m, ACC, v, mbc(m, v, 0));
+    mop::<2, 4, FAST>(m, ACC, 4, mbc(m, v, 2));
+    mop::<2, 4, FAST>(m, v, 4, mbc(m, v, 3));
 }
 #[inline(always)]
-fn sum4x(c: &mut Cpu, v: usize) {
-    vop::<0, 8>(c, ACC, v, bc(c, v, 1));
-    vop::<2, 8>(c, ACC, 4, bc(c, v, 2));
-    vop::<2, 8>(c, v, 4, bc(c, v, 3));
+fn msum4x<const FAST: bool>(m: &mut Vm, v: usize) {
+    mop::<0, 8, FAST>(m, ACC, v, mbc(m, v, 1));
+    mop::<2, 8, FAST>(m, ACC, 4, mbc(m, v, 2));
+    mop::<2, 8, FAST>(m, v, 4, mbc(m, v, 3));
+}
+/// Q as an operand: `fin4` of it (exponent 255 is the largest number of its sign).
+#[inline(always)]
+fn qqf(c: &Cpu) -> V4 {
+    let q = c.vi[22];
+    [if q & 0x7f80_0000 == 0x7f80_0000 { (q & 0x8000_0000) | 0x7f7f_ffff } else { q }; 4]
+}
+/// No lane of `v` has exponent 255.
+#[inline(always)]
+fn finite4(v: V4) -> bool {
+    v.iter().all(|x| x & 0x7f80_0000 != 0x7f80_0000)
+}
+/// The same for lanes x, y, z.
+#[inline(always)]
+fn finite3(v: V4) -> bool {
+    v[..3].iter().all(|x| x & 0x7f80_0000 != 0x7f80_0000)
+}
+
+/// One iteration of the rotation blend (two joints): `a3` and `t0` the two poses' quadwords, `t4` the output's address. The
+/// only floats it reads that are not made from the poses' integers are VF4 to VF7, which its caller found without exponent 255
+/// for `FAST`, and Q, which it passes through `qqf`.
+#[inline(always)]
+fn blend_pair<const FAST: bool>(c: &mut Cpu, m: &mut Vm, normalize: bool, a3: Q, t0: Q, t4: u32) {
+    m.vf[8] = hs(a3.0);
+    m.vf[9] = hs(t0.0);
+    m.vf[10] = hs(a3.1);
+    m.vf[11] = hs(t0.1);
+    mitof::<3, 15>(m, 8, 8);
+    if normalize {
+        mitof::<3, 15>(m, 9, 9);
+        mitof::<3, 15>(m, 10, 10);
+        mitof::<3, 15>(m, 11, 11);
+        mop::<6, 15, FAST>(m, 12, 8, m.vf[9]);
+        mop::<6, 15, FAST>(m, 13, 10, m.vf[11]);
+        mop::<6, 15, FAST>(m, 14, 9, mbc(m, 5, 0));
+        mop::<6, 15, FAST>(m, 15, 11, mbc(m, 5, 0));
+        mop::<6, 15, FAST>(m, ACC, 8, mbc(m, 6, 0));
+        mop::<2, 15, FAST>(m, 8, 9, mbc(m, 7, 0));
+        mop::<2, 15, FAST>(m, 9, 14, mbc(m, 7, 0));
+        msum4y::<FAST>(m, 12);
+        msum4y::<FAST>(m, 13);
+        mop::<6, 15, FAST>(m, ACC, 10, mbc(m, 6, 0));
+        let d0 = mqmfc2(m, 12).0;
+        mop::<2, 15, FAST>(m, 10, 11, mbc(m, 7, 0));
+        mop::<2, 15, FAST>(m, 11, 15, mbc(m, 7, 0));
+        let d1 = mqmfc2(m, 13).0;
+        if (d0 as i64) >= 0 {
+            mop::<6, 15, FAST>(m, 9, 8, m.vf[8]);
+        } else {
+            mmove::<15>(m, 8, m.vf[9]);
+            mop::<6, 15, FAST>(m, 9, 9, m.vf[9]);
+        }
+        if (d1 as i64) >= 0 {
+            mop::<6, 15, FAST>(m, 11, 10, m.vf[10]);
+        } else {
+            mmove::<15>(m, 10, m.vf[11]);
+            mop::<6, 15, FAST>(m, 11, 11, m.vf[11]);
+        }
+        msum4x::<FAST>(m, 9);
+        msum4x::<FAST>(m, 11);
+        qop::<2>(c, m.vf[0][3], m.vf[9][0]);
+        mop::<6, 15, FAST>(m, 8, 8, qqf(c));
+        qop::<2>(c, m.vf[0][3], m.vf[11][0]);
+        mop::<6, 15, FAST>(m, 10, 10, qqf(c));
+    } else {
+        mitof::<3, 15>(m, 9, 9);
+        mitof::<3, 15>(m, 10, 10);
+        mitof::<3, 15>(m, 11, 11);
+        mop::<6, 15, FAST>(m, ACC, 8, mbc(m, 6, 0));
+        mop::<2, 15, FAST>(m, 8, 9, mbc(m, 7, 0));
+        mop::<6, 15, FAST>(m, ACC, 10, mbc(m, 6, 0));
+        mop::<2, 15, FAST>(m, 10, 11, mbc(m, 7, 0));
+    }
+    msq(c, m, 8, t4);
+    msq(c, m, 10, t4 + 0x40);
+}
+
+/// One joint's local matrix (`a3` the next joint's matrix address) from its rotation `q10`, its position `q9` and `q8` (used
+/// if `t0`), times its parent's `par` if it has one, into the 4 quadwords before `a3`. With `FAST` its caller found the quadwords
+/// it reads, and the constants VF0 to VF3, without exponent 255 (lanes x, y, z of `q8`, `q9`, which are all of theirs that it
+/// uses): then nothing it makes has one either.
+#[inline(always)]
+fn local_matrix<const FAST: bool>(c: &mut Cpu, m: &mut Vm, a3: u32, q10: Q, q8: Q, q9: Q, t0: u32, par: Option<[Q; 4]>) {
+    m.vf[10] = w4(q10);
+    mmove::<15>(m, 16, m.vf[1]);
+    mop::<0, 15, FAST>(m, 11, 10, m.vf[10]);
+    mmove::<15>(m, 17, m.vf[2]);
+    mmove::<15>(m, 18, m.vf[3]);
+    mmove::<15>(m, 19, m.vf[0]);
+    mop::<6, 14, FAST>(m, 12, 11, mbc(m, 10, 3));
+    mop::<6, 14, FAST>(m, 13, 11, mbc(m, 10, 0));
+    mop::<6, 6, FAST>(m, 14, 11, mbc(m, 10, 1));
+    mop::<6, 2, FAST>(m, 15, 11, mbc(m, 10, 2));
+    mop::<0, 8, FAST>(m, 17, 0, mbc(m, 12, 2));
+    mop::<1, 8, FAST>(m, 18, 0, mbc(m, 12, 1));
+    mop::<0, 4, FAST>(m, 18, 0, mbc(m, 12, 0));
+    mop::<1, 8, FAST>(m, 16, 16, mbc(m, 14, 1));
+    mop::<1, 4, FAST>(m, 17, 17, mbc(m, 13, 0));
+    mop::<1, 2, FAST>(m, 18, 18, mbc(m, 13, 0));
+    mop::<1, 4, FAST>(m, 16, 13, mbc(m, 12, 2));
+    mop::<0, 2, FAST>(m, 16, 13, mbc(m, 12, 1));
+    mop::<1, 2, FAST>(m, 17, 14, mbc(m, 12, 0));
+    mop::<0, 8, FAST>(m, 17, 17, mbc(m, 13, 1));
+    mop::<0, 8, FAST>(m, 18, 18, mbc(m, 13, 2));
+    mop::<0, 4, FAST>(m, 18, 18, mbc(m, 14, 2));
+    mop::<1, 8, FAST>(m, 16, 16, mbc(m, 15, 2));
+    mop::<1, 4, FAST>(m, 17, 17, mbc(m, 15, 2));
+    mop::<1, 2, FAST>(m, 18, 18, mbc(m, 14, 1));
+    m.vf[8] = w4(q8);
+    m.vf[9] = w4(q9);
+    if t0 != 0 {
+        mop::<6, 14, FAST>(m, 16, 16, mbc(m, 8, 0));
+        mop::<6, 14, FAST>(m, 17, 17, mbc(m, 8, 1));
+        mop::<6, 14, FAST>(m, 18, 18, mbc(m, 8, 2));
+    }
+    mmove::<15>(m, 12, m.vf[1]);
+    match par {
+        None => {
+            mmove::<15>(m, 13, m.vf[2]);
+            mmove::<15>(m, 14, m.vf[3]);
+            mmove::<15>(m, 15, m.vf[0]);
+        }
+        Some(p) => {
+            for k in 0..4 {
+                m.vf[12 + k] = w4(p[k]);
+            }
+        }
+    }
+    mop::<0, 14, FAST>(m, 19, 19, m.vf[9]);
+    mrot3::<FAST>(m, 20, 12, 16);
+    mrot3::<FAST>(m, 21, 12, 17);
+    mrot3::<FAST>(m, 22, 12, 18);
+    mop::<6, 15, FAST>(m, ACC, 12, mbc(m, 19, 0));
+    mop::<2, 15, FAST>(m, ACC, 13, mbc(m, 19, 1));
+    mop::<2, 15, FAST>(m, ACC, 14, mbc(m, 19, 2));
+    mop::<2, 15, FAST>(m, 23, 15, mbc(m, 0, 3));
+    for k in 0..4u32 {
+        msq(c, m, 20 + k as usize, a3 - 0x40 + 16 * k);
+    }
+}
+
+/// One joint's matrix times its bind matrix (`bind`'s rows, whose lanes x, y, z are all it uses, and `mat`'s).
+#[inline(always)]
+fn bind_matrix<const FAST: bool>(c: &mut Cpu, m: &mut Vm, t6: u32, bind: [Q; 4], mat: [Q; 4]) {
+    for k in 0..4 {
+        m.vf[12 + k] = w4(bind[k]);
+        m.vf[20 + k] = w4(mat[k]);
+    }
+    mrot4::<FAST>(m, 19, 20, 15);
+    mrot3::<FAST>(m, 16, 20, 12);
+    mrot3::<FAST>(m, 17, 20, 13);
+    mrot3::<FAST>(m, 18, 20, 14);
+    for k in 0..4u32 {
+        msq(c, m, 16 + k as usize, t6 + 16 * k);
+    }
 }
 
 /// 0x439E00: the record `rec`'s joint matrices into the scratchpad at 0x40 j. The joint table and the two pose buffers come
@@ -1230,19 +1485,22 @@ fn sum4x(c: &mut Cpu, v: usize) {
 /// times its parent's (the table's scratchpad pointer); the attachments (+8) and the record's second list (+0xC) are mixed in;
 /// then each times its bind matrix (class +0x14, by SPR_TO to 0x1C00).
 fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
-    qmtc2(c, 28, (sx(staging), 0));
+    let mut vm = Vm::load(c);
+    let m = &mut vm;
+    mqmtc2(m, 28, (sx(staging), 0));
     let nj = c.rd16(rec + 0x10) as i16 as i32;
     let blend = c.rd32(rec + 4);
     if nj == 0 {
-        vop::<6, 15>(c, 1, 0, bc(c, 0, 0));
-        vop::<6, 15>(c, 2, 0, bc(c, 0, 0));
-        let v = mr32(c.vf[0]);
-        vmove::<15>(c, 3, v);
-        vop::<0, 8>(c, 1, 1, bc(c, 0, 3));
-        vop::<0, 4>(c, 2, 2, bc(c, 0, 3));
+        mop::<6, 15, false>(m, 1, 0, mbc(m, 0, 0));
+        mop::<6, 15, false>(m, 2, 0, mbc(m, 0, 0));
+        let v = mr32(m.vf[0]);
+        mmove::<15>(m, 3, v);
+        mop::<0, 8, false>(m, 1, 1, mbc(m, 0, 3));
+        mop::<0, 4, false>(m, 2, 2, mbc(m, 0, 3));
         for (q, v) in [1usize, 2, 3, 0].into_iter().enumerate() {
-            sqc2(c, v, SPR + 16 * q as u32);
+            msq(c, m, v, SPR + 16 * q as u32);
         }
+        m.store(c);
         return;
     }
     let tags = staging.wrapping_add(0x1fc0);
@@ -1254,30 +1512,30 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
     let mut t8 = c.rd32(rec + 0xc);
     let tag1 = (0x3000_0000 | t1) & if blend == 0 { 0xffff } else { u32::MAX };
     let pose1 = c.rd32(rec + 0x20);
-    qmtc2(c, 29, (c.r[18], c.rh[18]));
+    mqmtc2(m, 29, (c.r[18], c.rh[18]));
     let flags = c.rd16(rec + 0x12) as i16 as i32;
     c.wr32(tags + 0x10, tag1);
-    vop::<6, 15>(c, 1, 0, bc(c, 0, 0));
+    mop::<6, 15, false>(m, 1, 0, mbc(m, 0, 0));
     c.wr32(tags + 0x14, pose1);
-    vop::<6, 15>(c, 2, 0, bc(c, 0, 0));
+    mop::<6, 15, false>(m, 2, 0, mbc(m, 0, 0));
     let q2 = c.rd32(rec + 0x34);
-    let v = mr32(c.vf[0]);
-    vmove::<15>(c, 3, v);
+    let v = mr32(m.vf[0]);
+    mmove::<15>(m, 3, v);
     let pose2 = c.rd32(rec + 0x30);
-    vop::<0, 14>(c, 4, 0, bc(c, 0, 3));
-    vop::<1, 1>(c, 4, 0, c.vf[0]);
+    mop::<0, 14, false>(m, 4, 0, mbc(m, 0, 3));
+    mop::<1, 1, false>(m, 4, 0, m.vf[0]);
     c.wr32(tags + 0x20, q2);
-    vop::<0, 8>(c, 1, 1, bc(c, 0, 3));
+    mop::<0, 8, false>(m, 1, 1, mbc(m, 0, 3));
     c.wr32(tags + 0x24, pose2);
-    vop::<0, 4>(c, 2, 2, bc(c, 0, 3));
-    lqc2(c, 7, rec);
+    mop::<0, 4, false>(m, 2, 2, mbc(m, 0, 3));
+    mlq(c, m, 7, rec);
     let at = SPR + 0x2000 + ((nj as u32) << 4);
     let a0q = c.rd32(rec + 0x24);
     let mut v0 = (c.rd16(rec + 0x28) as u32).wrapping_add(at);
-    vop::<1, 8>(c, 6, 4, bc(c, 7, 1));
+    mop::<1, 8, false>(m, 6, 4, mbc(m, 7, 1));
     let a1q = c.rd16(rec + 0x38) as u32;
-    let v = mr32(c.vf[7]);
-    vmove::<15>(c, 7, v);
+    let v = mr32(m.vf[7]);
+    mmove::<15>(m, 7, v);
     let mut v1 = (c.rd16(rec + 0x2c) as u32).wrapping_add(at);
     let a2q = c.rd16(rec + 0x3c) as u32;
     c.wr32(at - 4, u32::MAX);
@@ -1285,15 +1543,17 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
     let t1 = c.rd32(rec + 0x34) << 4;
     c.wr32(a0.wrapping_sub(4), u32::MAX);
     let mut a1 = a1q.wrapping_add(a0);
-    qmtc2(c, 30, (c.r[17], c.rh[17]));
+    mqmtc2(m, 30, (c.r[17], c.rh[17]));
     let s1 = t1.wrapping_add(a0);
     c.wr32(s1.wrapping_sub(4), u32::MAX);
     let mut a2 = a2q.wrapping_add(a0);
     let t5 = staging.wrapping_add(16);
-    vop::<1, 8>(c, 5, 0, bc(c, 0, 3));
+    mop::<1, 8, false>(m, 5, 0, mbc(m, 0, 3));
     c.wr128(staging, 0, 0);
-    qmtc2(c, 31, (c.r[16], c.rh[16]));
+    mqmtc2(m, 31, (c.r[16], c.rh[16]));
+    m.store(c);
     spr_to_chain(c, 0x104, tags, 0x2000);
+    *m = Vm::load(c);
     let t6 = SPR;
     let mut at = at;
     let mut a0 = a0;
@@ -1302,12 +1562,12 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
         let (mut n, mut p, mut s) = (nj, t6.wrapping_sub(64), t5.wrapping_sub(32));
         loop {
             p = p.wrapping_add(64);
-            sqc2(c, 4, p);
+            msq(c, m, 4, p);
             s = s.wrapping_add(32);
-            sqc2(c, 4, p + 16);
+            msq(c, m, 4, p + 16);
             n -= 1;
-            sqc2(c, 4, s);
-            sqc2(c, 4, s + 16);
+            msq(c, m, 4, s);
+            msq(c, m, 4, s + 16);
             if n <= 0 {
                 break;
             }
@@ -1315,15 +1575,15 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
         let (mut n, mut t0, mut p) = (nj, t6 | 0x2000, t6.wrapping_sub(256));
         loop {
             for k in 0..4 {
-                lqc2(c, 16 + k, t0 + 16 * k as u32);
+                mlq(c, m, 16 + k, t0 + 16 * k as u32);
             }
             p = p.wrapping_add(256);
             n -= 4;
             for k in 0..4u32 {
-                sqc2(c, 16 + k as usize, p + 0x20 + 0x40 * k);
+                msq(c, m, 16 + k as usize, p + 0x20 + 0x40 * k);
             }
             for k in 0..4u32 {
-                sqc2(c, 16 + k as usize, p + 0x30 + 0x40 * k);
+                msq(c, m, 16 + k as usize, p + 0x30 + 0x40 * k);
             }
             for k in 0..4u32 {
                 c.wr32(p + 0x3c + 0x40 * k, 0);
@@ -1338,18 +1598,18 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
             let a3 = c.rd64(v0);
             let j = c.rd8(v0 + 6) as u32;
             v0 = v0.wrapping_add(8);
-            c.vf[8] = hu(a3);
+            m.vf[8] = hu(a3);
             let t4 = (j << 6).wrapping_add(t6);
-            itof::<3, 14>(c, 8, 8);
+            mitof::<3, 14>(m, 8, 8);
             if (a3 as i64) < 0 {
                 c.wr32(t3 + 0xc, t4);
                 t3 = t4;
-                sqc2(c, 8, t4);
+                msq(c, m, 8, t4);
             } else {
                 let t1 = (j << 5).wrapping_add(t5);
                 c.wr32(s0 + 0xc, t1);
                 s0 = t1;
-                sqc2(c, 8, t1);
+                msq(c, m, 8, t1);
             }
         }
         let mut n = c.rd16(rec + 0x2e) as i16 as i32;
@@ -1358,27 +1618,27 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
             let a3 = c.rd64(v1);
             let j = c.rd8(v1 + 6) as i8 as i32;
             n -= 1;
-            c.vf[8] = hs(a3);
+            m.vf[8] = hs(a3);
             v1 = v1.wrapping_add(8);
-            itof::<0, 14>(c, 8, 8);
+            mitof::<0, 14>(m, 8, 8);
             let t0 = ((j << 6) as u32).wrapping_add(t6);
             let w = c.rd32(t0 + 0x2c);
             c.wr32(t4 + 0x3c, t0);
             t4 = t0;
             c.wr32(t0 + 0x3c, 0);
-            sqc2(c, 8, t0 + 0x20);
+            msq(c, m, 8, t0 + 0x20);
             c.wr32(t0 + 0x2c, w);
         }
         while a1 != a2 {
             let a3 = c.rd64(a1);
             let j = c.rd8(a1 + 6) as u32;
             a1 = a1.wrapping_add(8);
-            c.vf[8] = hu(a3);
+            m.vf[8] = hu(a3);
             let v1 = (j << 6).wrapping_add(t6);
-            itof::<3, 14>(c, 8, 8);
+            mitof::<3, 14>(m, 8, 8);
             if (a3 as i64) < 0 {
                 let t0 = c.rd32(v1 + 0xc);
-                sqc2(c, 8, v1 + 0x10);
+                msq(c, m, 8, v1 + 0x10);
                 if t0 == 0 {
                     c.wr32(t3 + 0xc, v1);
                     t3 = v1;
@@ -1386,7 +1646,7 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
             } else {
                 let t1 = (j << 5).wrapping_add(t5);
                 let t0 = c.rd32(t1 + 0x1c);
-                sqc2(c, 8, t1 + 0x10);
+                msq(c, m, 8, t1 + 0x10);
                 if t0 == 0 {
                     c.wr32(s0 + 0xc, t1);
                     s0 = t1;
@@ -1400,12 +1660,12 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
             let a3 = c.rd64(a2);
             let j = c.rd8(a2 + 6) as i8 as i32;
             n -= 1;
-            c.vf[8] = hs(a3);
+            m.vf[8] = hs(a3);
             a2 = a2.wrapping_add(8);
-            itof::<0, 14>(c, 8, 8);
+            mitof::<0, 14>(m, 8, 8);
             let t0 = ((j << 6) as u32).wrapping_add(t6);
             let link = c.rd32(t0 + 0x3c);
-            sqc2(c, 8, t0 + 0x30);
+            msq(c, m, 8, t0 + 0x30);
             c.wr32(t0 + 0x3c, link);
             if link == 0 {
                 c.wr32(t4 + 0x3c, t0);
@@ -1415,24 +1675,24 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
         }
         // The two poses' positions and scales blended: the scratchpad list (staging +0) and the third list (+4).
         let mut v1 = c.rd32(t5.wrapping_sub(16));
-        vmove::<1>(c, 10, c.vf[0]);
+        mmove::<1>(m, 10, m.vf[0]);
         while v1 != 0 {
             let v0 = v1;
-            lqc2(c, 8, v0);
-            lqc2(c, 9, v0 + 16);
-            vop::<6, 14>(c, ACC, 8, bc(c, 6, 0));
-            vop::<2, 14>(c, 10, 9, bc(c, 7, 0));
+            mlq(c, m, 8, v0);
+            mlq(c, m, 9, v0 + 16);
+            mop::<6, 14, false>(m, ACC, 8, mbc(m, 6, 0));
+            mop::<2, 14, false>(m, 10, 9, mbc(m, 7, 0));
             v1 = c.rd32(v0 + 0xc);
-            sqc2(c, 10, v0 + 16);
+            msq(c, m, 10, v0 + 16);
         }
         let mut v0 = c.rd32(t5.wrapping_sub(12));
         while v0 != 0 {
-            lqc2(c, 8, v0 + 0x20);
-            lqc2(c, 9, v0 + 0x30);
-            vop::<6, 14>(c, ACC, 8, bc(c, 6, 0));
-            vop::<2, 14>(c, 10, 9, bc(c, 7, 0));
+            mlq(c, m, 8, v0 + 0x20);
+            mlq(c, m, 9, v0 + 0x30);
+            mop::<6, 14, false>(m, ACC, 8, mbc(m, 6, 0));
+            mop::<2, 14, false>(m, 10, 9, mbc(m, 7, 0));
             let w = c.rd32(v0 + 0x2c);
-            sqc2(c, 10, v0 + 0x20);
+            msq(c, m, 10, v0 + 0x20);
             c.wr32(v0 + 0x2c, w);
             v0 = c.rd32(v0 + 0x3c);
         }
@@ -1440,6 +1700,8 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
         let normalize = flags & 0x400 == 0;
         let mut n = nj;
         let mut t4 = t6.wrapping_sub(128);
+        // Their weights and constants are the only floats read that did not come from the integer pose buffers.
+        let fast = finite4(m.vf[0]) && finite4(m.vf[4]) && [m.vf[5][0], m.vf[6][0], m.vf[7][0]].iter().all(|x| x & 0x7f80_0000 != 0x7f80_0000);
         loop {
             let a3 = c.rd128(at);
             if n <= 0 {
@@ -1447,64 +1709,14 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
             }
             n -= 2;
             let t0 = c.rd128(a0);
-            c.vf[8] = hs(a3.0);
-            c.vf[9] = hs(t0.0);
-            c.vf[10] = hs(a3.1);
-            c.vf[11] = hs(t0.1);
-            itof::<3, 15>(c, 8, 8);
-            if normalize {
-                itof::<3, 15>(c, 9, 9);
-                itof::<3, 15>(c, 10, 10);
-                itof::<3, 15>(c, 11, 11);
-                vop::<6, 15>(c, 12, 8, c.vf[9]);
-                vop::<6, 15>(c, 13, 10, c.vf[11]);
-                vop::<6, 15>(c, 14, 9, bc(c, 5, 0));
-                vop::<6, 15>(c, 15, 11, bc(c, 5, 0));
-                vop::<6, 15>(c, ACC, 8, bc(c, 6, 0));
-                vop::<2, 15>(c, 8, 9, bc(c, 7, 0));
-                vop::<2, 15>(c, 9, 14, bc(c, 7, 0));
-                at = at.wrapping_add(16);
-                sum4y(c, 12);
-                a0 = a0.wrapping_add(16);
-                sum4y(c, 13);
-                vop::<6, 15>(c, ACC, 10, bc(c, 6, 0));
-                let d0 = qmfc2(c, 12).0;
-                vop::<2, 15>(c, 10, 11, bc(c, 7, 0));
-                t4 = t4.wrapping_add(128);
-                vop::<2, 15>(c, 11, 15, bc(c, 7, 0));
-                let d1 = qmfc2(c, 13).0;
-                if (d0 as i64) >= 0 {
-                    vop::<6, 15>(c, 9, 8, c.vf[8]);
-                } else {
-                    vmove::<15>(c, 8, c.vf[9]);
-                    vop::<6, 15>(c, 9, 9, c.vf[9]);
-                }
-                if (d1 as i64) >= 0 {
-                    vop::<6, 15>(c, 11, 10, c.vf[10]);
-                } else {
-                    vmove::<15>(c, 10, c.vf[11]);
-                    vop::<6, 15>(c, 11, 11, c.vf[11]);
-                }
-                sum4x(c, 9);
-                sum4x(c, 11);
-                qop::<2>(c, c.vf[0][3], c.vf[9][0]);
-                vop::<6, 15>(c, 8, 8, qq(c));
-                qop::<2>(c, c.vf[0][3], c.vf[11][0]);
-                vop::<6, 15>(c, 10, 10, qq(c));
+            t4 = t4.wrapping_add(128);
+            at = at.wrapping_add(16);
+            a0 = a0.wrapping_add(16);
+            if fast {
+                blend_pair::<true>(c, m, normalize, a3, t0, t4);
             } else {
-                t4 = t4.wrapping_add(128);
-                itof::<3, 15>(c, 9, 9);
-                at = at.wrapping_add(16);
-                itof::<3, 15>(c, 10, 10);
-                itof::<3, 15>(c, 11, 11);
-                vop::<6, 15>(c, ACC, 8, bc(c, 6, 0));
-                vop::<2, 15>(c, 8, 9, bc(c, 7, 0));
-                vop::<6, 15>(c, ACC, 10, bc(c, 6, 0));
-                vop::<2, 15>(c, 10, 11, bc(c, 7, 0));
-                a0 = a0.wrapping_add(16);
+                blend_pair::<false>(c, m, normalize, a3, t0, t4);
             }
-            sqc2(c, 8, t4);
-            sqc2(c, 10, t4 + 0x40);
         }
     } else {
         // One pose.
@@ -1512,9 +1724,9 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
         loop {
             p = p.wrapping_add(64);
             s = s.wrapping_add(32);
-            sqc2(c, 4, p + 16);
+            msq(c, m, 4, p + 16);
             n -= 1;
-            sqc2(c, 4, s);
+            msq(c, m, 4, s);
             if n <= 0 {
                 break;
             }
@@ -1522,12 +1734,12 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
         let (mut n, mut t0, mut p) = (nj, t6 | 0x2000, t6.wrapping_sub(256));
         loop {
             for k in 0..4 {
-                lqc2(c, 16 + k, t0 + 16 * k as u32);
+                mlq(c, m, 16 + k, t0 + 16 * k as u32);
             }
             p = p.wrapping_add(256);
             n -= 4;
             for k in 0..4u32 {
-                sqc2(c, 16 + k as usize, p + 0x20 + 0x40 * k);
+                msq(c, m, 16 + k as usize, p + 0x20 + 0x40 * k);
             }
             t0 = t0.wrapping_add(64);
             if n <= 0 {
@@ -1539,16 +1751,16 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
             let a3 = c.rd64(v0);
             let j = c.rd8(v0 + 6) as u32;
             v0 = v0.wrapping_add(8);
-            c.vf[8] = hu(a3);
+            m.vf[8] = hu(a3);
             let t4 = (j << 6).wrapping_add(t6);
-            itof::<3, 14>(c, 8, 8);
+            mitof::<3, 14>(m, 8, 8);
             if (a3 as i64) < 0 {
-                sqc2(c, 8, t4 + 16);
+                msq(c, m, 8, t4 + 16);
             } else {
                 let t1 = (j << 5).wrapping_add(t5);
                 c.wr32(s0 + 0xc, t1);
                 s0 = t1;
-                sqc2(c, 8, t1);
+                msq(c, m, 8, t1);
             }
         }
         c.wr32(s0 + 0xc, 0);
@@ -1557,27 +1769,27 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
             let a3 = c.rd64(v1);
             let j = c.rd8(v1 + 6) as i8 as i32;
             n -= 1;
-            c.vf[8] = hs(a3);
+            m.vf[8] = hs(a3);
             v1 = v1.wrapping_add(8);
-            itof::<0, 14>(c, 8, 8);
+            mitof::<0, 14>(m, 8, 8);
             let t0 = ((j << 6) as u32).wrapping_add(t6);
             let w = c.rd32(t0 + 0x2c);
-            sqc2(c, 8, t0 + 0x20);
+            msq(c, m, 8, t0 + 0x20);
             c.wr32(t0 + 0x2c, w);
         }
         let mut n = nj;
         let mut t4 = t6.wrapping_sub(64);
         let a3 = c.rd64(at);
         at = at.wrapping_add(8);
-        c.vf[8] = hs(a3);
+        m.vf[8] = hs(a3);
         loop {
             let a3 = c.rd64(at);
-            itof::<3, 15>(c, 9, 8);
+            mitof::<3, 15>(m, 9, 8);
             n -= 1;
             at = at.wrapping_add(8);
-            c.vf[8] = hs(a3);
+            m.vf[8] = hs(a3);
             t4 = t4.wrapping_add(64);
-            sqc2(c, 9, t4);
+            msq(c, m, 9, t4);
             if n <= 0 {
                 break;
             }
@@ -1588,179 +1800,148 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
         let cnt = c.rd16(t9 + 2) as u32;
         let madr = c.rd32(t9 + 0x10);
         let q = cnt + cnt + cnt;
+        m.store(c);
         spr_to(c, 0x100, madr, q, 0x2000);
+        *m = Vm::load(c);
         let wgt = c.rd32(t9 + 8);
         let mut t1 = SPR + 0x2000;
         let t0 = (q << 4).wrapping_add(t1);
-        c.vf[21] = [wgt, (sx(wgt) >> 32) as u32, 0, 0];
+        m.vf[21] = [wgt, (sx(wgt) >> 32) as u32, 0, 0];
         t9 = c.rd32(t9 + 0x1c);
-        vop::<1, 8>(c, 20, 4, c.vf[21]);
+        mop::<1, 8, false>(m, 20, 4, m.vf[21]);
         loop {
             let at = c.rd32(t1 + 0x2c);
             t1 = t1.wrapping_add(0x30);
-            lqc2(c, 13, t1 - 0x30);
-            lqc2(c, 14, t1 - 0x20);
-            lqc2(c, 15, t1 - 0x10);
-            lqc2(c, 10, at);
-            lqc2(c, 11, at + 16);
-            lqc2(c, 12, at + 32);
-            vop::<6, 15>(c, 10, 10, bc(c, 20, 0));
-            vop::<6, 15>(c, 13, 13, bc(c, 21, 0));
-            vop::<6, 14>(c, 11, 11, bc(c, 20, 0));
-            vop::<6, 14>(c, 14, 14, bc(c, 21, 0));
-            vop::<6, 14>(c, 12, 12, bc(c, 20, 0));
-            vop::<6, 14>(c, 15, 15, bc(c, 21, 0));
-            vop::<0, 15>(c, 16, 10, c.vf[13]);
-            vop::<6, 15>(c, 18, 10, c.vf[13]);
-            vop::<0, 14>(c, 11, 11, c.vf[14]);
-            vop::<0, 14>(c, 12, 12, c.vf[15]);
-            vop::<6, 15>(c, 17, 16, c.vf[16]);
-            sum4y(c, 18);
-            sum4x(c, 17);
+            mlq(c, m, 13, t1 - 0x30);
+            mlq(c, m, 14, t1 - 0x20);
+            mlq(c, m, 15, t1 - 0x10);
+            mlq(c, m, 10, at);
+            mlq(c, m, 11, at + 16);
+            mlq(c, m, 12, at + 32);
+            mop::<6, 15, false>(m, 10, 10, mbc(m, 20, 0));
+            mop::<6, 15, false>(m, 13, 13, mbc(m, 21, 0));
+            mop::<6, 14, false>(m, 11, 11, mbc(m, 20, 0));
+            mop::<6, 14, false>(m, 14, 14, mbc(m, 21, 0));
+            mop::<6, 14, false>(m, 12, 12, mbc(m, 20, 0));
+            mop::<6, 14, false>(m, 15, 15, mbc(m, 21, 0));
+            mop::<0, 15, false>(m, 16, 10, m.vf[13]);
+            mop::<6, 15, false>(m, 18, 10, m.vf[13]);
+            mop::<0, 14, false>(m, 11, 11, m.vf[14]);
+            mop::<0, 14, false>(m, 12, 12, m.vf[15]);
+            mop::<6, 15, false>(m, 17, 16, m.vf[16]);
+            msum4y::<false>(m, 18);
+            msum4x::<false>(m, 17);
             // QMFC2 v0, vf18 (0x43A674): v0 whole, whose high half the skin job keeps in VU0's quadword 255.
-            (c.r[2], c.rh[2]) = qmfc2(c, 18);
+            (c.r[2], c.rh[2]) = mqmfc2(m, 18);
             if (c.r[2] as i64) < 0 {
-                vop::<1, 15>(c, 16, 10, c.vf[13]);
-                vop::<6, 15>(c, 17, 16, c.vf[16]);
-                sum4x(c, 17);
+                mop::<1, 15, false>(m, 16, 10, m.vf[13]);
+                mop::<6, 15, false>(m, 17, 16, m.vf[16]);
+                msum4x::<false>(m, 17);
             }
-            qop::<2>(c, c.vf[0][3], c.vf[17][0]);
-            sqc2(c, 11, at + 16);
-            sqc2(c, 12, at + 32);
+            qop::<2>(c, m.vf[0][3], m.vf[17][0]);
+            msq(c, m, 11, at + 16);
+            msq(c, m, 12, at + 32);
             let had = c.rd32(at + 0x1c);
             let v1 = c.rd32(t1 - 0x14);
             if had == 0 {
                 c.wr32(at + 0x1c, v1);
             }
-            vop::<6, 15>(c, 10, 16, qq(c));
-            sqc2(c, 10, at);
+            mop::<6, 15, false>(m, 10, 16, qqf(c));
+            msq(c, m, 10, at);
             if t1 == t0 {
                 break;
             }
         }
     }
     // The record's second list (+0xC): a joint's rotation times the entry's (byte +3 0) or mixed with it by its weight.
-    vmove::<15>(c, 19, c.vf[0]);
+    mmove::<15>(m, 19, m.vf[0]);
     while t8 != 0 {
         let v1 = t8;
         let at = c.rd32(v1 + 4);
         let kind = c.rd8(v1 + 3);
-        lqc2(c, 8, at);
-        lqc2(c, 10, at + 16);
-        lqc2(c, 12, at + 32);
-        lqc2(c, 9, v1 + 16);
-        lqc2(c, 11, v1 + 32);
-        lqc2(c, 13, v1 + 48);
+        mlq(c, m, 8, at);
+        mlq(c, m, 10, at + 16);
+        mlq(c, m, 12, at + 32);
+        mlq(c, m, 9, v1 + 16);
+        mlq(c, m, 11, v1 + 32);
+        mlq(c, m, 13, v1 + 48);
         t8 = c.rd32(v1 + 8);
         if kind == 0 {
-            vop::<6, 1>(c, 14, 9, c.vf[8]);
-            vop::<6, 14>(c, 15, 9, c.vf[8]);
-            vop::<6, 14>(c, 16, 9, bc(c, 8, 3));
-            vop::<6, 14>(c, 17, 8, bc(c, 9, 3));
+            mop::<6, 1, false>(m, 14, 9, m.vf[8]);
+            mop::<6, 14, false>(m, 15, 9, m.vf[8]);
+            mop::<6, 14, false>(m, 16, 9, mbc(m, 8, 3));
+            mop::<6, 14, false>(m, 17, 8, mbc(m, 9, 3));
+            m.store(c);
             uycpu::vu0::opmula(c, 8, 9);
             uycpu::vu0::opmsub(c, 18, 9, 8);
-            vop::<0, 8>(c, ACC, 15, bc(c, 15, 1));
-            vop::<2, 8>(c, 15, 4, bc(c, 15, 2));
-            vop::<0, 14>(c, 8, 16, c.vf[17]);
-            vop::<0, 14>(c, 8, 8, c.vf[18]);
-            vop::<1, 1>(c, 8, 14, bc(c, 15, 0));
-            vop::<6, 14>(c, 19, 10, c.vf[11]);
-            vop::<0, 14>(c, 12, 12, c.vf[13]);
+            *m = Vm::load(c);
+            mop::<0, 8, false>(m, ACC, 15, mbc(m, 15, 1));
+            mop::<2, 8, false>(m, 15, 4, mbc(m, 15, 2));
+            mop::<0, 14, false>(m, 8, 16, m.vf[17]);
+            mop::<0, 14, false>(m, 8, 8, m.vf[18]);
+            mop::<1, 1, false>(m, 8, 14, mbc(m, 15, 0));
+            mop::<6, 14, false>(m, 19, 10, m.vf[11]);
+            mop::<0, 14, false>(m, 12, 12, m.vf[13]);
         } else {
             let wv = c.rd32(v1 + 0xc);
-            c.vf[20] = [wv, (sx(wv) >> 32) as u32, 0, 0];
-            vop::<1, 1>(c, 20, 0, bc(c, 20, 0));
-            vop::<6, 15>(c, 8, 8, bc(c, 20, 3));
-            vop::<6, 15>(c, 9, 9, bc(c, 20, 0));
-            vop::<6, 14>(c, 10, 10, bc(c, 20, 3));
-            vop::<6, 14>(c, 11, 11, bc(c, 20, 0));
-            vop::<6, 14>(c, 12, 12, bc(c, 20, 3));
-            vop::<6, 14>(c, 13, 13, bc(c, 20, 0));
-            vop::<0, 15>(c, 16, 8, c.vf[9]);
-            vop::<6, 15>(c, 18, 8, c.vf[9]);
-            vop::<0, 14>(c, 19, 10, c.vf[11]);
-            vop::<0, 14>(c, 12, 12, c.vf[13]);
-            vop::<6, 15>(c, 17, 16, c.vf[16]);
-            sum4y(c, 18);
-            sum4x(c, 17);
+            m.vf[20] = [wv, (sx(wv) >> 32) as u32, 0, 0];
+            mop::<1, 1, false>(m, 20, 0, mbc(m, 20, 0));
+            mop::<6, 15, false>(m, 8, 8, mbc(m, 20, 3));
+            mop::<6, 15, false>(m, 9, 9, mbc(m, 20, 0));
+            mop::<6, 14, false>(m, 10, 10, mbc(m, 20, 3));
+            mop::<6, 14, false>(m, 11, 11, mbc(m, 20, 0));
+            mop::<6, 14, false>(m, 12, 12, mbc(m, 20, 3));
+            mop::<6, 14, false>(m, 13, 13, mbc(m, 20, 0));
+            mop::<0, 15, false>(m, 16, 8, m.vf[9]);
+            mop::<6, 15, false>(m, 18, 8, m.vf[9]);
+            mop::<0, 14, false>(m, 19, 10, m.vf[11]);
+            mop::<0, 14, false>(m, 12, 12, m.vf[13]);
+            mop::<6, 15, false>(m, 17, 16, m.vf[16]);
+            msum4y::<false>(m, 18);
+            msum4x::<false>(m, 17);
             // QMFC2 v0, vf18 (0x43A7A4), as above.
-            (c.r[2], c.rh[2]) = qmfc2(c, 18);
+            (c.r[2], c.rh[2]) = mqmfc2(m, 18);
             if (c.r[2] as i64) < 0 {
-                vop::<1, 15>(c, 16, 8, c.vf[9]);
-                vop::<6, 15>(c, 17, 16, c.vf[16]);
-                sum4x(c, 17);
+                mop::<1, 15, false>(m, 16, 8, m.vf[9]);
+                mop::<6, 15, false>(m, 17, 16, m.vf[16]);
+                msum4x::<false>(m, 17);
             }
-            qop::<2>(c, c.vf[0][3], c.vf[17][0]);
-            vop::<6, 15>(c, 8, 16, qq(c));
+            qop::<2>(c, m.vf[0][3], m.vf[17][0]);
+            mop::<6, 15, false>(m, 8, 16, qqf(c));
         }
-        sqc2(c, 8, at);
-        sqc2(c, 19, at + 16);
-        sqc2(c, 12, at + 32);
+        msq(c, m, 8, at);
+        msq(c, m, 19, at + 16);
+        msq(c, m, 12, at + 32);
     }
     // The bind matrices to 0x1C00 (the skin recording takes this transfer too), then each joint's local matrix.
     let bind = c.rd32(rec + 0x1c);
     let mark = SPR + ((nj as u32) << 6) + 0x1bfc;
     c.wr32(mark, u32::MAX);
+    m.store(c);
     spr_to(c, 0x1d00, bind, (nj as u32) << 2, 0x1c00);
+    *m = Vm::load(c);
     let end = SPR + ((nj as u32) << 6);
     let mut a3 = SPR;
+    // Everything the loop reads that it does not load or make from what it loads: VF0 to VF3 (the constants made at the top).
+    let fast_base = finite4(m.vf[0]) && finite4(m.vf[1]) && finite4(m.vf[2]) && finite4(m.vf[3]);
     loop {
-        lqc2(c, 10, a3);
-        vmove::<15>(c, 16, c.vf[1]);
-        vop::<0, 15>(c, 11, 10, c.vf[10]);
-        vmove::<15>(c, 17, c.vf[2]);
-        vmove::<15>(c, 18, c.vf[3]);
-        vmove::<15>(c, 19, c.vf[0]);
-        vop::<6, 14>(c, 12, 11, bc(c, 10, 3));
-        vop::<6, 14>(c, 13, 11, bc(c, 10, 0));
-        vop::<6, 6>(c, 14, 11, bc(c, 10, 1));
-        vop::<6, 2>(c, 15, 11, bc(c, 10, 2));
-        vop::<0, 8>(c, 17, 0, bc(c, 12, 2));
-        vop::<1, 8>(c, 18, 0, bc(c, 12, 1));
-        vop::<0, 4>(c, 18, 0, bc(c, 12, 0));
-        vop::<1, 8>(c, 16, 16, bc(c, 14, 1));
-        vop::<1, 4>(c, 17, 17, bc(c, 13, 0));
-        vop::<1, 2>(c, 18, 18, bc(c, 13, 0));
-        vop::<1, 4>(c, 16, 13, bc(c, 12, 2));
-        vop::<0, 2>(c, 16, 13, bc(c, 12, 1));
-        vop::<1, 2>(c, 17, 14, bc(c, 12, 0));
-        vop::<0, 8>(c, 17, 17, bc(c, 13, 1));
-        vop::<0, 8>(c, 18, 18, bc(c, 13, 2));
-        vop::<0, 4>(c, 18, 18, bc(c, 14, 2));
+        // All its loads come first: the stores are at its end.
+        let q10 = c.rd128(a3);
+        let t0 = c.rd32(a3 + 0x1c);
+        let t1 = c.rd32(a3 + 0x2c);
+        let q8 = c.rd128(a3 + 0x10);
+        let q9 = c.rd128(a3 + 0x20);
+        let par = if t1 != 0 { Some([c.rd128(t1), c.rd128(t1 + 16), c.rd128(t1 + 32), c.rd128(t1 + 48)]) } else { None };
         a3 = a3.wrapping_add(64);
-        vop::<1, 8>(c, 16, 16, bc(c, 15, 2));
-        let t0 = c.rd32(a3 - 0x24);
-        vop::<1, 4>(c, 17, 17, bc(c, 15, 2));
-        let t1 = c.rd32(a3 - 0x14);
-        vop::<1, 2>(c, 18, 18, bc(c, 14, 1));
-        lqc2(c, 8, a3 - 0x30);
-        lqc2(c, 9, a3 - 0x20);
-        if t0 != 0 {
-            vop::<6, 14>(c, 16, 16, bc(c, 8, 0));
-            vop::<6, 14>(c, 17, 17, bc(c, 8, 1));
-            vop::<6, 14>(c, 18, 18, bc(c, 8, 2));
-        }
-        vmove::<15>(c, 12, c.vf[1]);
-        if t1 == 0 {
-            vmove::<15>(c, 13, c.vf[2]);
-            vmove::<15>(c, 14, c.vf[3]);
-            vmove::<15>(c, 15, c.vf[0]);
+        let fast = fast_base
+            && finite4(w4(q10))
+            && finite3(w4(q9))
+            && (t0 == 0 || finite3(w4(q8)))
+            && par.map_or(true, |p| p.iter().all(|&q| finite4(w4(q))));
+        if fast {
+            local_matrix::<true>(c, m, a3, q10, q8, q9, t0, par);
         } else {
-            lqc2(c, 12, t1);
-            lqc2(c, 13, t1 + 16);
-            lqc2(c, 14, t1 + 32);
-            lqc2(c, 15, t1 + 48);
-        }
-        vop::<0, 14>(c, 19, 19, c.vf[9]);
-        rot3(c, 20, 12, 16);
-        rot3(c, 21, 12, 17);
-        rot3(c, 22, 12, 18);
-        vop::<6, 15>(c, ACC, 12, bc(c, 19, 0));
-        vop::<2, 15>(c, ACC, 13, bc(c, 19, 1));
-        vop::<2, 15>(c, ACC, 14, bc(c, 19, 2));
-        vop::<2, 15>(c, 23, 15, bc(c, 0, 3));
-        for k in 0..4u32 {
-            sqc2(c, 20 + k as usize, a3 - 0x40 + 16 * k);
+            local_matrix::<false>(c, m, a3, q10, q8, q9, t0, par);
         }
         if a3 == end {
             break;
@@ -1774,39 +1955,33 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
         if t4 == 0 {
             break;
         }
-        lqc2(c, 1, t4);
+        mlq(c, m, 1, t4);
         if two {
-            lqc2(c, 8, t4 + 16);
-            vop::<6, 14>(c, ACC, 1, bc(c, 6, 0));
-            vop::<2, 14>(c, 1, 8, bc(c, 7, 0));
+            mlq(c, m, 8, t4 + 16);
+            mop::<6, 14, false>(m, ACC, 1, mbc(m, 6, 0));
+            mop::<2, 14, false>(m, 1, 8, mbc(m, 7, 0));
         }
-        lqc2(c, 2, t3);
-        lqc2(c, 3, t3 + 16);
-        lqc2(c, 4, t3 + 32);
-        vop::<6, 14>(c, 2, 2, bc(c, 1, 0));
+        mlq(c, m, 2, t3);
+        mlq(c, m, 3, t3 + 16);
+        mlq(c, m, 4, t3 + 32);
+        mop::<6, 14, false>(m, 2, 2, mbc(m, 1, 0));
         t4 = c.rd32(t4 + 0xc);
-        vop::<6, 14>(c, 3, 3, bc(c, 1, 1));
-        vop::<6, 14>(c, 4, 4, bc(c, 1, 2));
-        sqc2(c, 2, t3);
-        sqc2(c, 3, t3 + 16);
-        sqc2(c, 4, t3 + 32);
+        mop::<6, 14, false>(m, 3, 3, mbc(m, 1, 1));
+        mop::<6, 14, false>(m, 4, 4, mbc(m, 1, 2));
+        msq(c, m, 2, t3);
+        msq(c, m, 3, t3 + 16);
+        msq(c, m, 4, t3 + 32);
     }
     // Each joint's matrix times its bind matrix.
     let (mut t6, mut t5) = (SPR, SPR | 0x1c00);
+    let fast_base = finite4(m.vf[0]);
     loop {
-        lqc2(c, 15, t5 + 0x30);
-        lqc2(c, 14, t5 + 0x20);
-        lqc2(c, 13, t5 + 0x10);
-        lqc2(c, 12, t5);
-        for k in 0..4 {
-            lqc2(c, 20 + k, t6 + 16 * k as u32);
-        }
-        rot4(c, 19, 20, 15);
-        rot3(c, 16, 20, 12);
-        rot3(c, 17, 20, 13);
-        rot3(c, 18, 20, 14);
-        for k in 0..4u32 {
-            sqc2(c, 16 + k as usize, t6 + 16 * k);
+        let bind = [c.rd128(t5), c.rd128(t5 + 0x10), c.rd128(t5 + 0x20), c.rd128(t5 + 0x30)];
+        let mat = [c.rd128(t6), c.rd128(t6 + 16), c.rd128(t6 + 32), c.rd128(t6 + 48)];
+        if fast_base && bind.iter().all(|&q| finite3(w4(q))) && mat.iter().all(|&q| finite4(w4(q))) {
+            bind_matrix::<true>(c, m, t6, bind, mat);
+        } else {
+            bind_matrix::<false>(c, m, t6, bind, mat);
         }
         t5 = t5.wrapping_add(64);
         t6 = t6.wrapping_add(64);
@@ -1815,6 +1990,7 @@ fn f439e00(c: &mut Cpu, _k: F, rec: u32, staging: u32) {
         }
     }
     let _ = s1;
+    m.store(c);
 }
 
 // ---- 0x3F6FF0: the skin job (`uyafmt::moby`, "The skin job"; level 1 0x3F6FF0, func_003D00F8) -------------------------------
@@ -1860,13 +2036,6 @@ fn vu0_mat(c: &Cpu, q: u32) -> [V4; 4] {
 /// Joint matrix `j` (the scratchpad's 0x40 * j).
 fn joint(c: &mut Cpu, j: u32) -> [V4; 4] {
     std::array::from_fn(|k| rd_q(c, SPR + 64 * (j & 0xff) + 16 * k as u32))
-}
-
-/// The 8 bytes of a packed position at a 2-byte aligned address (`sdr`, `sdl`).
-fn wr_pos(c: &mut Cpu, a: u32, p: u64) {
-    for k in 0..4 {
-        c.wr16(a + 2 * k, (p >> (16 * k)) as u16);
-    }
 }
 
 fn bcx(x: u32) -> V4 {
@@ -2265,8 +2434,13 @@ fn row_scalar(c: &mut Cpu, lt: &Lights, m: &[V4; 4], b: &[u8; 16]) -> (V4, V4, V
 /// on the scalar path.
 fn mesh(c: &mut Cpu, buf: u32, out: u32, staging: u32, lt: &Lights) {
     use std::arch::x86_64::*;
-    let h = |c: &mut Cpu, o: u32| c.rd16(buf + o) as u32;
-    let (n0, g1, g2, g3, copies, vc, roff, cn) = (h(c, 0), h(c, 2), h(c, 4), h(c, 6), h(c, 8), h(c, 0xa), h(c, 0xc), h(c, 0xe));
+    // Packet B and the output arrays are always in the scratchpad (0x2000 to 0x3800), so their accesses take the scratchpad's
+    // offset without the two address-range tests of `Cpu::rd16` and the others; the asserts keep an address that is not the
+    // scratchpad's from wrapping silently.
+    let spr = c.spr;
+    assert!(buf & 0xffff_c000 == SPR && buf & 0x3fff <= 0x3800 && out & 0xffff_c000 == SPR);
+    let h = |o: u32| unsafe { (spr.add(((buf + o) & 0x3fff) as usize) as *const u16).read_unaligned() as u32 };
+    let (n0, g1, g2, g3, copies, vc, roff, cn) = (h(0), h(2), h(4), h(6), h(8), h(0xa), h(0xc), h(0xe));
     let rows = g1 + g2 + g3;
     count(4, g1);
     count(5, g2);
@@ -2274,12 +2448,18 @@ fn mesh(c: &mut Cpu, buf: u32, out: u32, staging: u32, lt: &Lights) {
     let pad = |x: u32| (x + 15) & !15;
     let positions = out + pad(4 * vc);
     let end = positions + pad(6 * vc);
+    assert!(end & 0xffff_c000 == SPR && (end - 1) & 0xffff_c000 == SPR && (buf + roff) & 0x3fff < 0x3800 && rows < 128);
+    let rd8s = |a: u32| unsafe { *spr.add((a & 0x3fff) as usize) };
+    let rd16s = |a: u32| unsafe { (spr.add((a & 0x3fff) as usize) as *const u16).read_unaligned() };
+    let wr16s = |a: u32, v: u16| unsafe { (spr.add((a & 0x3fff) as usize) as *mut u16).write_unaligned(v) };
+    let wr32s = |a: u32, v: u32| unsafe { (spr.add((a & 0x3fff) as usize) as *mut u32).write_unaligned(v) };
+    let wr64s = |a: u32, v: u64| unsafe { (spr.add((a & 0x3fff) as usize) as *mut u64).write_unaligned(v) };
     c.wr128(positions - 16, 0, 0);
     c.wr128(end - 16, 0, 0);
     c.wr32(SPR + 0x1fd0, (end - out) >> 4);
     // The pairs' joint matrices into VU0's data memory.
     for k in 0..n0 {
-        let (j, a) = (c.rd8(buf + 0x10 + 2 * k) as u32, c.rd8(buf + 0x11 + 2 * k) as u32);
+        let (j, a) = (rd8s(buf + 0x10 + 2 * k) as u32, rd8s(buf + 0x11 + 2 * k) as u32);
         let m = joint(c, j);
         for (r, row) in m.into_iter().enumerate() {
             vu0_put(c, a + r as u32, row);
@@ -2287,13 +2467,7 @@ fn mesh(c: &mut Cpu, buf: u32, out: u32, staging: u32, lt: &Lights) {
     }
     let copies_at = buf + 0x10 + ((2 * n0 + 7) & !7);
     let row_at = (buf + roff) & !15;
-    let row = |c: &mut Cpu, r: u32| -> [u8; 16] {
-        let (lo, hi) = c.rd128(row_at + 16 * r);
-        let mut b = [0u8; 16];
-        b[..8].copy_from_slice(&lo.to_le_bytes());
-        b[8..].copy_from_slice(&hi.to_le_bytes());
-        b
-    };
+    let row = |r: u32| -> [u8; 16] { unsafe { (spr.add(((row_at + 16 * r) & 0x3fff) as usize) as *const [u8; 16]).read_unaligned() } };
     let w = |b: u8| f(b as f32 / 256.0);
     let normals = crate::SKIN_JOINTS.load(Relaxed);
     // Each row's packed position and colour word (a mesh has under 128 rows: packet B is 0x800 bytes).
@@ -2311,17 +2485,20 @@ fn mesh(c: &mut Cpu, buf: u32, out: u32, staging: u32, lt: &Lights) {
     // The matrix of the last group 3 row, and the words that named it ((b2, b3, w0 >> 9)): the next row with the same ones leaves
     // VU0's data memory as it is (its put writes what the last row's put did, and its matrix is the last row's).
     let mut cur_key: Option<(u32, u32, u32)> = None;
-    let (mut cur_m, mut cur_255, mut cur_id) = ([[0u32; 4]; 4], false, 0u32);
-    let (mut ms, mut soa_id, mut soa) = ([[[0u32; 4]; 4]; 4], u32::MAX, unsafe { [[_mm_setzero_ps(); 4]; 4] });
+    // The matrices of the rows in flight live in a ring of eight slots (a group of four rows names at most four new ones and
+    // the one before them); `cur_s` is the slot of the last row's, a row only records its slot.
+    let (mut pool, mut nslot, mut cur_s, mut cur_255, mut cur_id) = ([[[0u32; 4]; 4]; 8], 0usize, 0usize, false, 0u32);
+    let (mut soa_id, mut soa) = (u32::MAX, unsafe { [[_mm_setzero_ps(); 4]; 4] });
     let mut start = 0u32;
     while start < rows {
         let n = (rows - start).min(4) as usize;
         let mut bs = [[0u8; 16]; 4];
         let mut ids = [0u32; 4];
+        let mut sl = [0usize; 4];
         let mut any_255 = false;
         for i in 0..n {
             let r = start + i as u32;
-            let b = row(c, r);
+            let b = row(r);
             bs[i] = b;
             let w0 = u16::from_le_bytes([b[0], b[1]]) as u32;
             let (b2, b3) = (b[2] as u32, b[3] as u32);
@@ -2336,33 +2513,47 @@ fn mesh(c: &mut Cpu, buf: u32, out: u32, staging: u32, lt: &Lights) {
                 for k in 0..4 {
                     vu0_put(c, b[7] as u32 + k, m[k as usize]);
                 }
-                (cur_key, cur_m, cur_255, cur_id) = (None, m, m_255(&m), cur_id + 1);
+                (cur_key, cur_255, cur_id) = (None, m_255(&m), cur_id + 1);
+                nslot += 1;
+                cur_s = nslot & 7;
+                pool[cur_s] = m;
             } else if r < g1 + g2 {
                 let m = blend(&[vu0_mat(c, b2), vu0_mat(c, b3), vu0_mat(c, 2 * (w0 >> 9))], &[w(b[4]), w(b[5]), w(b[6])]);
                 for k in 0..4 {
                     vu0_put(c, b[7] as u32 + k, m[k as usize]);
                 }
-                (cur_key, cur_m, cur_255, cur_id) = (None, m, m_255(&m), cur_id + 1);
+                (cur_key, cur_255, cur_id) = (None, m_255(&m), cur_id + 1);
+                nslot += 1;
+                cur_s = nslot & 7;
+                pool[cur_s] = m;
             } else if cur_key != Some((b2, b3, w0 >> 9)) {
                 let own = joint(c, w0 >> 9);
                 for k in 0..4 {
                     vu0_put(c, b3 + k, own[k as usize]);
                 }
                 let m = vu0_mat(c, b2);
-                (cur_key, cur_m, cur_255, cur_id) = (Some((b2, b3, w0 >> 9)), m, m_255(&m), cur_id + 1);
+                (cur_key, cur_255, cur_id) = (Some((b2, b3, w0 >> 9)), m_255(&m), cur_id + 1);
+                nslot += 1;
+                cur_s = nslot & 7;
+                pool[cur_s] = m;
             }
             ids[i] = cur_id;
-            ms[i] = cur_m;
+            sl[i] = cur_s;
             any_255 |= cur_255;
         }
-        // The trig words of the rows' angles (the missing rows of the last group repeat the last row's).
-        let mut tg = [[0u32; 4]; 4];
-        for i in 0..4 {
-            let b = &bs[i.min(n - 1)];
-            let ((ca, sa), (cb, sb)) = (trig(c, b[8]), trig(c, b[9]));
-            tg[i] = [ca, sa, cb, sb];
-        }
-        let t = unsafe { std::array::from_fn::<__m128i, 4, _>(|l| _mm_setr_epi32(tg[0][l] as i32, tg[1][l] as i32, tg[2][l] as i32, tg[3][l] as i32)) };
+        // The trig words of the rows' angles (the missing rows of the last group repeat the last row's): each row's (cos A, sin A)
+        // and (cos B, sin B) pairs as 8-byte loads, transposed so that t[l] holds word l of the four rows.
+        let t = unsafe {
+            let pair = |i: u8| _mm_loadl_epi64(spr.add(0x3800 + 8 * i as usize) as *const __m128i);
+            let ab = |i: usize| {
+                let b = &bs[i.min(n - 1)];
+                _mm_unpacklo_epi64(pair(b[8]), pair(b[9]))
+            };
+            let (r0, r1, r2, r3) = (ab(0), ab(1), ab(2), ab(3));
+            let (lo01, lo23) = (_mm_unpacklo_epi32(r0, r1), _mm_unpacklo_epi32(r2, r3));
+            let (hi01, hi23) = (_mm_unpackhi_epi32(r0, r1), _mm_unpackhi_epi32(r2, r3));
+            [_mm_unpacklo_epi64(lo01, lo23), _mm_unpackhi_epi64(lo01, lo23), _mm_unpacklo_epi64(hi01, hi23), _mm_unpackhi_epi64(hi01, hi23)]
+        };
         let e = unsafe { _mm_set1_epi32(0x7f80_0000) };
         let t_255 = unsafe {
             let o = |v: __m128i| _mm_cmpeq_epi32(_mm_and_si128(v, e), e);
@@ -2371,7 +2562,7 @@ fn mesh(c: &mut Cpu, buf: u32, out: u32, staging: u32, lt: &Lights) {
         if any_255 || t_255 {
             for i in 0..n {
                 let r = start + i as u32;
-                let (lit, ints, nrm) = row_scalar(c, lt, &ms[i], &bs[i]);
+                let (lit, ints, nrm) = row_scalar(c, lt, &pool[sl[i]], &bs[i]);
                 normal(c, nrm);
                 to_vf(c, r, lit, ints);
                 (pk[r as usize], cl[r as usize]) = (pack(ints), colour_of(lit));
@@ -2379,19 +2570,19 @@ fn mesh(c: &mut Cpu, buf: u32, out: u32, staging: u32, lt: &Lights) {
         } else {
             if ids[..n].iter().all(|&i| i == ids[0]) {
                 if soa_id != ids[0] {
-                    soa = soa_one(&cur_m);
+                    soa = soa_one(&pool[cur_s]);
                     soa_id = ids[0];
                 }
             } else {
-                for i in n..4 {
-                    ms[i] = ms[n - 1];
-                }
+                let ms: [[V4; 4]; 4] = std::array::from_fn(|i| pool[sl[i.min(n - 1)]]);
                 soa = soa_four(&ms);
                 soa_id = u32::MAX;
             }
             let p: [__m128; 3] = unsafe {
+                // Each row's x, y, z halfwords: bytes 10 to 15 of its row, the top six of its second doubleword.
+                let v: [u64; 4] = std::array::from_fn(|i| u64::from_le_bytes(bs[i.min(n - 1)][8..16].try_into().unwrap()) >> 16);
                 std::array::from_fn(|l| {
-                    let x = |i: usize| i16::from_le_bytes([bs[i.min(n - 1)][10 + 2 * l], bs[i.min(n - 1)][11 + 2 * l]]) as i32;
+                    let x = |i: usize| (v[i] >> (16 * l)) as i16 as i32;
                     _mm_cvtepi32_ps(_mm_setr_epi32(x(0), x(1), x(2), x(3)))
                 })
             };
@@ -2425,52 +2616,54 @@ fn mesh(c: &mut Cpu, buf: u32, out: u32, staging: u32, lt: &Lights) {
     // The EE's last pass (fp, (rows - 3) % 4 rows after its loop of four): row r's outputs at index r and in the staging record
     // the row 7 after it names (the last rows': the halfwords 2 to 7 of the row its loop read last).
     let fp = (rows - 3) % 4;
-    let named = |c: &mut Cpu, r: u32| -> u32 {
+    let named = |r: u32| -> u32 {
         let j = r + 7;
         let last = rows + 3 - fp;
         if j <= last {
-            c.rd16(row_at + 16 * j) as u32 & 0x1ff
+            rd16s(row_at + 16 * j) as u32 & 0x1ff
         } else {
             let lane = (j - last + 1) as u32;
-            c.rd16(row_at + 16 * last + 2 * lane) as u32 & 0x1ff
+            rd16s(row_at + 16 * last + 2 * lane) as u32 & 0x1ff
         }
     };
     for r in 0..rows {
         let (p, col) = (pk[r as usize], cl[r as usize]);
-        c.wr32(out + 4 * r, col);
+        wr32s(out + 4 * r, col);
         // The last row's position: x, y and z alone when it ends at a doubleword's end (fp 1), else with its w.
         if r + 1 == rows && fp == 1 {
             for k in 0..3 {
-                c.wr16(positions + 6 * r + 2 * k, (p >> (16 * k)) as u16);
+                wr16s(positions + 6 * r + 2 * k, (p >> (16 * k)) as u16);
             }
         } else {
-            c.wr64(positions + 6 * r, p);
+            wr64s(positions + 6 * r, p);
         }
-        let at = staging + 16 * named(c, r);
+        let at = staging + 16 * named(r);
         c.wr64(at, p);
         c.wr32(at + 8, col);
     }
     // With fp 0 or 2 the EE stores its colours in pairs one row past the end: the colour of row rows - 2 (VF09's).
     if fp % 2 == 0 {
         let col = cl[rows as usize - 2];
-        c.wr32(out + 4 * rows, col);
+        wr32s(out + 4 * rows, col);
     }
     // The vertex copies from the staging records.
     for k in 0..copies {
-        let slot = (c.rd16(copies_at + 2 * k) as u32 >> 7) & 0x1ff;
+        let slot = (rd16s(copies_at + 2 * k) as u32 >> 7) & 0x1ff;
         let at = staging + 16 * slot;
         let (p, col) = (c.rd64(at), c.rd32(at + 8));
-        wr_pos(c, positions + 6 * (rows + k), p);
-        c.wr32(out + 4 * (rows + k), col);
+        for q in 0..4 {
+            wr16s(positions + 6 * (rows + k) + 2 * q, (p >> (16 * q)) as u16);
+        }
+        wr32s(out + 4 * (rows + k), col);
     }
     let colours_end = out + 4 * vc;
     if colours_end & 7 != 0 {
-        c.wr32(colours_end, 0);
+        wr32s(colours_end, 0);
     }
     // The last `cn` colours: the record's flat colour.
     let flat = c.rd32(SPR + 0x1c6c);
     for k in 1..=cn {
-        c.wr32(colours_end - 4 * k, flat);
+        wr32s(colours_end - 4 * k, flat);
     }
 }
 

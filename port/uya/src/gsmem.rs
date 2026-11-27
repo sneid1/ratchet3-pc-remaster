@@ -8,11 +8,23 @@
 
 const WORDS: usize = 1 << 20;
 
-#[derive(Clone)]
+/// The transfers queued past this many bytes are written at the next frame, read or not (a read after a long gap is not one huge
+/// write): twice GS memory's size, which a frame's own never comes near.
+const PENDING_CAP: usize = 8 << 20;
+
 pub(crate) struct GsMemory {
     words: Vec<u32>,
-    /// Counts the transfers (a texture read from here is the same while this is).
+    /// Counts the transfers written that changed a word (a texture read from here is the same while this is).
     pub sent: u64,
+    /// The transfers taken (`queue`) and not yet written, in the order the game sent them; None where a later transfer of the same
+    /// place and a whole image took its place. Written by `settle`, which every reader of the words calls first.
+    pending: Vec<Option<uyart::hw::GsUpload>>,
+    /// The latest queued transfer of each (BITBLTBUF, TRXPOS, TRXREG), its place in `pending`.
+    latest: std::collections::HashMap<(u64, u64, u64), usize>,
+    /// The queued data's bytes.
+    pending_bytes: usize,
+    /// The set written by the last `settle` that wrote one.
+    settled: Vec<uyart::hw::GsUpload>,
 }
 
 /// The blocks of a page: PSMCT32's (and PSMT8's), PSMCT16's (and PSMT4's) and PSMCT16S's; a Z format's are its colour format's
@@ -182,18 +194,92 @@ pub(crate) fn colour(psm: u64, v: u32, texa: Option<u64>) -> Result<[u8; 4], Str
     })
 }
 
+/// The texels `len` bytes hold at `b` bits a texel.
+fn held_texels(b: u32, len: usize) -> usize {
+    match b {
+        32 => len / 4,
+        24 => len / 3,
+        16 => len / 2,
+        8 => len,
+        _ => len * 2,
+    }
+}
+
 impl GsMemory {
     pub fn new() -> GsMemory {
-        GsMemory { words: vec![0; WORDS], sent: 0 }
+        GsMemory { words: vec![0; WORDS], sent: 0, pending: Vec::new(), latest: std::collections::HashMap::new(), pending_bytes: 0, settled: Vec::new() }
+    }
+
+    /// Takes transfers to write when something reads the memory (`settle`), in the order the game sent them. Each transfer writes
+    /// its texels whatever the memory held, so a transfer whose place (BITBLTBUF, TRXPOS, TRXREG) a later one writes again with
+    /// every texel of its image takes the earlier one's place: the memory read is the same, and the queue stays one frame's
+    /// worth where the game sends the same textures each field (level 9's ground), not a frame's more each frame.
+    pub fn queue(&mut self, uploads: Vec<uyart::hw::GsUpload>) {
+        for u in uploads {
+            let key = (u.bitbltbuf, u.trxpos, u.trxreg);
+            if Self::whole(&u) {
+                if let Some(old) = self.latest.get(&key).and_then(|&i| self.pending[i].take()) {
+                    self.pending_bytes -= old.data.len() * 16;
+                }
+            }
+            self.pending_bytes += u.data.len() * 16;
+            self.latest.insert(key, self.pending.len());
+            self.pending.push(Some(u));
+        }
+    }
+
+    /// Whether the transfer's data holds every texel of its w x h (one that ends short writes only the texels it holds, and
+    /// takes no earlier transfer's place); a transfer of no GS format is not (`upload` names it when it is written).
+    fn whole(u: &uyart::hw::GsUpload) -> bool {
+        let Ok(b) = bits(u.bitbltbuf >> 56 & 0x3f) else { return false };
+        let (w, h) = ((u.trxreg & 0xfff) as usize, (u.trxreg >> 32 & 0xfff) as usize);
+        held_texels(b, u.data.len() * 16) >= w * h
+    }
+
+    /// Writes the queued transfers, in order, unless they are the set written last: the same set written again leaves the memory
+    /// as it is (on level 9's ground almost every frame's 118 transfers, 785 KB, are the frame before's, and writing them was
+    /// 0.8 ms of the render thread). Called first by whatever reads or replaces the memory.
+    pub fn settle(&mut self) -> Result<(), String> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let pending: Vec<uyart::hw::GsUpload> = std::mem::take(&mut self.pending).into_iter().flatten().collect();
+        self.latest.clear();
+        self.pending_bytes = 0;
+        let same = |a: &uyart::hw::GsUpload, b: &uyart::hw::GsUpload| (a.bitbltbuf, a.trxpos, a.trxreg) == (b.bitbltbuf, b.trxpos, b.trxreg) && a.data == b.data;
+        if pending.len() == self.settled.len() && pending.iter().zip(&self.settled).all(|(a, b)| same(a, b)) {
+            return Ok(());
+        }
+        for u in &pending {
+            self.upload(u.bitbltbuf, u.trxpos, u.trxreg, &u.data)?;
+        }
+        self.settled = pending;
+        Ok(())
+    }
+
+    /// `settle` when more than `PENDING_CAP` bytes are queued.
+    pub fn settle_over_cap(&mut self) -> Result<(), String> {
+        if self.pending_bytes > PENDING_CAP {
+            self.settle()?;
+        }
+        Ok(())
+    }
+
+    /// A copy of the memory as the transfers taken so far leave it, to write more into (`eedraw`'s `beyond_upload`).
+    pub fn snapshot(&mut self) -> Result<GsMemory, String> {
+        self.settle()?;
+        Ok(GsMemory { words: self.words.clone(), sent: self.sent, pending: Vec::new(), latest: std::collections::HashMap::new(), pending_bytes: 0, settled: Vec::new() })
     }
 
     /// The memory's words to `path` (the debugging switch `UYA_GSM_DUMP_AT`: a live run's GS memory for `uya native` to redraw a
     /// dumped field with, `UYA_GSM_LOAD`).
-    pub fn dump(&self, path: &str) -> Result<(), String> {
+    pub fn dump(&mut self, path: &str) -> Result<(), String> {
+        self.settle()?;
         std::fs::write(path, bytemuck::cast_slice::<u32, u8>(&self.words)).map_err(|e| format!("{path}: {e}"))
     }
 
     pub fn load(&mut self, path: &str) -> Result<(), String> {
+        self.settle()?;
         let b = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
         if b.len() != 4 * WORDS {
             return Err(format!("{path}: {} bytes, not GS memory's {}", b.len(), 4 * WORDS));
@@ -207,7 +293,6 @@ impl GsMemory {
     /// TRXPOS's corner row by row, each its format's bits (PSMCT24: three bytes); a transfer whose data ends short writes the
     /// texels it holds, as the GS does before the rest comes.
     pub fn upload(&mut self, bitblt: u64, trxpos: u64, trxreg: u64, data: &[u128]) -> Result<(), String> {
-        self.sent += 1;
         let (dbp, bw, psm) = ((bitblt >> 32 & 0x3fff) as u32, (bitblt >> 48 & 0x3f) as u32, bitblt >> 56 & 0x3f);
         let (x0, y0) = ((trxpos >> 32 & 0x7ff) as u32, (trxpos >> 48 & 0x7ff) as u32);
         let (w, h) = ((trxreg & 0xfff) as u32, (trxreg >> 32 & 0xfff) as u32);
@@ -215,28 +300,25 @@ impl GsMemory {
         let bytes: &[u8] = bytemuck::cast_slice(data);
         let mask = if b == 32 { u32::MAX } else { (1u32 << b) - 1 };
         // The texels the data holds, of the w x h (a transfer whose data ends short writes the texels it holds).
-        let held = match b {
-            32 => bytes.len() / 4,
-            24 => bytes.len() / 3,
-            16 => bytes.len() / 2,
-            8 => bytes.len(),
-            _ => bytes.len() * 2,
-        };
+        let held = held_texels(b, bytes.len());
         let n = ((w * h) as usize).min(held);
-        match b {
+        let changed = match b {
             32 => self.fill(psm, dbp, bw, (x0, y0, w), n, mask, |i| u32::from_le_bytes([bytes[4 * i], bytes[4 * i + 1], bytes[4 * i + 2], bytes[4 * i + 3]])),
             24 => self.fill(psm, dbp, bw, (x0, y0, w), n, mask, |i| u32::from_le_bytes([bytes[3 * i], bytes[3 * i + 1], bytes[3 * i + 2], 0])),
             16 => self.fill(psm, dbp, bw, (x0, y0, w), n, mask, |i| u16::from_le_bytes([bytes[2 * i], bytes[2 * i + 1]]) as u32),
             8 if psm == 0x13 => self.fill_t8(dbp, bw, (x0, y0, w), &bytes[..n]),
             8 => self.fill(psm, dbp, bw, (x0, y0, w), n, mask, |i| bytes[i] as u32),
             _ => self.fill(psm, dbp, bw, (x0, y0, w), n, mask, |i| (bytes[i / 2] >> (4 * (i % 2)) & 15) as u32),
-        }
+        };
+        // A transfer that writes the texels the memory holds already leaves every texture read from it as it was.
+        self.sent += changed as u64;
         Ok(())
     }
 
     /// The first `n` texels of a transfer `w` wide from (x0, y0), row by row, texel i's value `value(i)`, each written under `mask`.
+    /// Whether a word changed.
     #[inline(always)]
-    fn fill(&mut self, psm: u64, dbp: u32, bw: u32, at: (u32, u32, u32), n: usize, mask: u32, value: impl Fn(usize) -> u32) {
+    fn fill(&mut self, psm: u64, dbp: u32, bw: u32, at: (u32, u32, u32), n: usize, mask: u32, value: impl Fn(usize) -> u32) -> bool {
         match kind(psm) {
             1 => self.fill_k::<1>(psm, dbp, bw, at, n, mask, value),
             2 => self.fill_k::<2>(psm, dbp, bw, at, n, mask, value),
@@ -248,9 +330,10 @@ impl GsMemory {
     /// `fill` of the format kind `K`. The 32-bit layout (0) and the 16-bit one (1) are written a column of eight texels at a time:
     /// the page and block are found once for the eight, and the words come from the row's column table.
     #[inline(always)]
-    fn fill_k<const K: u8>(&mut self, psm: u64, dbp: u32, bw: u32, (x0, y0, w): (u32, u32, u32), n: usize, mask: u32, value: impl Fn(usize) -> u32) {
+    fn fill_k<const K: u8>(&mut self, psm: u64, dbp: u32, bw: u32, (x0, y0, w): (u32, u32, u32), n: usize, mask: u32, value: impl Fn(usize) -> u32) -> bool {
         let words: &mut [u32; WORDS] = (&mut self.words[..]).try_into().expect("GS memory is WORDS words");
         let (mut i, mut row) = (0usize, 0u32);
+        let mut changed = false;
         while i < n {
             let r = Row::new(psm, dbp, bw, y0 + row);
             let end = n.min(i + w as usize);
@@ -267,7 +350,9 @@ impl GsMemory {
                     for (j, &c) in columns[..run].iter().enumerate() {
                         let k = base + c as usize;
                         let v = value(i + j);
-                        words[k] = if mask == u32::MAX { v } else { words[k] & !(mask << shift) | v << shift };
+                        let new = if mask == u32::MAX { v } else { words[k] & !(mask << shift) | v << shift };
+                        changed |= words[k] != new;
+                        words[k] = new;
                     }
                     i += run;
                     col += run as u32;
@@ -275,18 +360,22 @@ impl GsMemory {
             } else {
                 for (col, i) in (x0..).zip(i..end) {
                     let (k, shift) = r.at_k::<K>(col);
-                    words[k] = words[k] & !(mask << shift) | value(i) << shift;
+                    let new = words[k] & !(mask << shift) | value(i) << shift;
+                    changed |= words[k] != new;
+                    words[k] = new;
                 }
             }
             i = end;
             row += 1;
         }
+        changed
     }
 
     /// `fill` of PSMT8 (the textures the game sends each field): a texel is a byte of its word. A block's sixteen texels of a row
     /// are written together: the block is found once and the byte offsets of the row's texels come from a table.
-    fn fill_t8(&mut self, dbp: u32, bw: u32, (x0, y0, w): (u32, u32, u32), texels: &[u8]) {
+    fn fill_t8(&mut self, dbp: u32, bw: u32, (x0, y0, w): (u32, u32, u32), texels: &[u8]) -> bool {
         let bytes: &mut [u8; 4 * WORDS] = (&mut bytemuck::cast_slice_mut::<u32, u8>(&mut self.words)[..]).try_into().expect("GS memory is 4 * WORDS bytes");
+        let mut changed = false;
         for (row, line) in texels.chunks(w as usize).enumerate() {
             let r = Row::new(0x13, dbp, bw, y0 + row as u32);
             let yo = r.yy >> 1 & 1;
@@ -304,12 +393,14 @@ impl GsMemory {
                 let page = r.ypage + (x >> 7);
                 let base = (((dbp + page * 32 + r.blocks[(x >> 4 & 7) as usize]) * 64) as usize & (WORDS - 1)) * 4;
                 for (&v, o) in rest[..run].iter().zip(&off[(x & 15) as usize..]) {
+                    changed |= bytes[base + o] != v;
                     bytes[base + o] = v;
                 }
                 rest = &rest[run..];
                 col += run as u32;
             }
         }
+        changed
     }
 
     /// The value of texel (x, y) of the buffer of format `psm` at block `bp`, `bw` x 64 texels wide.

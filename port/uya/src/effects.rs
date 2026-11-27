@@ -124,6 +124,29 @@ impl Projection {
         [(u(0) / w + self.cam[0]) as f32, (u(1) / w + self.cam[1]) as f32, (u(2) / w + self.cam[2]) as f32]
     }
 
+    /// GS Z of the point at view depth `d` along the native camera `cam`'s pixel direction (sx, sy) (its tangents across and up:
+    /// the point eye + d (forward + sx right + sy up)), as program 6's matrix makes it: Z = o.z + k (d (a2 + sx b2 + sy c2) + e2)
+    /// / (d (a3 + sx b3 + sy c3) + e3). Returns o.z, k and the eight coefficients: column 2 (Z before the division) and column 3
+    /// (the division's) of M along the camera's forward, right and up, and at the eye.
+    pub fn gs_depth(&self, cam: &crate::native::Camera) -> Result<[f64; 10], String> {
+        let (e, f, u) = (cam.eye.map(|v| v as f64), cam.forward.map(|v| v as f64), cam.up.map(|v| v as f64));
+        let r = [f[1] * u[2] - f[2] * u[1], f[2] * u[0] - f[0] * u[2], f[0] * u[1] - f[1] * u[0]];
+        let col = |j: usize, v: [f64; 3]| v[0] * self.m[0][j] + v[1] * self.m[1][j] + v[2] * self.m[2][j];
+        let at = [e[0] - self.cam[0], e[1] - self.cam[1], e[2] - self.cam[2]];
+        let k = [col(2, f), col(2, r), col(2, u), col(2, at) + self.m[3][2], col(3, f), col(3, r), col(3, u), col(3, at) + self.m[3][3]];
+        // The same as the matrix's own product (`screen`'s) at a point off the view's axis.
+        let (d, sx, sy) = (100.0, 0.3, -0.2);
+        let p: [f64; 3] = std::array::from_fn(|i| e[i] + d * (f[i] + sx * r[i] + sy * u[i]));
+        let rr = [p[0] - self.cam[0], p[1] - self.cam[1], p[2] - self.cam[2], 1.0];
+        let c: [f64; 4] = std::array::from_fn(|j| (0..4).map(|i| rr[i] * self.m[i][j]).sum());
+        let full = self.o[2] + c[2] * self.k / c[3];
+        let ours = self.o[2] + self.k * (d * (k[0] + sx * k[1] + sy * k[2]) + k[3]) / (d * (k[4] + sx * k[5] + sy * k[6]) + k[7]);
+        if !((full - ours).abs() <= 1e-3 * full.abs().max(1.0)) {
+            return Err(format!("native: program 6's Z by its coefficients {ours} against its matrix's {full}"));
+        }
+        Ok([self.o[2], self.k, k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7]])
+    }
+
     /// The screen X and Y of a world position.
     pub fn screen(&self, p: [f64; 3]) -> [f64; 2] {
         let r = [p[0] - self.cam[0], p[1] - self.cam[1], p[2] - self.cam[2], 1.0];

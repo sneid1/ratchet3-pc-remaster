@@ -462,7 +462,7 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
     };
     // The main program (the moby walk's), for the control channel's `until pause`.
     // The main program, for walking jobs the renderer does not get (`read_back`) and for the control channel's `until pause`.
-    let boot = Arc::new(uyafmt::boot::boot(iso)?);
+    let boot = crate::boot_image(iso)?;
     // A frame the renderer was too busy to take is walked for its read-back (`main_read_back`) on a thread of its own, not on the
     // game's core: the walk of a frame (several ms on this PC with the other cores busy) made a field
     // with a dropped picture overrun its 16.7 ms, so a renderer that fell behind slowed the game as well (the v0.1.4 player's
@@ -510,6 +510,8 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
     let (mut ring_taken, mut ring_circle) = (false, false);
     // The quick-select ring's second ring turned on by the mouse wheel (below).
     let mut ring_two = false;
+    // Select held in the last field: a press, not a hold, opens the update notice's page (below).
+    let mut select_was = false;
     // The main frame's pages read back in jobs the renderer did not get (`main_read_back`), for the next frame it draws.
     let mut read_back: Vec<u32> = Vec::new();
     // Whether a new game's camera invert options have been set NORMAL (`CAMERA_INVERT_V`).
@@ -724,6 +726,31 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
             (at, a) if f.saturating_sub(at) <= 4 => a,
             _ => Vec::new(),
         };
+        // The update notice (`update.rs`): on the main menu while a newer release is known, its plate, lit under the pointer; a click
+        // on it or a press of Select opens the release's page. The plate names it: with the keyboard in use, the key the player's
+        // bindings give Select (Tab by default); with a controller, SELECT, every controller's (the player, 27 November 2026: "make
+        // it select every controller has that"). The mouse's click there is the plate's alone: the game sees neither the click nor the Cross the menus
+        // make of the mouse button (it would choose the item highlighted).
+        let press = match input.lock().expect("input lock").prompts() {
+            crate::input::Device::Keyboard => match menus.bindings.shown(crate::input::SELECT) {
+                Some(k) => format!("CLICK OR PRESS {} TO DOWNLOAD", k.label()),
+                None => "CLICK TO DOWNLOAD".to_string(),
+            },
+            _ => "PRESS SELECT TO DOWNLOAD".to_string(),
+        };
+        let notice = crate::update::plate(menus.main_menu(&m.ram[..RAM]), pointer.at, press);
+        let select = pad.buttons & crate::input::SELECT != 0;
+        if let Some(p) = &notice {
+            if (p.lit && pointer.click) || (select && !select_was) {
+                crate::update::open();
+            }
+            if p.lit && (pointer.click || pointer.down) {
+                pad.buttons &= !crate::input::CROSS;
+                (pointer.click, pointer.down) = (false, false);
+            }
+        }
+        select_was = select;
+        input.lock().expect("input lock").kbm.lock().expect("input lock").notice = notice;
         menus.main_menu_items(&mut m.ram[..RAM], m.iop.has_save());
         // A new profile on an integrated GPU: RESOLUTION 720P, as the player's change would be (`play::INTEGRATED_720`).
         let integrated = crate::play::INTEGRATED_720.swap(false, Ordering::Relaxed).then(|| {

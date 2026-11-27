@@ -658,9 +658,6 @@ pub struct Native {
     no_view: bool,
     /// GS memory across fields (`take_uploads`).
     gsm: crate::gsmem::GsMemory,
-    /// The transfers taken since GS memory was last made ready for a frame, and the set written then (`settle_gsm`).
-    gsm_pending: Vec<uyart::hw::GsUpload>,
-    gsm_settled: Vec<uyart::hw::GsUpload>,
     /// Why the level the game is in could not be loaded (a pack file that cannot be read or decoded, `texnames`), which `play`
     /// stops the game with: else every frame of the level is drawn without its world.
     broken: Option<String>,
@@ -866,16 +863,22 @@ impl Native {
             return Err("UYA_GPU_PASSES requires timestamp queries inside passes".into());
         }
         let rt_features = rt_features | if live_timing { crate::gpu_profile::features() } else if timing { crate::raytrace::times_features() } else { wgpu::Features::empty() };
-        // Memory in blocks of 128 MB (host-visible: 64 MB): with the small blocks of `MemoryHints::MemoryUsage` (4 to 32 MB host), the
-        // frame's `Queue::write_buffer` staging (2 to 4 MB each, some 10 MB a frame on level 9's ground) made and mapped a new block
-        // every frame and freed it when it emptied: 13 % of the render thread there (vkAllocateMemory and vkMapMemory's kernel lock).
-        let (device, queue) = crate::dlss::device(&adapter, &wgpu::DeviceDescriptor { label: Some("uya native"), required_features: wgpu::Features::DEPTH32FLOAT_STENCIL8 | wgpu::Features::DUAL_SOURCE_BLENDING | cache | rt_features, required_limits: limits, experimental_features: experimental, memory_hints: wgpu::MemoryHints::Manual { suballocated_device_memory_block_size: (128 << 20)..(128 << 20) }, ..Default::default() }, &mut dlss_support)?;
+        // Memory in blocks of 32 MB (host-visible: 16 MB, half the device size; gpu-allocator keeps the last block of a memory
+        // type and frees an emptied one; a buffer over 32 MB, the 62.5 MB tie corners, gets a block of its own). 128 MB blocks held
+        // 75 to 250 MB more than was allocated and grew in 128 MB steps, every one of them a laptop's own RAM where the GPU shares
+        // it (the HD 520's "Out of Memory" after ten minutes of Veldin): with 32 MB, crossing Veldin ends at 318 MB reserved, not
+        // 384 (peak private 1,661 MB, not 1,724), and level 9's ground at 333 MB, not 448 (peak 1,350 MB, not 1,505). The small
+        // blocks of `MemoryHints::MemoryUsage` (4 to 32 MB host) made the frame's `Queue::write_buffer` staging (2 to 4 MB each,
+        // some 10 MB a frame on level 9's ground) make and map a new block every frame and free it when it emptied: 13 % of the
+        // render thread there (vkAllocateMemory and vkMapMemory's kernel lock); 16 MB host blocks keep it in the kept block (level
+        // 9's render prepare median 2.78 ms against 2.75 with 128 MB blocks).
+        let (device, queue) = crate::dlss::device(&adapter, &wgpu::DeviceDescriptor { label: Some("uya native"), required_features: wgpu::Features::DEPTH32FLOAT_STENCIL8 | wgpu::Features::DUAL_SOURCE_BLENDING | cache | rt_features, required_limits: limits, experimental_features: experimental, memory_hints: wgpu::MemoryHints::Manual { suballocated_device_memory_block_size: (32 << 20)..(32 << 20) }, ..Default::default() }, &mut dlss_support)?;
         crate::streamline::device();
         println!("native: DLSS {}", if dlss_support.super_resolution_supported { "offered by the driver" } else { "not offered on this GPU" });
         let dlss_pipes = std::sync::Arc::new(crate::dlss::Pipes::new(&device));
         // Every level's globals and the main program from the disc.
         let globals = all_globals(iso)?;
-        let boot = std::sync::Arc::new(uyafmt::boot::boot(iso)?);
+        let boot = crate::boot_image(iso)?;
         let walker = Walker { boot: boot.clone(), gs_carry: None, screen_vu: crate::mobies::ScreenVu::new(), level_vu: crate::mobies::LevelVu::kept(), glyphs: crate::prompts::Glyphs::new(&boot)? };
         let fx_micro = uyafmt::prog6::microcode(&boot)?.to_vec();
         crate::pipelines::make(&device, &adapter)?;
@@ -1005,7 +1008,7 @@ impl Native {
         println!("native: ray tracing: {}", if rays { "hardware ray queries (EXPERIMENTAL_RAY_QUERY)" } else { "none on this GPU" });
         println!("native: pipelines made in {:.0} ms", made.elapsed().as_secs_f64() * 1000.0);
         let lighting = std::sync::Arc::new(crate::lighting::Lighting::new(&device, &terrain, &view_layout, &mat_layout, blend, DEPTH));
-        Ok(Native { no_view: false, gsm: crate::gsmem::GsMemory::new(), gsm_pending: Vec::new(), gsm_settled: Vec::new(), broken: None, instance, adapter, quiet: false, prompts: None, device, queue, pass, fail, objects, shadow_pipes, view_layout, mat_layout, size: (width, height), k: 1.0, iso: iso.to_string(), globals, pool: std::sync::Arc::new(Pool::new(POOL_THREADS)?), fx_micro, boot, level: None, reload_level: false, walker: Some(walker), ao, lighting, sky_pipes, reflections, shafts, light_shadows, rt, ee_spare: Vec::new(), moby_spare: Vec::new(), moby_prev_spare: Vec::new(), moby_lit_spare: Vec::new(), fx_spare: Vec::new(), fx_prev_spare: Vec::new(), fx_lit_spare: Vec::new(), fx_draw_spare: Vec::new(), light_spare: Vec::new(), moby_draw_spare: Vec::new(), run_spare: Vec::new(), rec_spare: Vec::new(), rec_cap: 0, shrub_spare: (Vec::new(), Vec::new()), sets: (0..SETS).map(|_| FrameSet::default()).collect(), ee_vert_spare: Vec::new(), water_spare: Vec::new(), replays: false, defer_world: false, outbox: Outbox::default(), raster: None, dlss_skipped: false, replay: None, set_held: None, depth: None, last_stale: None, last_world: None, dlss_offered: dlss_support.super_resolution_supported, dlss_sdk: None, dlss_pipes, upscaler: None, screen_tex: None, said: Default::default(), gpu_passes: crate::gpu_profile::Profiler::new() })
+        Ok(Native { no_view: false, gsm: crate::gsmem::GsMemory::new(), broken: None, instance, adapter, quiet: false, prompts: None, device, queue, pass, fail, objects, shadow_pipes, view_layout, mat_layout, size: (width, height), k: 1.0, iso: iso.to_string(), globals, pool: std::sync::Arc::new(Pool::new(POOL_THREADS)?), fx_micro, boot, level: None, reload_level: false, walker: Some(walker), ao, lighting, sky_pipes, reflections, shafts, light_shadows, rt, ee_spare: Vec::new(), moby_spare: Vec::new(), moby_prev_spare: Vec::new(), moby_lit_spare: Vec::new(), fx_spare: Vec::new(), fx_prev_spare: Vec::new(), fx_lit_spare: Vec::new(), fx_draw_spare: Vec::new(), light_spare: Vec::new(), moby_draw_spare: Vec::new(), run_spare: Vec::new(), rec_spare: Vec::new(), rec_cap: 0, shrub_spare: (Vec::new(), Vec::new()), sets: (0..SETS).map(|_| FrameSet::default()).collect(), ee_vert_spare: Vec::new(), water_spare: Vec::new(), replays: false, defer_world: false, outbox: Outbox::default(), raster: None, dlss_skipped: false, replay: None, set_held: None, depth: None, last_stale: None, last_world: None, dlss_offered: dlss_support.super_resolution_supported, dlss_sdk: None, dlss_pipes, upscaler: None, screen_tex: None, said: Default::default(), gpu_passes: crate::gpu_profile::Profiler::new() })
     }
 
     /// Level `level`'s scene on the GPU: its vertices and indices, each terrain texture with its mip levels, and per GS register
@@ -1308,7 +1311,6 @@ impl Native {
     /// Draws the world of the level being played with the game's camera and zone record in `ram` and returns the picture.
     pub fn draw(&mut self, ram: &[u8], jobs: &crate::jobs::FrameJobs, level: u32) -> Result<Image, String> {
         if let Ok(p) = std::env::var("UYA_GSM_LOAD") {
-            self.settle_gsm()?;
             self.gsm.load(&p)?;
         }
         let shown = self.render(ram, jobs, level, &[])?;
@@ -1324,7 +1326,6 @@ impl Native {
     /// GS memory as `path` holds it (`dump_gsm`'s file: the memory a field's draw and its transfers left), in place of what the
     /// transfers taken so far leave.
     pub fn load_gsm(&mut self, path: &str) -> Result<(), String> {
-        self.settle_gsm()?;
         self.gsm.load(path)
     }
 
@@ -1460,8 +1461,9 @@ impl Native {
             self.queue.submit([enc.finish()]);
         }
         self.update_upscaler()?;
-        // GS memory as the transfers of the fields before leave it is the level's EE textures' for the frame (`take_uploads`).
-        self.settle_gsm()?;
+        // GS memory as the transfers of the fields before leave it is the level's EE textures' for the frame (`take_uploads`):
+        // written when the frame reads it (`GsMemory::settle`).
+        self.gsm.settle_over_cap()?;
         std::mem::swap(&mut self.gsm, &mut self.level.as_mut().expect("loaded above").1.ee_textures.gsm);
         // The frame set this frame builds into: one no frame still drawn again holds (`play` gives each replay up once the
         // pictures after its frame are drawn).
@@ -1710,8 +1712,8 @@ impl Native {
             let streams = (uyafmt::levelcode::StreamSlots { pool: 0, count: 0 }, self.iso.clone(), Vec::new());
             self.screen_tex = Some(crate::eedraw::EeTextures::new(&self.device, &self.queue, Vec::new(), 0, self.size, uyafmt::hud::HudData::default(), (Vec::new(), Vec::new()), None, streams)?);
         }
-        // GS memory as the transfers of the fields before leave it; the frame's own packets' bytes.
-        self.settle_gsm()?;
+        // GS memory as the transfers of the fields before leave it (written when the frame reads it); the frame's own packets' bytes.
+        self.gsm.settle_over_cap()?;
         let tex = self.screen_tex.as_mut().expect("made above");
         std::mem::swap(&mut self.gsm, &mut tex.gsm);
         tex.frame = walk.bytes;
@@ -1727,13 +1729,16 @@ impl Native {
         // The steps in the jobs' order; every other frame buffer's depth starts the frame clear.
         let mut rec = crate::replay::Rec::default();
         for t in tex.targets.values() {
-            rec.target(&t.view, &t.depth, true);
+            if let Some(depth) = &t.depth {
+                rec.target(&t.view, depth, true);
+            }
         }
         if let Some(vb) = &vb {
             for (_, step) in &drawn.steps {
                 match step {
                     crate::eedraw::Step::Draw { .. } => ee_draw(d, &self.objects, self.size, tex, &mut rec, vb, step)?,
                     crate::eedraw::Step::Reflect(_) => return Err("native: a water reflection in a frame with no level's world".into()),
+                    crate::eedraw::Step::DepthAlpha(da) => rec.outside(depth_alpha(&proj, &cam, da)?),
                     step => {
                         use crate::replay::Enc;
                         rec.picture();
@@ -1786,7 +1791,6 @@ impl Native {
 
     /// GS memory to `path` (`UYA_GSM_DUMP_AT`).
     pub fn dump_gsm(&mut self, path: &str) -> Result<(), String> {
-        self.settle_gsm()?;
         self.gsm.dump(path)
     }
 
@@ -1794,25 +1798,7 @@ impl Native {
     /// across fields and levels as the GS keeps them. A frame's own are taken after it is drawn (its chain tells its draws what
     /// they sample while it runs), the fields' before it before.
     pub fn take_uploads(&mut self, uploads: Vec<uyart::hw::GsUpload>) {
-        self.gsm_pending.extend(uploads);
-    }
-
-    /// GS memory made ready for a frame: the transfers taken since it was last made ready written in order, unless they are the
-    /// set written then. Each transfer writes its texels whatever the memory held, so the same set written again leaves the
-    /// memory as it is: on level 9's ground almost every frame's 118 transfers (785 KB, the textures the game sends each field)
-    /// are the frame before's, and writing them was 0.8 ms of the render thread.
-    fn settle_gsm(&mut self) -> Result<(), String> {
-        let same = |a: &uyart::hw::GsUpload, b: &uyart::hw::GsUpload| (a.bitbltbuf, a.trxpos, a.trxreg) == (b.bitbltbuf, b.trxpos, b.trxreg) && a.data == b.data;
-        if self.gsm_pending.len() == self.gsm_settled.len() && self.gsm_pending.iter().zip(&self.gsm_settled).all(|(a, b)| same(a, b)) {
-            self.gsm_pending.clear();
-            return Ok(());
-        }
-        for u in &self.gsm_pending {
-            self.gsm.upload(u.bitbltbuf, u.trxpos, u.trxreg, &u.data)?;
-        }
-        std::mem::swap(&mut self.gsm_pending, &mut self.gsm_settled);
-        self.gsm_pending.clear();
-        Ok(())
+        self.gsm.queue(uploads);
     }
 
     /// The frame's replay (`replays` set: the frame drew the world on the native picture), for `play` to draw pictures between
@@ -1978,7 +1964,9 @@ impl Native {
         fx_prev.clear();
         fx_draws.clear();
         let fx = match &fx_frame {
-            Ok(_) if !ran[6] => Ok((0, Vec::new())),
+            // A frame whose program 6 did not run has no effects, whatever its inputs hold (a level's first frame after its load,
+            // before the game has made the camera's matrix: no inverse, and nothing to project with it).
+            _ if !ran[6] => Ok((0, Vec::new())),
             Ok((f, p)) => self.level.as_mut().expect("loaded above").1.effects.frame(&self.device, &self.mat_layout, f, p, &cam, fx_q, &mut fx_objs, &mut fx_prev, &mut fx_draws, tm.on),
             Err(e) => Err(e.clone()),
         };
@@ -2116,7 +2104,9 @@ impl Native {
         rec.cmds.clear();
         rec.cmds.reserve(self.rec_cap.saturating_sub(rec.cmds.capacity()));
         for t in gpu.ee_textures.targets.values() {
-            rec.target(&t.view, &t.depth, true);
+            if let Some(depth) = &t.depth {
+                rec.target(&t.view, depth, true);
+            }
         }
         // The ambient occlusion and shadows options (`ao.rs`, `shadows.rs`): the mobies' opaque draws into the depth and a mask,
         // the mobies' shadow map, then the occlusion and the key light's shade over the static world, before the mobies, effects and
@@ -2259,6 +2249,7 @@ impl Native {
             let tx = &gpu.ee_textures;
             match step {
                 Step::Draw { .. } => ee_draw(&self.device, &self.objects, self.size, tx, rec, vb, step)?,
+                Step::DepthAlpha(da) => rec.outside(depth_alpha(proj, cam, da)?),
                 Step::Reflect(r) => {
                     let (Some(p), Some(wvb), Some(bg)) = (plane, &water_vb, &water_bg) else { return Err("native: water reflected with no reflection made".into()) };
                     if !mirrored.replace(true) {
@@ -2337,7 +2328,7 @@ impl Native {
                 } else {
                     // Another frame buffer: a pass of its own, the picture's begun again by the next draw into it.
                     let t = &gpu.ee_textures.targets[&fb];
-                    rec.target(&t.view, &t.depth, false);
+                    rec.target(&t.view, t.depth.as_ref().expect("an EE target drawn into this frame is live (`EeTextures::target`)"), false);
                     rec.set_vertex_buffer(0, vb);
                     self.objects.draw_clip(&mut rec, &mo.materials[&set], &run)?;
                     rec.end();
@@ -2664,14 +2655,14 @@ fn ee_draw(device: &wgpu::Device, objects: &crate::objects::Pipelines, size: (u3
             rec.outside(Cmd::CopyPicture(tx.main_snap.clone(), crate::dlss::unavailable().is_none().then(|| tx.main_dst.clone())));
         } else {
             let t = &tx.targets[b];
-            rec.outside(Cmd::Copy(t.tex.clone(), t.snap.clone(), t.size));
+            rec.outside(Cmd::Copy(t.tex.clone(), t.snap.clone().expect("an EE target drawn into this frame is live (`EeTextures::target`)"), t.size));
         }
     }
     // A GS blend's destination: the copy of the buffer drawn into.
     let dst = (*snap == Some(*target)).then(|| {
         // The main picture's copy for a GS blend: `main_dst`, or on a GPU that cannot run DLSS `main_snap`, the same copy
         // (`replay::Cmd::CopyPicture`).
-        let view = if *target == MAIN { if crate::dlss::unavailable().is_none() { &tx.main_dst } else { &tx.main_snap }.create_view(&Default::default()) } else { tx.targets[target].snap.create_view(&Default::default()) };
+        let view = if *target == MAIN { if crate::dlss::unavailable().is_none() { &tx.main_dst } else { &tx.main_snap }.create_view(&Default::default()) } else { tx.targets[target].snap.as_ref().expect("an EE target drawn into this frame is live (`EeTextures::target`)").create_view(&Default::default()) };
         device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("GS blend destination"), layout: &objects.dst_layout, entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }] })
     });
     if *target == MAIN {
@@ -2682,7 +2673,7 @@ fn ee_draw(device: &wgpu::Device, objects: &crate::objects::Pipelines, size: (u3
         rec.set_scissor_rect([0, 0, size.0, size.1])?;
     } else {
         let t = &tx.targets[target];
-        rec.target(&t.view, &t.depth, false);
+        rec.target(&t.view, t.depth.as_ref().expect("an EE target drawn into this frame is live (`EeTextures::target`)"), false);
         rec.set_vertex_buffer(0, vb);
         rec.set_scissor_rect([x0, y0, x1 - x0, y1 - y0])?;
         objects.draw_in(rec, &tx.by_aref[set], draws, *screen, *flat, dst.as_ref())?;
@@ -3195,7 +3186,16 @@ pub(crate) fn mem_log(device: &wgpu::Device) -> Option<String> {
     names.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(b.0)));
     let mb = |b: u64| b as f64 / (1 << 20) as f64;
     let top = names.iter().take(16).map(|(n, (s, c))| format!("{n} {:.1} MB x{c}", mb(*s))).collect::<Vec<_>>().join(", ");
-    Some(format!("mem: private {:.0} MB; GPU {} blocks, {:.0} MB reserved, {} allocations of {:.0} MB: {top}", private_mb(), r.blocks.len(), mb(r.total_reserved_bytes), r.allocations.len(), mb(r.total_allocated_bytes)))
+    let blocks = r.blocks.iter().map(|b| format!("{:.0}/{:.0}", mb(r.allocations[b.allocations.clone()].iter().map(|a| a.size).sum()), mb(b.size))).collect::<Vec<_>>().join(" ");
+    Some(format!("mem: private {:.0} MB; GPU {} blocks, {:.0} MB reserved, {} allocations of {:.0} MB; blocks used/size [{blocks}]: {top}", private_mb(), r.blocks.len(), mb(r.total_reserved_bytes), r.allocations.len(), mb(r.total_allocated_bytes)))
+}
+
+/// The command that makes the picture's alpha from its depth as `da` says (`eedraw::DepthAlpha`), for the frame's projection.
+fn depth_alpha(proj: &crate::effects::Projection, cam: &Camera, da: &crate::eedraw::DepthAlpha) -> Result<crate::replay::Cmd, String> {
+    let z = proj.gs_depth(cam)?.map(|v| v as f32);
+    // The threshold sprite passes ZTST GREATER where its Z is above Z' (the inverted buffer's): Z' below it takes its alpha.
+    let (threshold, below) = da.threshold.map_or((0.0, 0.0), |(z, alpha)| (z as f32, alpha as f32));
+    Ok(crate::replay::Cmd::DepthAlpha([z[0], z[1], threshold, below, NEAR, FAR, cam.tan[0], cam.tan[1], z[2], z[3], z[4], z[5], z[6], z[7], z[8], z[9]]))
 }
 
 /// The process's user and kernel CPU time (100 ns units) and its page faults so far (`Times::report`).

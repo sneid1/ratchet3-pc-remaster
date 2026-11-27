@@ -89,11 +89,19 @@ pub(crate) struct Target {
     pub size: (u32, u32),
     pub tex: wgpu::Texture,
     pub view: wgpu::TextureView,
-    pub depth: wgpu::TextureView,
-    pub snap: wgpu::Texture,
+    /// Its depth and the copy a draw sampling the buffer it draws into reads (`snap_index`); None once it has gone
+    /// `TARGET_IDLE` frames without being drawn into (`EeTextures::release_idle`), made again when it is.
+    pub depth: Option<wgpu::TextureView>,
+    pub snap: Option<wgpu::Texture>,
     index: u32,
     snap_index: u32,
+    /// The frame (`EeTextures::target_frame`) it was last drawn into.
+    drawn: u64,
 }
+
+/// The frames a frame buffer may go without being drawn into before its depth and copy are let go (`release_idle`): ten
+/// seconds. Crossing Veldin, the buffers drawn into once went from 9 to 21, each kept whole and its depth cleared every frame.
+const TARGET_IDLE: u64 = 600;
 
 /// The EE triangles' textures: region 0x1A's textures and a white one, with a material set per TEST_1 AREF (256: the alpha
 /// test never passes).
@@ -102,7 +110,72 @@ pub(crate) struct Target {
 /// 2026: "it still shows to R2 prompt").
 const RING_TAB: &str = "fb793dd301dea0f9-69a9372fa06e85e0-0000155b";
 
+/// What the EE textures' decode and hash cost (`EeTextures::census`): the frames built, the textures decoded or rebuilt from their
+/// source, their texels, the bytes hashed to name them and the nanoseconds in all of it.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct TexWork {
+    frames: u64,
+    decodes: u64,
+    texels: u64,
+    hashed: u64,
+    ns: u64,
+}
+
+/// The source a texture was decoded from when it was made from the frame's RAM (`EeTextures::raw`): while the same bytes (and
+/// the same CLUT, TEXA and GS-memory CLUT) are uploaded at the same place, the texture is the one at `index`: nothing is
+/// decoded or hashed again.
+struct Source {
+    texa: Option<u64>,
+    /// The CLUT upload's PSM, width and height, when the chain uploaded one.
+    clut_meta: Option<(u8, u32, u32)>,
+    texels: Vec<u8>,
+    clut: Vec<u8>,
+    /// The CLUT GS memory held, when the chain uploaded none (an indexed format's).
+    resident: Option<Vec<[u8; 4]>>,
+    index: u32,
+}
+
+impl Source {
+    fn size(&self) -> usize {
+        self.texels.len() + self.clut.len() + self.resident.as_ref().map_or(0, |r| 4 * r.len())
+    }
+}
+
+/// The sources kept in `EeTextures::raw` and `raw_pic` are cleared past this many bytes (the streaming slots and the frame's own
+/// packets give many places over a long run).
+const RAW_CAP: usize = 64 << 20;
+
+/// A 64-bit identity of RGBA texels (a word of two texels at a time), chained from `h`: the key a content is made once for.
+fn hash_texels(mut h: u64, px: &[[u8; 4]]) -> u64 {
+    const K: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut pairs = px.chunks_exact(2);
+    for c in &mut pairs {
+        let w = u32::from_le_bytes(c[0]) as u64 | (u32::from_le_bytes(c[1]) as u64) << 32;
+        h = (h.rotate_left(5) ^ w).wrapping_mul(K);
+    }
+    for p in pairs.remainder() {
+        h = (h.rotate_left(5) ^ u32::from_le_bytes(*p) as u64).wrapping_mul(K);
+    }
+    h ^ h >> 32
+}
+
+/// The identity of a texture's levels (`hash_texels` of each in turn).
+fn hash_levels(levels: &[Vec<[u8; 4]>]) -> u64 {
+    levels.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, l| hash_texels(h, l))
+}
+
 pub(crate) struct EeTextures {
+    /// This frame's textures made from the frame's RAM, by TEX0, the uploads' sources, TEXA and (for a CLUT GS memory holds) the
+    /// transfers written: the frame's RAM and GS memory do not change within `build`, so a second primitive of the same texture
+    /// has its index without reading the sources again. Cleared by `build`.
+    frame_memo: HashMap<((u64, u32, u32), Option<u64>, u64), u32>,
+    /// Each RAM-made texture's source from the frame before (and earlier), by TEX0 and the uploads' sources.
+    raw: HashMap<(u64, u32, u32), Source>,
+    /// The same for the pictures `picture` makes, by source, size and PSM.
+    raw_pic: HashMap<(u32, u32, u32, u64), Source>,
+    raw_bytes: usize,
+    work: TexWork,
+    work_seen: std::cell::Cell<TexWork>,
     base: Materials,
     pub by_aref: HashMap<u16, Materials>,
     /// Each region 0x1A texture's index by its texels' offset in the region, its CLUT's offset and its size.
@@ -128,6 +201,8 @@ pub(crate) struct EeTextures {
     stream_bytes: HashMap<(u32, u32, u32, bool), Vec<u8>>,
     /// The other frame buffers drawn into, by `buffer`.
     pub targets: HashMap<u32, Target>,
+    /// The frames built (`build`), for `Target::drawn`.
+    target_frame: u64,
     /// The copy of the native picture a draw sampling the main frame reads, and its texture in the materials.
     pub main_snap: wgpu::Texture,
     main_snap_index: u32,
@@ -194,14 +269,20 @@ impl EeTextures {
     /// ones made for each content of the frame's RAM, of GS memory, of disc data, and the HUD's.
     pub fn census(&self) -> String {
         let (n, bytes) = self.base.census();
+        let (w, seen) = (self.work, self.work_seen.replace(self.work));
+        let f = (w.frames - seen.frames).max(1) as f64;
         format!(
-            "{n} textures ({:.0} MB of texels): {} made from the frame's RAM, {} from GS memory ({} uploads cached), {} from disc data, {} of the HUD",
+            "{n} textures ({:.0} MB of texels): {} made from the frame's RAM, {} from GS memory ({} uploads cached), {} from disc data, {} of the HUD; a frame decodes {:.1} textures ({:.0} texels), hashes {:.0} bytes, {:.3} ms in them",
             bytes as f64 / 1048576.0,
             self.ram_made.len(),
             self.gsm_made.len(),
             self.gsm_cache.len(),
             self.loaded.len(),
-            self.hud_made.len()
+            self.hud_made.len(),
+            (w.decodes - seen.decodes) as f64 / f,
+            (w.texels - seen.texels) as f64 / f,
+            (w.hashed - seen.hashed) as f64 / f,
+            (w.ns - seen.ns) as f64 / f / 1e6
         )
     }
 
@@ -261,7 +342,7 @@ impl EeTextures {
         sizes.push((size.0 as usize, size.1 as usize));
         sizes.push((MAIN_GS.0 as usize, MAIN_GS.1 as usize));
         sizes.push((DISPLAY_GS.0 as usize, DISPLAY_GS.1 as usize));
-        let mut t = EeTextures { base, by_aref: HashMap::new(), offsets, cluts, sizes, white, region, loaded: HashMap::new(), ram_made: HashMap::new(), menu, menu_at: None, streams, streamed: Vec::new(), stream_bytes: HashMap::new(), targets: HashMap::new(), main_snap, main_snap_index, main_dst, main_gs, main_gs_index, main_gs_map: [0.0; 4], display_gs, display_gs_index, grab, grab_index, grabbed: std::collections::HashSet::new(), grab_original: None, size, hud, hud_tex: HashMap::new(), hud_pal: HashMap::new(), hud_bases: [0; 5], hud_made: HashMap::new(), ring_tabs: std::collections::HashSet::new(), ring_tab_icon: None, gs_ram, gs_base: 0, gs_made: HashMap::new(), gsm: crate::gsmem::GsMemory::new(), gsm_cache: HashMap::new(), gsm_made: HashMap::new(), prompts: Default::default(), frame: Vec::new(), pre: Vec::new() };
+        let mut t = EeTextures { frame_memo: HashMap::new(), raw: HashMap::new(), raw_pic: HashMap::new(), raw_bytes: 0, work: TexWork::default(), work_seen: Default::default(), base, by_aref: HashMap::new(), offsets, cluts, sizes, white, region, loaded: HashMap::new(), ram_made: HashMap::new(), menu, menu_at: None, streams, streamed: Vec::new(), stream_bytes: HashMap::new(), targets: HashMap::new(), target_frame: 0, main_snap, main_snap_index, main_dst, main_gs, main_gs_index, main_gs_map: [0.0; 4], display_gs, display_gs_index, grab, grab_index, grabbed: std::collections::HashSet::new(), grab_original: None, size, hud, hud_tex: HashMap::new(), hud_pal: HashMap::new(), hud_bases: [0; 5], hud_made: HashMap::new(), ring_tabs: std::collections::HashSet::new(), ring_tab_icon: None, gs_ram, gs_base: 0, gs_made: HashMap::new(), gsm: crate::gsmem::GsMemory::new(), gsm_cache: HashMap::new(), gsm_made: HashMap::new(), prompts: Default::default(), frame: Vec::new(), pre: Vec::new() };
         // The display buffer, which each frame's picture is copied into.
         t.target(device, DISPLAY, MAIN_GS.1)?;
         Ok(t)
@@ -366,15 +447,62 @@ impl EeTextures {
         ram.get(at..at + n).map(|b| (b, true)).ok_or_else(|| format!("EE triangle: {src:#x}+{n:#x} is past the frame's RAM"))
     }
 
+    /// The bytes a texture of `tex0` uploaded as `up` (with `clut`) is decoded from (`loaded_texture` reads these, in this order),
+    /// and whether any is from the frame's RAM; None when the uploads do not fit `tex0` (`loaded_texture` says why).
+    #[allow(clippy::type_complexity)]
+    fn texture_source<'a>(&'a self, boot: &'a uyafmt::boot::Boot, ram: &'a [u8], tex0: u64, up: crate::mobies::Upload, clut: Option<crate::mobies::Upload>) -> Result<Option<(&'a [u8], &'a [u8], bool)>, String> {
+        let (psm, tw, th, cpsm, csm) = (tex0 >> 20 & 0x3f, 1u32 << (tex0 >> 26 & 15), 1u32 << (tex0 >> 30 & 15), tex0 >> 51 & 15, tex0 >> 55 & 1);
+        if up.psm as u64 != psm || up.w != tw || up.h != th {
+            return Ok(None);
+        }
+        let b = crate::gsmem::bits(psm)? as usize;
+        let (texels, mut from_ram) = self.loaded(boot, ram, up.src, ((tw * th) as usize * b).div_ceil(8))?;
+        let mut colours: &[u8] = &[];
+        if let (Some(c), 8 | 4) = (clut, b) {
+            let entries = if b == 8 { 256 } else { 16 };
+            if c.psm as u64 != cpsm || (c.w * c.h) as usize != entries || csm != 0 {
+                return Ok(None);
+            }
+            let (bytes, r) = self.loaded(boot, ram, c.src, entries * crate::gsmem::bits(cpsm)? as usize / 8)?;
+            colours = bytes;
+            from_ram |= r;
+        }
+        Ok(Some((texels, colours, from_ram)))
+    }
+
+    /// Keeps `raw`'s entry for `k` (made of `e.texels` and the rest), the sources cleared first when they hold too much.
+    fn keep_raw(&mut self, k: (u64, u32, u32), e: Source) {
+        self.raw_bytes += e.size();
+        if let Some(old) = self.raw.insert(k, e) {
+            self.raw_bytes -= old.size();
+        }
+        self.cap_raw();
+    }
+
+    /// Clears the kept sources when they hold more than `RAW_CAP`.
+    fn cap_raw(&mut self) {
+        if self.raw_bytes > RAW_CAP {
+            self.raw.clear();
+            self.raw_pic.clear();
+            self.raw_bytes = 0;
+        }
+    }
+
     /// The texture GS memory holds at `tex0`'s TBP (`gsm`: the transfers of this field's frames before and of the fields before):
     /// PSMCT32, or PSMT8 and PSMT8H through the CLUT (PSMCT32, CSM1, 256 colours) at CBP. Made once for each content it has.
     fn resident_texture(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, tex0: u64, tex1: u64, mip: [u64; 2], texa: Option<u64>) -> Result<u32, String> {
+        self.gsm.settle()?;
         if let Some(&i) = self.gsm_cache.get(&(tex0, self.gsm.sent, texa)).filter(|_| mip_levels(tex1) == 0) {
             return Ok(i);
         }
+        let began = std::time::Instant::now();
         let (levels, gs) = gs_levels(&self.gsm, tex0, tex1, mip, texa)?;
         let (w, h) = (1u32 << (tex0 >> 26 & 15), 1u32 << (tex0 >> 30 & 15));
-        let hash = levels.iter().flatten().flatten().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+        let hash = hash_levels(&levels);
+        self.work.decodes += 1;
+        self.work.texels += (w * h) as u64;
+        self.work.hashed += 4 * levels.iter().map(|l| l.len() as u64).sum::<u64>();
+        self.work.ns += began.elapsed().as_nanos() as u64;
         let i = match self.gsm_made.get(&(tex0, hash)) {
             Some(&i) => i,
             None => {
@@ -399,7 +527,8 @@ impl EeTextures {
     /// them. Made once for each content it has (`gsm_made`).
     #[allow(clippy::too_many_arguments)]
     fn beyond_upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, boot: &uyafmt::boot::Boot, ram: &[u8], tex0: u64, tex1: u64, mip: [u64; 2], up: crate::mobies::Upload, clut: Option<crate::mobies::Upload>, texa: Option<u64>) -> Result<u32, String> {
-        let mut g = self.gsm.clone();
+        let began = std::time::Instant::now();
+        let mut g = self.gsm.snapshot()?;
         for u in std::iter::once(up).chain(clut) {
             let (bitblt, trxpos) = u.regs.ok_or_else(|| format!("EE texture TEX0 {tex0:#x}: the upload {u:x?} has no transfer registers"))?;
             let n = (u.w * u.h * crate::gsmem::bits(u.psm as u64)?).div_ceil(8) as usize;
@@ -412,7 +541,11 @@ impl EeTextures {
             g.upload(bitblt, trxpos, u.w as u64 | (u.h as u64) << 32, &qws)?;
         }
         let (levels, gs) = gs_levels(&g, tex0, tex1, mip, texa)?;
-        let hash = levels.iter().flatten().flatten().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+        let hash = hash_levels(&levels);
+        self.work.decodes += 1;
+        self.work.texels += (1u64 << (tex0 >> 26 & 15)) << (tex0 >> 30 & 15);
+        self.work.hashed += 4 * levels.iter().map(|l| l.len() as u64).sum::<u64>();
+        self.work.ns += began.elapsed().as_nanos() as u64;
         if let Some(&i) = self.gsm_made.get(&(tex0, hash)) {
             return Ok(i);
         }
@@ -588,9 +721,21 @@ impl EeTextures {
         // The display buffer's window is the main frame's (its last 32 rows the TV shows below the picture).
         let rows = if key == DISPLAY { MAIN_GS.1 } else { rows };
         let (fbp, gs) = (key & 0x1ff, ((key >> 16) * 64, rows));
-        if let Some(t) = self.targets.get(&key) {
+        if let Some(t) = self.targets.get_mut(&key) {
             if t.gs != gs {
                 return Err(format!("EE target FBP {fbp:#x}: {} x {} GS pixels, drawn before as {} x {}", gs.0, gs.1, t.gs.0, t.gs.1));
+            }
+            t.drawn = self.target_frame;
+            if t.depth.is_none() {
+                // Drawn into again after `release_idle`: its depth and copy made again, the copy's material its own again.
+                let snap = target_texture(device, "EE target copy", t.size, false);
+                t.depth = Some(target_depth(device, t.size));
+                let view = snap.create_view(&Default::default());
+                t.snap = Some(snap);
+                self.base.replace_view(t.snap_index, view.clone(), t.size);
+                for m in self.by_aref.values_mut() {
+                    m.replace_view(t.snap_index, view.clone(), t.size);
+                }
             }
             return Ok(&self.targets[&key]);
         }
@@ -609,8 +754,29 @@ impl EeTextures {
         sizes.push((size.0 as usize, size.1 as usize));
         sizes.push((size.0 as usize, size.1 as usize));
         let view = tex.create_view(&Default::default());
-        self.targets.insert(key, Target { gs, size, tex, view, depth, snap, index, snap_index });
+        self.targets.insert(key, Target { gs, size, tex, view, depth: Some(depth), snap: Some(snap), index, snap_index, drawn: self.target_frame });
         Ok(&self.targets[&key])
+    }
+
+    /// A frame built: the frame buffers not drawn into for `TARGET_IDLE` frames let their depth (cleared at each frame's start,
+    /// holding nothing from one frame to the next) and their copy (made before each draw that samples the buffer it draws into)
+    /// go, and are no longer cleared each frame; the copy's material reads the buffer itself meanwhile, which is what the copy
+    /// would hold. Each keeps its picture, which a later draw may sample. The display buffer is never let go.
+    fn release_idle(&mut self) {
+        self.target_frame += 1;
+        let EeTextures { targets, base, by_aref, target_frame, .. } = self;
+        for (&key, t) in targets.iter_mut() {
+            if key == DISPLAY || t.depth.is_none() || *target_frame - t.drawn <= TARGET_IDLE {
+                continue;
+            }
+            t.depth = None;
+            t.snap = None;
+            let view = t.tex.create_view(&Default::default());
+            base.replace_view(t.snap_index, view.clone(), t.size);
+            for m in by_aref.values_mut() {
+                m.replace_view(t.snap_index, view.clone(), t.size);
+            }
+        }
     }
 
     /// The native picture `size` from now on (the game's view at another shape, the window's: PLAN 4.2; another RESOLUTION):
@@ -655,11 +821,11 @@ impl EeTextures {
             let at = ((t.gs.0 * size.0).div_ceil(MAIN_GS.0), (t.gs.1 * size.1).div_ceil(MAIN_GS.1));
             let tex = target_texture(device, "EE target", at, true);
             pipes.downsample(device, enc, &t.tex, &tex, map(t.size));
-            t.snap = target_texture(device, "EE target copy", at, false);
-            t.depth = target_depth(device, at);
+            t.snap = Some(target_texture(device, "EE target copy", at, false));
+            t.depth = Some(target_depth(device, at));
             t.view = tex.create_view(&Default::default());
             replace(t.index, &tex, at);
-            replace(t.snap_index, &t.snap, at);
+            replace(t.snap_index, t.snap.as_ref().expect("the display buffer is never let go (`release_idle`)"), at);
             t.tex = tex;
             t.size = at;
         }
@@ -868,7 +1034,7 @@ fn triangle(p: &EePrim, pre: Option<&Pre>, wide_row: bool, memo: &mut Option<((S
             let mut at = |i: usize, v: &crate::effects::GsVertex| *known[i].get_or_insert_with(|| worlds.get(proj, cam, v.x, v.y, v.z));
             let nearest = ztst == 2 && p.verts.iter().enumerate().all(|(i, v)| at(i, v).1 < crate::native::NEAR);
             let screen = p.test >> 16 & 1 == 0 || ztst == 1 || nearest;
-            (screen, !screen && p.verts.iter().enumerate().any(|(i, v)| at(i, v).1 < crate::native::NEAR))
+            (screen, !screen && (buffer(p.frame, p.frame >> 16) != MAIN || p.verts.iter().enumerate().any(|(i, v)| at(i, v).1 < crate::native::NEAR)))
         }
     };
     let full = screen && wide_row;
@@ -1040,7 +1206,8 @@ fn pre_of(prims: &[(usize, EePrim)], proj: &Projection, cam: &Camera, i: usize) 
         }
         let known: [([f32; 3], f32); 3] = std::array::from_fn(|i| world_depth(proj, cam, p.verts[i].x, p.verts[i].y, p.verts[i].z));
         let screen = ztst == 2 && known.iter().all(|k| k.1 < crate::native::NEAR);
-        let flat = !screen && known.iter().any(|k| k.1 < crate::native::NEAR);
+        // Into another frame buffer a Z-tested primitive is drawn flat: at its GS positions in that buffer, with its GS Z.
+        let flat = !screen && (buffer(p.frame, p.frame >> 16) != MAIN || known.iter().any(|k| k.1 < crate::native::NEAR));
         let world = (!screen && !flat).then(|| {
             let size = if p.prim & 0x10 == 0 { (1.0, 1.0) } else { ((1u64 << (p.tex0 >> 26 & 15)) as f32, (1u64 << (p.tex0 >> 30 & 15)) as f32) };
             let look = Look { screen: false, flat: false, size, map: None, decal: decal(p), window: None, wide: false };
@@ -1085,7 +1252,7 @@ fn tri_state(p: &EePrim, screen: bool, flat: bool, full: bool, swapped: Option<u
     // PSMCT32, or PSMCT24 or PSMCT16 (another buffer: the display buffer, the glow's; its colour is kept at 8 bits a channel).
     let (fbp, fpsm) = (buffer(p.frame, p.frame >> 16), p.frame >> 24 & 0x3f);
     // ZTST GREATER (a monitor's screen in front of its frame) is GEQUAL natively: the two differ only at an equal depth.
-    if !screen && (!matches!(ztst, 2 | 3) || fbp != MAIN) || date != 0 || p.frame >> 32 != 0 || !(fpsm == 0 || matches!(fpsm, 1 | 2) && fbp != MAIN) {
+    if !screen && (!matches!(ztst, 2 | 3) || fbp != MAIN && !flat) || date != 0 || p.frame >> 32 != 0 || !(fpsm == 0 || matches!(fpsm, 1 | 2) && fbp != MAIN) {
         return Err(format!("EE triangle: TEST {t:#x} FRAME {:#x}", p.frame));
     }
     // Another frame buffer: its window (XYOFFSET to the scissor's height) in GS pixels.
@@ -1201,19 +1368,42 @@ fn tri_state(p: &EePrim, screen: bool, flat: bool, full: bool, swapped: Option<u
             let resident = match p.clut {
                 Some(_) => None,
                 None if !matches!(crate::gsmem::bits(tex0 >> 20 & 0x3f)?, 8 | 4) => None,
-                None => Some(tex.gsm.clut(tex0, p.texa)?),
+                None => {
+                    tex.gsm.settle()?;
+                    Some(tex.gsm.clut(tex0, p.texa)?)
+                }
             };
             let k = (tex0, up.src, p.clut.map_or(u32::MAX, |c| c.src));
             let from_ram = std::cell::Cell::new(resident.is_some());
             match tex.loaded.get(&k) {
                 Some(&i) => i,
                 None => {
+                    let began = std::time::Instant::now();
+                    let memo_key = (k, p.texa, if resident.is_some() { tex.gsm.sent } else { 0 });
+                    // The same texture as one made before in this frame, or from the same bytes as one made in a frame before.
+                    let (source, hit) = match tex.frame_memo.get(&memo_key) {
+                        Some(&i) => (None, Some(i)),
+                        None => {
+                            let source = tex.texture_source(boot, ram, tex0, up, p.clut)?;
+                            let clut_meta = p.clut.map(|c| (c.psm, c.w, c.h));
+                            let hit = source.filter(|&(_, _, r)| r || resident.is_some()).and_then(|(texels, clut, _)| {
+                                tex.raw.get(&k).filter(|e| e.texa == p.texa && e.clut_meta == clut_meta && e.resident.as_deref() == resident.as_deref() && e.texels == texels && e.clut == clut).map(|e| e.index)
+                            });
+                            (source.map(|(texels, clut, r)| (texels.to_vec(), clut.to_vec(), r || resident.is_some())), hit)
+                        }
+                    };
+                    if let Some(i) = hit {
+                        tex.frame_memo.insert(memo_key, i);
+                        tex.work.ns += began.elapsed().as_nanos() as u64;
+                        i
+                    } else {
                     let t = loaded_texture(|a, n| tex.loaded(boot, ram, a, n).map(|(b, r)| { from_ram.set(from_ram.get() | r); b }), tex0, up, p.clut, resident.as_deref(), p.texa)?;
-                    let content = from_ram.get().then(|| {
-                        let px: Vec<u8> = t.levels[0].iter().flatten().copied().collect();
-                        (tex0, px.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3)))
-                    });
-                    if let Some(&i) = content.and_then(|c| tex.ram_made.get(&c)) {
+                    let content = from_ram.get().then(|| (tex0, hash_levels(&t.levels[..1])));
+                    tex.work.decodes += 1;
+                    tex.work.texels += (t.width * t.height) as u64;
+                    tex.work.hashed += content.map_or(0, |_| 4 * (t.width * t.height) as u64);
+                    tex.work.ns += began.elapsed().as_nanos() as u64;
+                    let i = if let Some(&i) = content.and_then(|c| tex.ram_made.get(&c)) {
                         i
                     } else {
                     crate::texnames::dump_ui(&t)?;
@@ -1233,6 +1423,12 @@ fn tri_state(p: &EePrim, screen: bool, flat: bool, full: bool, swapped: Option<u
                         None => {
                             tex.loaded.insert(k, i);
                         }
+                    }
+                    i
+                    };
+                    if let (Some(_), Some((texels, clut, true))) = (content, source) {
+                        tex.frame_memo.insert(memo_key, i);
+                        tex.keep_raw(k, Source { texa: p.texa, clut_meta: p.clut.map(|c| (c.psm, c.w, c.h)), texels, clut, resident, index: i });
                     }
                     i
                     }
@@ -1385,6 +1581,12 @@ fn tri_verts(p: &EePrim, look: Look, worlds: &mut Worlds, known: &[Option<([f32;
                 None => unstretched(proj.ndc(cam, x + 0.5, y + 0.5), cam),
             };
             ObjVertex { pos: [n[0], n[1], 0.0], st, colour, f }
+        } else if let (true, Some((gs, xo, yo))) = (flat, window) {
+            // Into another frame buffer (level 8's trip, its 256 x 256 buffer's particles): at the GS position in the buffer, as a
+            // 2D draw there is, and z the GS Z over 2^24 (exact in 32 bits), the buffer's depth tested GEQUAL against it as the
+            // GS tests its Z (each frame starts that depth clear: 0, as the game's own clear sprite leaves its Z).
+            let n = [((x - xo + 0.5) / gs.0 as f64 * 2.0 - 1.0) as f32, (1.0 - (y - yo + 0.5) / gs.1 as f64 * 2.0) as f32];
+            ObjVertex { pos: [n[0], n[1], (v.z / 16_777_216.0).clamp(0.0, 1.0) as f32], st, colour, f }
         } else if flat {
             // At the GS position, z the depth of the GS Z's view depth (`vs_flat`, `native::Camera::matrix`'s third row), the
             // largest (1, at NEAR) for one nearer: the GS's Z24 buffer keeps a wrapped Z at its largest. S, T and Q as the GS takes
@@ -1423,23 +1625,49 @@ fn picture(t: &crate::mobies::Transfer, tex: &mut EeTextures, boot: &uyafmt::boo
     let up = t.image.ok_or("an IMAGE into the main frame with no data in the jobs")?;
     let (dbp, psm) = ((t.bitbltbuf >> 32 & 0x3fff) as u32, t.bitbltbuf >> 56 & 0x3f);
     let (w, h) = (up.w as usize, up.h as usize);
-    let px: Vec<[u8; 4]> = match psm {
-        0 => tex.loaded(boot, ram, up.src, 4 * w * h)?.0.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect(),
-        1 => tex.loaded(boot, ram, up.src, 3 * w * h)?.0.chunks_exact(3).map(|c| [c[0], c[1], c[2], 0x80]).collect(),
+    let began = std::time::Instant::now();
+    let per = match psm {
+        0 => 4,
+        1 => 3,
         _ => return Err(format!("an IMAGE of PSM {psm:#x} into the main frame")),
     };
-    let hash = px.iter().flatten().fold(0xcbf2_9ce4_8422_2325u64 ^ (w as u64) << 32 ^ h as u64, |a, &b| (a ^ b as u64).wrapping_mul(0x100_0000_01b3));
-    let i = match tex.ram_made.get(&(u64::MAX, hash)) {
-        Some(&i) => i,
+    // The same bytes as the picture made from this place before are that picture.
+    let pk = (up.src, up.w, up.h, psm);
+    let (bytes, _) = tex.loaded(boot, ram, up.src, per * w * h)?;
+    let kept = tex.raw_pic.get(&pk).filter(|e| e.texels == bytes).map(|e| e.index);
+    let i = match kept {
+        Some(i) => i,
         None => {
-            let t = uyafmt::core::Texture { width: w, height: h, levels: vec![px], gs: None };
-            let EeTextures { base, by_aref, sizes, .. } = &mut *tex;
-            let i = base.push(device, queue, &t, &mut by_aref.values_mut().collect::<Vec<_>>())?;
-            sizes.push((w, h));
-            tex.ram_made.insert((u64::MAX, hash), i);
+            let px: Vec<[u8; 4]> = match psm {
+                0 => bytes.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect(),
+                _ => bytes.chunks_exact(3).map(|c| [c[0], c[1], c[2], 0x80]).collect(),
+            };
+            let texels = bytes.to_vec();
+            let hash = hash_texels(0xcbf2_9ce4_8422_2325u64 ^ (w as u64) << 32 ^ h as u64, &px);
+            tex.work.decodes += 1;
+            tex.work.texels += (w * h) as u64;
+            tex.work.hashed += 4 * (w * h) as u64;
+            let i = match tex.ram_made.get(&(u64::MAX, hash)) {
+                Some(&i) => i,
+                None => {
+                    let t = uyafmt::core::Texture { width: w, height: h, levels: vec![px], gs: None };
+                    let EeTextures { base, by_aref, sizes, .. } = &mut *tex;
+                    let i = base.push(device, queue, &t, &mut by_aref.values_mut().collect::<Vec<_>>())?;
+                    sizes.push((w, h));
+                    tex.ram_made.insert((u64::MAX, hash), i);
+                    i
+                }
+            };
+            let e = Source { texa: None, clut_meta: None, texels, clut: Vec::new(), resident: None, index: i };
+            tex.raw_bytes += e.size();
+            if let Some(old) = tex.raw_pic.insert(pk, e) {
+                tex.raw_bytes -= old.size();
+            }
+            tex.cap_raw();
             i
         }
     };
+    tex.work.ns += began.elapsed().as_nanos() as u64;
     let set = if psm == 1 { 256 } else { 0 };
     let key: Key = (i, true, true, 1, tex1_k(0).to_bits(), Blend::Replace, 0);
     let base = &tex.base;
@@ -1471,6 +1699,21 @@ pub(crate) enum Step {
     Draw { draws: Vec<Draw>, set: u16, screen: bool, flat: bool, target: u32, snap: Option<u32>, scissor: [u32; 4] },
     /// The water reflections (`reflections.rs`) over a pass's level water triangles drawn so far: a range of `EeDraw::water`.
     Reflect(std::ops::Range<u32>),
+    /// Each pixel's depth into the main frame's alpha (Aquatos' distance blur, `DepthAlpha`).
+    DepthAlpha(DepthAlpha),
+}
+
+/// The main frame's alpha made from its depth as Aquatos' frames make it (levels 8, 27 and 28) for the blurred copies of the
+/// frame they blend over it by that alpha (ALPHA_1 C Ad: far is blurred). On the GS three steps: a white sprite into the Z
+/// buffer as PSMCT24 at (Cs - Cd) x 0x80 inverts every depth (Z' = 0xFFFFFF - Z); 32 sprites of 8 x 832 through the main frame
+/// as PSMCT16 (FBMSK 0x3FFF: each 16-bit half's upper byte written) read the Z buffer as PSMZ16 eight pixels to the left: the
+/// layouts put each pixel's own Z' bits 8 to 14 into its alpha, bit 7 0 (the texel's alpha at most 0xFF x 0x40 / 0x80); a sprite
+/// at Z `threshold` writing alpha `below` only (FBMSK 0x00FFFFFF) where it passes ZTST GREATER against Z', the pixels nearer.
+/// Worked through the GS memory layouts for every pixel of the 512 x 416 frame: each one's alpha written once, from its own Z.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DepthAlpha {
+    /// The threshold sprite's Z and alpha, when it came (Z' below it takes the alpha).
+    pub threshold: Option<(u32, u8)>,
 }
 
 /// The frame's steps (each with the moby draw it comes before), their vertices, the shadow faces and EE triangles drawn, and the
@@ -1495,6 +1738,7 @@ enum Raw {
     Darken(std::ops::Range<u32>, u8),
     Draw(Vec<(Key, std::ops::Range<u32>)>, u16, bool, bool, u32, Option<u32>, [u32; 4]),
     Reflect(std::ops::Range<u32>),
+    DepthAlpha(DepthAlpha),
 }
 
 /// The frame's EE vertices as the steps are built, each run of a step at the end in turn: only the last run grows (the next
@@ -1525,6 +1769,9 @@ impl Runs {
 pub(crate) fn build(prims: &[(usize, EePrim)], transfers: &[crate::mobies::Transfer], proj: &Projection, cam: &Camera, tex: &mut EeTextures, core_ram: u32, ram: &[u8], boot: &uyafmt::boot::Boot, device: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::BindGroupLayout, mut vertices: Vec<ObjVertex>, water: Option<(&[std::ops::Range<usize>], crate::reflections::Plane)>, mut water_verts: Vec<ObjVertex>) -> EeDraw {
     // Each triangle's world positions and vertices, made on the crew's threads (`prepare`).
     let mut pre = std::mem::take(&mut tex.pre);
+    tex.work.frames += 1;
+    tex.frame_memo.clear();
+    tex.release_idle();
     // The frame's text laid out in the vector font before its letters are drawn (`prompts::prepare`), each primitive's row and
     // pass, beside it.
     let (problems, rows, pass_of) = prepare(prims, proj, cam, &mut pre, tex, water.map(|(ranges, _)| ranges));
@@ -1552,6 +1799,8 @@ pub(crate) fn build(prims: &[(usize, EePrim)], transfers: &[crate::mobies::Trans
     let mut display = false;
     // The view's origin on the screen (the corner of step 1's sprites): the faces sample the frame at their own pixel from it.
     let mut origin: Option<[f64; 2]> = None;
+    // The frame buffer (FBP) a white sprite inverted as PSMCT24 this frame (`DepthAlpha`: the Z buffer).
+    let mut inverted: Option<u64> = None;
     // A sprite's rectangle as two triangles in the native picture.
     let rect = |p: &EePrim| -> [ObjVertex; 6] {
         let (a, b) = (&p.verts[0], &p.verts[1]);
@@ -1704,6 +1953,31 @@ pub(crate) fn build(prims: &[(usize, EePrim)], transfers: &[crate::mobies::Trans
         let fix = (p.alpha >> 32) as u8;
         // No alpha test passes and a failing pixel writes the frame (FB_ONLY).
         let fb_only = ate == 1 && atst == 0 && afail == 1;
+        // Aquatos' depth into the main frame's alpha (`DepthAlpha`): the Z buffer inverted, its bits 8 to 14 into the alpha, the
+        // pixels nearer than a sprite's Z given that sprite's alpha.
+        let (fpsm, tpsm, tbp) = (p.frame >> 24 & 0x3f, p.tex0 >> 20 & 0x3f, p.tex0 & 0x3fff);
+        if !main && ty == 6 && tme == 0 && abe == 1 && (al(0), al(2), al(4), al(6)) == (0, 1, 2, 2) && fix == 0x80 && fpsm == 1 && fbmsk == 0xff00_0000 && p.verts.iter().all(|v| v.rgba[..3] == [255; 3]) {
+            inverted = Some(fbp);
+            continue;
+        }
+        if main && ty == 6 && tme == 1 && abe == 0 && fpsm == 2 && fbmsk == 0x3fff && tpsm == 0x32 && p.verts.iter().all(|v| v.rgba[3] <= 0x80) {
+            if inverted.is_none_or(|f| f * 32 != tbp) {
+                skip(format!("depth into alpha: the Z buffer at TBP {tbp:#x} read uninverted"));
+                continue;
+            }
+            if !matches!(raw.last(), Some((a, Raw::DepthAlpha(d))) if *a == at && d.threshold.is_none()) {
+                raw.push((at, Raw::DepthAlpha(DepthAlpha { threshold: None })));
+            }
+            continue;
+        }
+        if main && ty == 6 && tme == 0 && fpsm == 0 && fbmsk == 0x00ff_ffff && zte == 1 && ztst == 3 {
+            if let Some((a, Raw::DepthAlpha(d))) = raw.last_mut() {
+                if *a == at && d.threshold.is_none() {
+                    d.threshold = Some((p.verts[1].z as u32, p.verts[1].rgba[3]));
+                    continue;
+                }
+            }
+        }
         let last = raw.last_mut().filter(|(a, _)| *a == at);
         if main && ty == 6 && tme == 0 && abe == 1 && fix_blend && fix == 0 && fb_only && date == 1 && datm == 0 && zte == 1 && ztst == 1 {
             if p.verts[1].rgba[3] != 0x80 {
@@ -1859,6 +2133,7 @@ pub(crate) fn build(prims: &[(usize, EePrim)], transfers: &[crate::mobies::Trans
                     Raw::Darken(r, f) => Step::Darken(r, f),
                     Raw::Draw(d, set, screen, flat, target, snap, scissor) => Step::Draw { draws: d.into_iter().map(|(key, r)| Draw { key, first: r.start, count: r.end - r.start }).collect(), set, screen, flat, target, snap, scissor },
                     Raw::Reflect(r) => Step::Reflect(r),
+                    Raw::DepthAlpha(d) => Step::DepthAlpha(d),
                 },
             )
         })
@@ -1934,7 +2209,35 @@ pub(crate) struct Pipelines {
     up: wgpu::RenderPipeline,
     down: wgpu::RenderPipeline,
     darken: wgpu::RenderPipeline,
+    depth_alpha: wgpu::RenderPipeline,
+    depth_alpha_layout: wgpu::BindGroupLayout,
 }
+
+/// `DepthAlpha`'s pass: each pixel's GS Z from the picture's depth (reverse Z between NEAR and FAR, the view depth d, Z = a + c / d,
+/// the 24-bit buffer's), Z' = 0xFFFFFF - Z, and the alpha Z' bits 8 to 14, or the threshold's alpha where Z' is below its Z'.
+const DEPTH_ALPHA: &str = r#"
+struct P { oz: f32, k: f32, threshold: f32, below: f32, near: f32, far: f32, tan: vec2<f32>, z2: vec4<f32>, z3: vec4<f32>, size: vec2<f32>, pad: vec2<f32> }
+@group(0) @binding(0) var depth: texture_depth_2d;
+@group(0) @binding(1) var<uniform> p: P;
+
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    return vec4<f32>(f32(i32(i & 1u) * 4 - 1), f32(i32(i >> 1u) * 4 - 1), 0.0, 1.0);
+}
+
+@fragment fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let n = textureLoad(depth, vec2<i32>(at.xy), 0);
+    let d = p.near * p.far / (n * (p.far - p.near) + p.near);
+    // The pixel's direction: its NDC times the view's tangents (y up).
+    let s = vec2<f32>(at.x / p.size.x * 2.0 - 1.0, 1.0 - at.y / p.size.y * 2.0) * p.tan;
+    let z = clamp(floor(p.oz + p.k * (d * (p.z2.x + s.x * p.z2.y + s.y * p.z2.z) + p.z2.w) / (d * (p.z3.x + s.x * p.z3.y + s.y * p.z3.z) + p.z3.w)), 0.0, 16777215.0);
+    let inv = 16777215.0 - z;
+    var alpha = p.below;
+    if (inv >= p.threshold) {
+        alpha = f32((u32(inv) >> 8u) & 0x7fu);
+    }
+    return vec4<f32>(0.0, 0.0, 0.0, alpha / 255.0);
+}
+"#;
 
 impl Pipelines {
     pub fn new(device: &wgpu::Device, view_layout: &wgpu::BindGroupLayout) -> Pipelines {
@@ -1994,6 +2297,25 @@ impl Pipelines {
             multiview_mask: None,
             cache: crate::pipelines::cache(),
         });
+        let depth_alpha_module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("depth alpha"), source: wgpu::ShaderSource::Wgsl(DEPTH_ALPHA.into()) });
+        let depth_alpha_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("depth alpha"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+        let depth_alpha = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("depth alpha"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("depth alpha"), bind_group_layouts: &[Some(&depth_alpha_layout)], immediate_size: 0 })),
+            vertex: wgpu::VertexState { module: &depth_alpha_module, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState { module: &depth_alpha_module, entry_point: Some("fs"), compilation_options: Default::default(), targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba8Unorm, blend: None, write_mask: wgpu::ColorWrites::ALPHA })] }),
+            multiview_mask: None,
+            cache: crate::pipelines::cache(),
+        });
         let op = |pass_op: wgpu::StencilOperation| wgpu::StencilFaceState { compare: wgpu::CompareFunction::Always, fail_op: wgpu::StencilOperation::Keep, depth_fail_op: wgpu::StencilOperation::Keep, pass_op };
         let always = wgpu::CompareFunction::Always;
         // Z test GEQUAL on the GS: nearer or equal passes.
@@ -2001,6 +2323,8 @@ impl Pipelines {
         Pipelines {
             gs_size,
             gs_size_layout,
+            depth_alpha,
+            depth_alpha_layout,
             // Step 1's sprites pass only where the frame's alpha is below 0x80 (DATE, DATM 0) and write 0x80 there: the alpha
             // becomes the greater of its own and 0x80, so a pixel above 0x80 keeps it for the glow's extraction (level 6 field
             // 9000: the hangar's red tubes).
@@ -2028,6 +2352,31 @@ impl Pipelines {
                 }),
             ),
         }
+    }
+
+    /// `DepthAlpha`'s pass over picture `target` from its depth `depth` (`DEPTH_ALPHA`, `params` as `replay::Cmd::DepthAlpha`).
+    pub fn depth_alpha(&self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, depth: &wgpu::Texture, target: &wgpu::TextureView, size: (u32, u32), params: &[f32; 16]) {
+        let mut params: [f32; 20] = std::array::from_fn(|i| params.get(i).copied().unwrap_or(0.0));
+        (params[16], params[17]) = (size.0 as f32, size.1 as f32);
+        use wgpu::util::DeviceExt;
+        let ub = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("depth alpha"), contents: bytemuck::cast_slice(&params), usage: wgpu::BufferUsages::UNIFORM });
+        let dv = depth.create_view(&wgpu::TextureViewDescriptor { aspect: wgpu::TextureAspect::DepthOnly, ..Default::default() });
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("depth alpha"),
+            layout: &self.depth_alpha_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&dv) }, wgpu::BindGroupEntry { binding: 1, resource: ub.as_entire_binding() }],
+        });
+        let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("depth alpha"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: target, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        p.set_pipeline(&self.depth_alpha);
+        p.set_bind_group(0, &bg, &[]);
+        p.draw(0..3, 0..1);
     }
 
     /// The main frame at the GS's size: `to` (512 x 416) from the native picture `from` (`DOWNSAMPLE`).
@@ -2077,6 +2426,7 @@ impl Pipelines {
             }
             Step::Draw { .. } => unreachable!("the caller draws the EE triangles with the objects pipelines"),
             Step::Reflect(_) => unreachable!("the caller draws the water's reflection (`reflections.rs`)"),
+            Step::DepthAlpha(_) => unreachable!("the caller draws the depth into the alpha (`replay::Cmd::DepthAlpha`)"),
         }
         Ok(())
     }

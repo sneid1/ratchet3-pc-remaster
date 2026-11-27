@@ -27,5 +27,11 @@ debug = 1
 [profile.release.package."*"]
 debug = 0
 
+# The runtime (the machine, the DMA and GS events, the native units) as one codegen unit: its units call helpers across modules
+# (vu0's fmac, the scratchpad accessors, the counters) that sixteen units kept out of line (the game thread's profile, 27 November
+# 2026). Its build takes longer; the level libraries do not link it (they reach it through `Rt`), so they are unchanged.
+[profile.release.package.uyart]
+codegen-units = 1
+
 [profile.dev]
 opt-level = 1

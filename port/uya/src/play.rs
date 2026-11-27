@@ -189,6 +189,7 @@ enum Event {
 }
 
 pub fn play(iso: &str, o: Options) -> Result<(), String> {
+    println!("play: Ratchet & Clank: Up Your Arsenal PC Remaster v{}", crate::update::VERSION);
     // A crash's place and stack into the log (`crash.rs`).
     #[cfg(windows)]
     crate::crash::report();
@@ -430,6 +431,8 @@ impl App {
         let file = format!("{}/settings.txt", self.o.profile);
         NEW_PROFILE.store(!std::path::Path::new(&file).exists() && self.o.height.is_none(), Ordering::Relaxed);
         let settings = crate::settings::Settings::load(&file)?;
+        // The update check (`update.rs`), in a thread of its own while the game starts.
+        crate::update::start(&self.o.profile, settings.get("update_check") == 1);
         // The native picture's height; its width is the shape of what it is shown on (PLAN 4.2): the monitor's in fullscreen, and
         // the window, which opens at the monitor's shape, otherwise (`uyart::set_view_k`, every frame).
         let h = self.o.height.unwrap_or(settings.height());
@@ -810,7 +813,7 @@ fn render(iso: &str, height: u32, settings: crate::settings::Settings, atlas: &s
     // The save slots' pictures, from the disc (`uyafmt::wad38::slot_pictures`).
     let pictures = Arc::new(uyafmt::wad38::slot_pictures(iso)?);
     // The game's text in the vector font (`text.rs`), from the main program's font tables.
-    let boot = uyafmt::boot::boot(iso)?;
+    let boot = crate::boot_image(iso)?;
     let text = std::sync::Arc::new(crate::text::Text::new(&boot)?);
     // The display's refresh rate (the window's monitor's): above the game's 59.94 fields a second, with the fields paced, every
     // refresh shows a picture between two of the game's frames (PLAN 8.8, `replay.rs`, `Timeline`); else each of the game's frames
@@ -871,7 +874,9 @@ fn render(iso: &str, height: u32, settings: crate::settings::Settings, atlas: &s
     let (spare_tx, spare_rx) = std::sync::mpsc::channel::<Vec<(usize, crate::mobies::EePrim)>>();
     let walker = native.take_walker();
     let walk_thread = std::thread::Builder::new().name("uya walk".into()).spawn(move || walk_ahead(rx, ahead_tx, walker, spare_rx)).map_err(|e| format!("play: walk thread: {e}"))?;
-    let (t0, mut ns, mut n) = (Instant::now(), 0u64, 0u64);
+    let (t0, mut ns, mut n, mut handed_ns) = (Instant::now(), 0u64, 0u64, 0u64);
+    // The GPU's time a picture, where the presenter shows each frame as it comes (`GpuClock`).
+    let gpu_clock = if between { None } else { Some(GpuClock::start(native.gpu().2.clone(), native.gpu().3.clone())?) };
     // What the last frame was drawn as (logged when it changes).
     let mut path = "";
     while let Ok((msg, walked)) = ahead.recv() {
@@ -962,9 +967,13 @@ fn render(iso: &str, height: u32, settings: crate::settings::Settings, atlas: &s
             Err(e) => Err(e),
         };
         spare_tx.send(native.take_ee_spare()).map_err(|_| "play: the walk thread stopped")?;
+        let built = Instant::now();
         let shown = match picture {
             Ok(t) => {
                 kbm.lock().expect("input lock").answers = (fr.field, std::mem::take(&mut *native_answers.lock().expect("answers lock")));
+                if let Some(clock) = &gpu_clock {
+                    clock.after_submit(built);
+                }
                 Shown::Gpu(t)
             }
             Err(e) => {
@@ -1002,9 +1011,11 @@ fn render(iso: &str, height: u32, settings: crate::settings::Settings, atlas: &s
         let prepared_ms = t.elapsed().as_secs_f64() * 1e3;
         // What the frame changes in the shared GPU state, and a frame drawn as it was prepared: for the presenter, in order.
         let outbox = native.take_outbox();
-        if show.send(Show::Frame { field: Some((fr.field, fr.at, Instant::now())), shown, shape: native.size(), replay, set, outbox }).is_err() {
+        let handing = Instant::now();
+        if show.send(Show::Frame { field: Some((fr.field, fr.at, handing)), shown, shape: native.size(), replay, set, outbox }).is_err() {
             return Err(stopped(presenter));
         }
+        handed_ns += handing.elapsed().as_nanos() as u64;
         RENDER_BUSY.store(0, Ordering::Relaxed);
         frame_drawn(t.elapsed().as_nanos() as u64);
         if frame_times() { println!("frame stages: render {} prepare {:.3} send {:.3}", fr.field, prepared_ms, t.elapsed().as_secs_f64() * 1e3 - prepared_ms); }
@@ -1012,11 +1023,20 @@ fn render(iso: &str, height: u32, settings: crate::settings::Settings, atlas: &s
         n += 1;
         if fr.field % 300 == 0 {
             let ee = native.ee_census().map_or(String::new(), |c| format!("; the level's EE draws {c}"));
-            println!("play: field {}, {:.1} s: drawn in {:.1} ms a frame{ee}", fr.field, t0.elapsed().as_secs_f64(), ns as f64 / 1e6 / n as f64);
+            // Of the time a frame takes: the builder's own work, and the wait to hand the frame to the presenter (which takes
+            // the next only when it has shown the one before, and that waits for the GPU); and, where the presenter shows each
+            // frame as it comes, the GPU's time a picture and the presenter's (the builder is held by the GPU when the wait
+            // approaches the GPU's time, and by its own work when the wait is near 0).
+            let per = |ns: u64| ns as f64 / 1e6 / n as f64;
+            let plain = match (PLAIN_GPU.lock().expect("GPU time lock").take(), PLAIN_SHOWN.lock().expect("presenter time lock").take()) {
+                (Some(g), Some(p)) => format!("; the GPU {:.1} ms a picture (at most {:.1}), the presenter {:.1} ms (at most {:.1})", g.0, g.1, p.0, p.1),
+                _ => String::new(),
+            };
+            println!("play: field {}, {:.1} s: drawn in {:.1} ms a frame (the builder's own work {:.1} ms, the wait to hand the frame over {:.1} ms){plain}{ee}", fr.field, t0.elapsed().as_secs_f64(), per(ns), per(ns - handed_ns), per(handed_ns));
             if let Some(m) = crate::native::mem_log(native.gpu().2) {
                 println!("play: field {}: {m}", fr.field);
             }
-            (ns, n) = (0, 0);
+            (ns, n, handed_ns) = (0, 0, 0);
         }
     }
     walk_thread.join().map_err(|_| "play: the walk thread panicked")?;
@@ -1110,7 +1130,11 @@ fn present(mut screen: Screen, shows: Receiver<Show>, hz: Option<f64>, vblank: O
                                 screen.present_to(None, &Shown::Gpu(pic), shape)?;
                             }
                             outbox.apply(&screen.queue);
+                            let showing = Instant::now();
                             screen.present(&shown, shape, None)?;
+                            if !between && matches!(shown, Shown::Gpu(_)) {
+                                PLAIN_SHOWN.lock().expect("presenter time lock").add(showing.elapsed().as_secs_f64() * 1e3);
+                            }
                         }
                     }
                     last = Some((shown, shape, set));
@@ -1135,6 +1159,96 @@ fn present(mut screen: Screen, shows: Receiver<Show>, hz: Option<f64>, vblank: O
         if tl.running() {
             tl.pump(&mut screen)?;
         }
+    }
+}
+
+/// A time (ms) kept as its sum, count and the worst, for the play line every 300 fields.
+struct Stat {
+    sum: f64,
+    n: u64,
+    max: f64,
+}
+
+impl Stat {
+    fn add(&mut self, ms: f64) {
+        self.sum += ms;
+        self.n += 1;
+        self.max = self.max.max(ms);
+    }
+
+    /// The mean and the worst since the last, None when there is none; the count starts again.
+    fn take(&mut self) -> Option<(f64, f64)> {
+        let r = (self.n > 0).then(|| (self.sum / self.n as f64, self.max));
+        (self.sum, self.n, self.max) = (0.0, 0, 0.0);
+        r
+    }
+}
+
+/// Where the presenter shows each frame as it comes (60 Hz and below, no timeline): the GPU's time a picture (`GpuClock`) and
+/// the presenter's own (its copy, the acquire of the window's image and the present, which may wait for the display), since the
+/// last play line.
+static PLAIN_GPU: Mutex<Stat> = Mutex::new(Stat { sum: 0.0, n: 0, max: 0.0 });
+static PLAIN_SHOWN: Mutex<Stat> = Mutex::new(Stat { sum: 0.0, n: 0, max: 0.0 });
+
+struct ClockState {
+    /// When the GPU finished the last picture.
+    last: Mutex<Option<Instant>>,
+    /// The pictures whose finish is not seen yet.
+    pending: std::sync::atomic::AtomicU64,
+}
+
+/// The GPU's time a picture where the presenter shows each frame as it comes: from when the builder has handed the picture's
+/// world to the GPU (or when the picture before finished, if the GPU is still at that one) to when the GPU finishes it. A GPU
+/// that keeps up shows the tail of a picture it began as it was built; a GPU that does not shows its whole time a picture. The
+/// finish is seen by a thread that polls the device every half millisecond while a picture is pending and sleeps otherwise (the
+/// PCs this line is for have few cores to spare), so no thread waits for the GPU.
+struct GpuClock {
+    queue: wgpu::Queue,
+    state: Arc<ClockState>,
+    /// The polling thread, woken when a picture is handed over.
+    poller: std::thread::Thread,
+}
+
+impl GpuClock {
+    fn start(device: wgpu::Device, queue: wgpu::Queue) -> Result<GpuClock, String> {
+        let state = Arc::new(ClockState { last: Mutex::new(None), pending: std::sync::atomic::AtomicU64::new(0) });
+        let polled = state.clone();
+        let poller = std::thread::Builder::new()
+            .name("uya gpu clock".into())
+            .spawn(move || {
+                // Until the renderer lets go of its clock (and every picture's callback has run): asleep while no picture is
+                // pending (woken by `after_submit`, and every 100 ms to see whether the renderer has let go).
+                while Arc::strong_count(&polled) > 1 {
+                    if polled.pending.load(Ordering::Relaxed) == 0 {
+                        std::thread::park_timeout(Duration::from_millis(100));
+                        continue;
+                    }
+                    if let Err(e) = device.poll(wgpu::PollType::Poll) {
+                        println!("play: the GPU clock stopped: {e}");
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_micros(500));
+                }
+            })
+            .map_err(|e| format!("play: GPU clock thread: {e}"))?
+            .thread()
+            .clone();
+        Ok(GpuClock { queue, state, poller })
+    }
+
+    /// The world of the picture just built was handed to the GPU at `submitted`.
+    fn after_submit(&self, submitted: Instant) {
+        self.state.pending.fetch_add(1, Ordering::Relaxed);
+        self.poller.unpark();
+        let state = self.state.clone();
+        self.queue.on_submitted_work_done(move || {
+            let done = Instant::now();
+            let mut last = state.last.lock().expect("GPU clock lock");
+            let began = last.map_or(submitted, |l| l.max(submitted));
+            PLAIN_GPU.lock().expect("GPU time lock").add(done.saturating_duration_since(began).as_secs_f64() * 1e3);
+            *last = Some(last.map_or(done, |l| l.max(done)));
+            state.pending.fetch_sub(1, Ordering::Relaxed);
+        });
     }
 }
 
@@ -2252,6 +2366,8 @@ struct Screen {
     fps: Fps,
     /// The settings page's tab bar (`TabBar`).
     tab_bar: TabBar,
+    /// The update notice's plate on the main menu (`NoticePlate`).
+    notice: NoticePlate,
     /// The window's size, the surface's and the game's view widening last said in the log, and whether the surface was made
     /// again for a suboptimal image at this size (`acquire`).
     shape_said: (u32, u32, u32, u32, f32),
@@ -2526,6 +2642,62 @@ impl TabBar {
     }
 }
 
+/// The update notice's plate on the main menu (`update::plate`; the player's word and the design in `update.rs`), drawn by the window
+/// over the finished picture as the tab bar is: a plate in the settings tabs' colours at `update::PLATE` (shares of the original
+/// picture), dark with a gold edge, lit amber under the pointer, its three lines centred on it in the game's gold letters on a dark
+/// shadow (the first at a tab's letters' size, the second at 0.7 of it, the third dimmer at 0.6), each within nine tenths of its
+/// width; it fades in over 0.3 s the first time it shows.
+struct NoticePlate {
+    g: Glyphs,
+    first: Option<Instant>,
+}
+
+impl NoticePlate {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Result<NoticePlate, String> {
+        // Every printable character: the lines hold capitals, figures, a release's "v" and stops, and a key's name (`Key::label`).
+        let chars: String = ('!'..='~').collect();
+        Ok(NoticePlate { g: Glyphs::new(device, queue, format, &chars, "update notice")?, first: None })
+    }
+
+    /// `plate` into `view` (`size` pixels), over the picture at `viewport`.
+    fn draw(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, size: (u32, u32), viewport: [f32; 4], plate: Option<&crate::update::Shown>) {
+        let [vx, vy, vw, vh] = viewport;
+        let Some(p) = plate.filter(|_| vw > 0.0 && vh > 0.0) else { return };
+        let alpha = (self.first.get_or_insert_with(Instant::now).elapsed().as_secs_f32() / 0.3).min(1.0);
+        let size = (size.0 as f32, size.1 as f32);
+        let w2 = vh * 0.62 / 0.4805;
+        let left = vx + (vw - w2) / 2.0;
+        let at = |u: f32, v: f32| (left + u * w2, vy + v * vh);
+        let rgba = |c: [u8; 3], a: f32| [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, a * alpha];
+        let [u0, v0, u1, v1] = crate::update::PLATE;
+        let ((x0, y0), (x1, y1)) = (at(u0, v0), at(u1, v1));
+        let (bx, by) = ((0.002 * w2).max(1.0), (0.003 * vh).max(1.0));
+        let shadow = (0.0016 * vh).round().max(1.0);
+        // The main menu panel's own colours (its body 82, 54, 22 over the background, its highlight band 119, 68, 16, its
+        // letters 255, 204, 102 and the highlighted item's near white), the edge brighter so the plate stands off the dark room:
+        // in the settings tabs' near black it was a faint outline (the player: "The box looks faint").
+        let (fill, edge) = if p.lit { ([0x80, 0x50, 0x16], [0xff, 0xe0, 0x90]) } else { ([0x52, 0x36, 0x16], [0xd6, 0x96, 0x34]) };
+        let mut verts = Vec::new();
+        let solid = self.g.solid;
+        self.g.quad(&mut verts, size, [x0, y0, x1, y1], solid, rgba(fill, 0.94));
+        for e in [[x0, y0, x1, y0 + by], [x0, y1 - by, x1, y1], [x0, y0, x0 + bx, y1], [x1 - bx, y0, x1, y1]] {
+            self.g.quad(&mut verts, size, e, solid, rgba(edge, 1.0));
+        }
+        // A tab's letters are 0.38 of its 0.046 of the picture's height (`TabBar::draw`, `menus::TAB_BAR`).
+        let tab = 0.046 * 0.38 * vh;
+        let (gold, cream, soft) = ([0xff, 0xcc, 0x66], [0xf0, 0xe4, 0xc8], [0xe0, 0xb0, 0x5c]);
+        let mut base = y0 + 0.011 * vh;
+        for (k, (line, (cap, colour))) in p.lines.iter().zip([(tab, gold), (0.7 * tab, cream), (0.6 * tab, soft)]).enumerate() {
+            let cap = cap.min(0.9 * (x1 - x0) / self.g.width(line, 1.0));
+            base += if k == 0 { cap } else { cap + 0.0095 * vh };
+            let tx = (x0 + x1 - self.g.width(line, cap)) / 2.0;
+            self.g.text(&mut verts, size, line, (tx + shadow, base + shadow), cap, [0.0, 0.0, 0.0, 0.75 * alpha]);
+            self.g.text(&mut verts, size, line, (tx, base), cap, rgba(colour, 1.0));
+        }
+        self.g.draw(device, enc, view, &verts, "update notice");
+    }
+}
+
 /// The quick-select ring as the game draws it in play, in shares of the original picture (its 0.62 / 0.4805 shape at the native
 /// picture's height, as every 2D element is placed): its middle, and its slots' distance from it across and up (Veldin, the ring
 /// held open at 2562 x 1440: its middle at 806, 712, the slots 290 across and 280 up and down from it); and the pointer's radius
@@ -2797,7 +2969,8 @@ impl Screen {
         });
         let fps = Fps::new(&device, native.gpu().3, format)?;
         let tab_bar = TabBar::new(&device, native.gpu().3, format)?;
-        Ok(Screen { device: device.clone(), queue: native.gpu().3.clone(), window, surface, config, pipeline, layout, sampler, frame: None, pictures: Vec::new(), last: None, kbm, easu, rcas, up: None, pointer, fps, tab_bar, shape_said: (0, 0, 0, 0, 0.0), suboptimal_redone: false })
+        let notice = NoticePlate::new(&device, native.gpu().3, format)?;
+        Ok(Screen { device: device.clone(), queue: native.gpu().3.clone(), window, surface, config, pipeline, layout, sampler, frame: None, pictures: Vec::new(), last: None, kbm, easu, rcas, up: None, pointer, fps, tab_bar, notice, shape_said: (0, 0, 0, 0, 0.0), suboptimal_redone: false })
     }
 
     /// The shape `shown` is shown at, the native picture's height high (`size`: the native picture's size when the frame was
@@ -2847,6 +3020,8 @@ impl Screen {
         self.pointer(&mut enc, &view, [0.0, 0.0, w as f32, h as f32], (w, h));
         let tabs = self.kbm.lock().expect("input lock").tab_bar.clone();
         self.tab_bar.draw(device, &mut enc, &view, (w, h), [0.0, 0.0, w as f32, h as f32], &tabs);
+        let notice = self.kbm.lock().expect("input lock").notice.clone();
+        self.notice.draw(device, &mut enc, &view, (w, h), [0.0, 0.0, w as f32, h as f32], notice.as_ref());
         self.fps.draw(device, &mut enc, &view, (w, h));
         let row = (4 * w).div_ceil(256) * 256;
         let readback = device.create_buffer(&wgpu::BufferDescriptor { label: Some("shot readback"), size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
@@ -3141,6 +3316,8 @@ impl Screen {
         self.pointer(&mut enc, &view, [vx, vy, vw, vh], (win.width, win.height));
         let tabs = self.kbm.lock().expect("input lock").tab_bar.clone();
         self.tab_bar.draw(device, &mut enc, &view, (win.width, win.height), [vx, vy, vw, vh], &tabs);
+        let notice = self.kbm.lock().expect("input lock").notice.clone();
+        self.notice.draw(device, &mut enc, &view, (win.width, win.height), [vx, vy, vw, vh], notice.as_ref());
         self.fps.count(Instant::now());
         self.fps.draw(device, &mut enc, &view, (win.width, win.height));
         let done_encoding = Instant::now();

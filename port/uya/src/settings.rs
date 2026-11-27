@@ -350,6 +350,17 @@ pub const OPTIONS: &[Opt] = &[
         presets: None,
         about: "After first viewing: each cutscene and movie plays through once, then skips. Any time: the game's own.",
     },
+    // The update notice (`update.rs`): at start the game asks GitHub for the latest release and the main menu says when there is
+    // a newer one. RecompLauncher keeps its players' game up to date, so then the game never asks.
+    Opt {
+        key: "update_check",
+        tab: Tab::Gameplay,
+        name: "UPDATE CHECK",
+        values: &[("off", "OFF"), ("on", "ON")],
+        default: 1,
+        presets: None,
+        about: "Looks for a newer release when the game starts and says so in the main menu. Not used when RecompLauncher runs the game: it updates it itself.",
+    },
     // PLAN 10: HIGH QUALITY mixes the game's sound at the output device's own rate (from the next start: `audio.rs`), each voice
     // reading its sample with a windowed sinc (`snd::sinc`) instead of the 4-point Hermite, the device's read and the movies'
     // sound the same; ORIGINAL is the 48 kHz mix.

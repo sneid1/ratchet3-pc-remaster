@@ -326,23 +326,17 @@ pub struct Hw {
     t0: Instant,
     /// GS privileged registers by offset / 16 (0x1200_0000 .. 0x1200_00F0) and CSR, IMR, BUSDIR, SIGLBLID.
     pub gs: [u64; 16],
-    pub csr: u64,
     pub imr: u64,
     pub busdir: u64,
-    pub siglblid: u64,
     /// VIF0's unpack state: CYCLE (CL, WL), MASK, MODE, ROW, COL, and its other registers by offset / 16.
     pub vif0: Vif0,
-    /// VIF1's write cycle (STCYCL's CL and WL), for the lengths of its UNPACKs (`gs_events`).
-    vif1_cycle: (u32, u32),
+    /// GS CSR, SIGLBLID, the field's image transfers and the walk of the GS events that changes them (`gsstate`): reached only
+    /// through its accessors, which wait for a walk still running on the worker thread.
+    pub(crate) walk: gsstate::GsState,
     pub vif_regs: [[u32; 16]; 2],
     pub gif_regs: [u32; 16],
     pub sbus: [u32; 16],
     pub jobs: Vec<Job>,
-    /// This field's image transfers (`GsUpload`), and the GS's BITBLTBUF, TRXPOS and TRXREG as the packets so far left them.
-    pub uploads: Vec<GsUpload>,
-    trx: [u64; 3],
-    /// Each GIF path's packet its data ended inside of (`GifCarry`: 0 PATH2, 1 PATH3).
-    gif_carry: [GifCarry; 2],
     /// The skin job's joint matrices this field (`SkinJoints`).
     pub skin: SkinJoints,
     pub(crate) skin_normals: Vec<[f32; 3]>,
@@ -356,10 +350,8 @@ pub struct Hw {
     pub kicked: bool,
     /// The VIF1 end handler's burst under way (`Burst`).
     burst: Option<Burst>,
-    /// The blocks of a VIF1 kick whose words are copied at the kick, and a DIRECT's runs of quadwords (`vif1_events`): kept from
-    /// kick to kick.
+    /// The blocks of a VIF1 kick whose words are copied at the kick: kept from kick to kick.
     blocks: Vec<Block>,
-    runs: Vec<(usize, u32)>,
     /// The debug serial port's line (SIO TX), printed whole.
     sio: Vec<u8>,
 }
@@ -413,19 +405,14 @@ impl Default for Hw {
             timers: [Timer { base: 0, at: now, mode: 0, comp: 0, hold: 0, seen: 0 }; 4],
             t0: now,
             gs: [0; 16],
-            csr: 0x5500,
             imr: 0x7f00,
             busdir: 0,
-            siglblid: 0,
-            vif1_cycle: (1, 1),
+            walk: gsstate::GsState::new(),
             vif0: Vif0 { cl: 1, wl: 1, ..Default::default() },
             vif_regs: [[0; 16]; 2],
             gif_regs: [0; 16],
             sbus: [0; 16],
             jobs: Vec::new(),
-            uploads: Vec::new(),
-            gif_carry: Default::default(),
-            trx: [0; 3],
             skin: SkinJoints::default(),
             skin_normals: Vec::new(),
             vif1_sites: Vec::new(),
@@ -435,7 +422,6 @@ impl Default for Hw {
             kicked: false,
             burst: None,
             blocks: Vec::new(),
-            runs: Vec::new(),
             sio: Vec::new(),
         }
     }
@@ -532,8 +518,9 @@ impl Hw {
     /// The vertical blank starts: INTC VBON, GS CSR VSINT, the field bit flips.
     pub fn vblank_start(&mut self) {
         self.intc_stat |= 1 << 2;
-        self.csr |= 1 << 3;
-        self.csr ^= 1 << 13;
+        let csr = self.walk.csr_mut();
+        *csr |= 1 << 3;
+        *csr ^= 1 << 13;
     }
     pub fn vblank_end(&mut self) {
         self.intc_stat |= 1 << 3;
@@ -546,8 +533,8 @@ impl Hw {
         self.kicked = false;
     }
 
-    pub fn gs_csr(&self) -> u64 {
-        self.csr
+    pub fn gs_csr(&mut self) -> u64 {
+        self.walk.csr()
     }
 
     /// DISPFB of the circuit being shown (PMODE: circuit 2 alone uses DISPFB2).
@@ -615,10 +602,10 @@ pub fn read(c: &mut Cpu, p: u32, n: u32) -> u64 {
             v
         }
         0x1200_0000..=0x1200_00ff => h.gs[((p >> 4) & 15) as usize],
-        0x1200_1000 => h.csr,
+        0x1200_1000 => h.walk.csr(),
         0x1200_1010 => h.imr,
         0x1200_1040 => h.busdir,
-        0x1200_1080 => h.siglblid,
+        0x1200_1080 => h.walk.siglblid(),
         // Past the scratchpad the space is unmapped: the console reads nothing, so does the port.
         0x0200_4000..=0x0fff_ffff => 0,
         _ => unknown(p, n, "read", at),
@@ -779,14 +766,15 @@ pub fn write(c: &mut Cpu, p: u32, n: u32, v: u64) {
         0x1200_0000..=0x1200_00ff => m.hw.gs[((p >> 4) & 15) as usize] = v,
         // CSR: writing 1 to SIGNAL, FINISH, HSINT, VSINT, EDWINT clears them; RESET clears the rest.
         0x1200_1000 => {
-            m.hw.csr &= !(v & 0x1f);
+            let csr = m.hw.walk.csr_mut();
+            *csr &= !(v & 0x1f);
             if v & 0x200 != 0 {
-                m.hw.csr &= !0x1f;
+                *csr &= !0x1f;
             }
         }
         0x1200_1010 => m.hw.imr = v,
         0x1200_1040 => m.hw.busdir = v,
-        0x1200_1080 => m.hw.siglblid = v,
+        0x1200_1080 => *m.hw.walk.siglblid_mut() = v,
         // The unmapped physical space between the scratchpad and the devices: the console ignores what is written there, so does the port.
         0x0200_4000..=0x0fff_ffff => {}
         _ => {
@@ -1089,49 +1077,354 @@ impl<'a> Stream<'a> {
     }
 }
 
-/// A kick's GS events (`vif1_events`) from its stream where it lies; with UYA_KICK_CHECK also from its words as copied at the
-/// kick (`copied`: `vif1_events_words`, the way before), the two compared, the machine going on from the first.
-fn events(m: &mut Machine, head: (u32, u32), tagged: &[Block], copied: Option<&Vif1Words>, job: usize) {
-    let Some((words, marks, _)) = copied else {
-        vif1_events(&mut m.hw, Stream::new(&m.ram, &m.spr, head, tagged));
-        return;
-    };
-    let from = m.hw.uploads.len();
-    let before = Events::of(&m.hw, from);
-    let tags: Vec<usize> = marks.iter().filter(|m| m.1 == 2).map(|m| m.0).collect();
-    vif1_events_words(&mut m.hw, words, &tags);
-    let old = Events::of(&m.hw, from);
-    before.put(&mut m.hw, from);
-    vif1_events(&mut m.hw, Stream::new(&m.ram, &m.spr, head, tagged));
-    let d = Events::of(&m.hw, from).differences(&old);
-    if checked(2, !d.is_empty()) {
-        println!("UYA_KICK_CHECK: field {} job {job}: the GS events: {}", m.field, d.join("; "));
+/// What a walk of GS events (`vif1_events`, `gif_events`) keeps and changes: VIF1's write cycle (STCYCL's CL and WL, for the
+/// lengths of its UNPACKs), each GIF path's packet its data ended inside of (`GifCarry`: 0 PATH2, 1 PATH3), the GS's BITBLTBUF,
+/// TRXPOS and TRXREG as the packets so far left them, and what it has done to the GS registers the game reads and not yet handed
+/// over (`GsState`): the CSR bits it set, SIGLBLID as the pair `(keep, set)` of the function `s -> (s & keep) | set` the packets'
+/// SIGNAL and LABEL writes made of it, and the image transfers. `job` is the job the packets go with; `runs` a DIRECT's runs of
+/// quadwords, kept from walk to walk.
+#[derive(Clone)]
+pub(crate) struct Walk {
+    cycle: (u32, u32),
+    carry: [GifCarry; 2],
+    trx: [u64; 3],
+    csr: u64,
+    sig: (u64, u64),
+    uploads: Vec<GsUpload>,
+    runs: Vec<(usize, u32)>,
+    job: usize,
+}
+
+impl Default for Walk {
+    fn default() -> Walk {
+        Walk { cycle: (1, 1), carry: Default::default(), trx: [0; 3], csr: 0, sig: (!0, 0), uploads: Vec::new(), runs: Vec::new(), job: 0 }
     }
 }
 
-/// What a VIF1 stream's GS events change (`vif1_events`), the image transfers from `Hw::uploads`' index `from` on: for
-/// UYA_KICK_CHECK.
+/// The count of the worker's walks compared with UYA_KICK_CHECK (`gsstate::GsState::join`) and of those that differed.
+static WORKER_CHECKS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+
+/// GS CSR, SIGLBLID and the field's image transfers, and the walk of the VIF1 kicks' GS events that sets them, which runs on a
+/// worker thread for the kicks read from the frame's RAM copy (the thread's kick and its end handler's burst). The state is in
+/// a module of its own so that nothing else in the file can reach it but through its accessors, each of which waits for a
+/// walk still running first: a reader never sees the state before the walk finished (the walk only sets CSR's SIGNAL and
+/// FINISH bits and composes SIGLBLID's writes, so applying its result at the first read or write in place of at the kick is the
+/// same as doing it at the kick).
+mod gsstate {
+    use super::{Block, GsUpload, Stream, Walk, checked, checking, vif1_events, Events, WORKER_CHECKS};
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering, fence};
+    use std::sync::{Arc, Mutex, MutexGuard};
+    use std::thread::{JoinHandle, Thread};
+    use std::time::{Duration, Instant};
+
+    /// How long the idle worker spins for a next kick before it parks: a thread's kick and its end handler's burst come within
+    /// microseconds of each other.
+    const SPIN: Duration = Duration::from_micros(200);
+
+    /// A kick's walk to do: its stream's head, a copy of its blocks, the frame copy's bytes (valid until the next copy, which
+    /// waits for the walk) and the job.
+    struct Task {
+        head: (u32, u32),
+        blocks: Vec<Block>,
+        ram: (*const u8, usize),
+        job: usize,
+    }
+
+    // SAFETY: `ram` is the frame copy's bytes, read only here and not changed until the game thread has joined the walk.
+    unsafe impl Send for Task {}
+
+    #[derive(Default)]
+    struct Queue {
+        tasks: VecDeque<Task>,
+        /// Block vectors given back by the worker, to be filled by the next kick.
+        pool: Vec<Vec<Block>>,
+    }
+
+    struct Shared {
+        /// The walk's state: the worker holds it for each task, the game thread at its own walks and at the join.
+        walk: Mutex<Walk>,
+        queue: Mutex<Queue>,
+        /// The tasks given and the tasks done (the worker's counts are `done`; the game thread's `submitted`).
+        submitted: AtomicU64,
+        done: AtomicU64,
+        asleep: AtomicBool,
+        quit: AtomicBool,
+        /// The panic of a task (the walk's own: a VIF code it does not know), raised again at the join.
+        panic: Mutex<Option<Box<dyn std::any::Any + Send>>>,
+        /// UYA_KICK_CHECK: the walk after each task.
+        snaps: Mutex<Vec<Events>>,
+    }
+
+    fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+        m.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub(crate) struct GsState {
+        csr: u64,
+        siglblid: u64,
+        uploads: Vec<GsUpload>,
+        shared: Arc<Shared>,
+        worker: Option<(JoinHandle<()>, Thread)>,
+        /// Tasks given since the last join.
+        pending: bool,
+        /// UYA_KICK_CHECK: the same walks done inline on the RAM as it lies, from the walk's state at the first of the tasks
+        /// pending, and the walk after each.
+        shadow: Walk,
+        shadow_snaps: Vec<Events>,
+    }
+
+    impl GsState {
+        pub(crate) fn new() -> GsState {
+            GsState {
+                csr: 0x5500,
+                siglblid: 0,
+                uploads: Vec::new(),
+                shared: Arc::new(Shared {
+                    walk: Mutex::new(Walk::default()),
+                    queue: Mutex::new(Queue::default()),
+                    submitted: AtomicU64::new(0),
+                    done: AtomicU64::new(0),
+                    asleep: AtomicBool::new(false),
+                    quit: AtomicBool::new(false),
+                    panic: Mutex::new(None),
+                    snaps: Mutex::new(Vec::new()),
+                }),
+                worker: None,
+                pending: false,
+                shadow: Walk::default(),
+                shadow_snaps: Vec::new(),
+            }
+        }
+
+        pub(crate) fn csr(&mut self) -> u64 {
+            self.join();
+            self.csr
+        }
+
+        pub(crate) fn csr_mut(&mut self) -> &mut u64 {
+            self.join();
+            &mut self.csr
+        }
+
+        pub(crate) fn siglblid(&mut self) -> u64 {
+            self.join();
+            self.siglblid
+        }
+
+        pub(crate) fn siglblid_mut(&mut self) -> &mut u64 {
+            self.join();
+            &mut self.siglblid
+        }
+
+        /// The field's image transfers so far, taken.
+        pub(crate) fn take_uploads(&mut self) -> Vec<GsUpload> {
+            self.join();
+            std::mem::take(&mut self.uploads)
+        }
+
+        /// A walk done now, on the game thread, its results handed over at once.
+        pub(crate) fn inline<R>(&mut self, f: impl FnOnce(&mut Walk) -> R) -> R {
+            self.join();
+            let mut w = lock(&self.shared.walk);
+            let r = f(&mut w);
+            apply(&mut w, &mut self.csr, &mut self.siglblid, &mut self.uploads);
+            r
+        }
+
+        /// Whether kicks' walks go to the worker thread: when the game's threads keep a core of their own (`play`'s
+        /// `keep_game_core` sets `kernel::THREAD_START` only then); on a PC with too few cores for a spare one, every thread
+        /// shares them and the walk is done at the kick as before.
+        pub(crate) fn offload(&self) -> bool {
+            crate::kernel::THREAD_START.get().is_some()
+        }
+
+        /// A kick's walk handed to the worker, from the frame copy's bytes `ram`.
+        pub(crate) fn submit(&mut self, head: (u32, u32), blocks: &[Block], ram: (*const u8, usize), job: usize) {
+            if self.worker.is_none() {
+                let shared = self.shared.clone();
+                let h = std::thread::Builder::new().name("uya walk events".into()).spawn(move || worker(shared)).expect("the walk's worker thread");
+                let t = h.thread().clone();
+                self.worker = Some((h, t));
+            }
+            let s = &self.shared;
+            {
+                let mut q = lock(&s.queue);
+                let mut v = q.pool.pop().unwrap_or_default();
+                v.clear();
+                v.extend_from_slice(blocks);
+                q.tasks.push_back(Task { head, blocks: v, ram, job });
+            }
+            self.pending = true;
+            s.submitted.fetch_add(1, Ordering::SeqCst);
+            fence(Ordering::SeqCst);
+            if s.asleep.load(Ordering::SeqCst) {
+                self.worker.as_ref().expect("spawned").1.unpark();
+            }
+        }
+
+        /// UYA_KICK_CHECK: the walk of a kick given to the worker, done inline too on the RAM as it lies, to compare at the join.
+        /// Called before `submit`.
+        pub(crate) fn shadow(&mut self, job: usize, f: impl FnOnce(&mut Walk)) {
+            if !self.pending {
+                self.shadow = lock(&self.shared.walk).clone();
+                self.shadow_snaps.clear();
+            }
+            self.shadow.job = job;
+            f(&mut self.shadow);
+            self.shadow_snaps.push(Events::of(&self.shadow));
+        }
+
+        /// Waits for the walks given to the worker and hands over their results; a panic of theirs is raised here as it was
+        /// raised there.
+        pub(crate) fn join(&mut self) {
+            if !self.pending {
+                return;
+            }
+            self.pending = false;
+            let s = &self.shared;
+            let target = s.submitted.load(Ordering::SeqCst);
+            let mut spins = 0u32;
+            while s.done.load(Ordering::Acquire) < target {
+                spins += 1;
+                if spins < 4000 {
+                    std::hint::spin_loop();
+                } else {
+                    // A wake-up the worker missed would hang here: wake it again.
+                    self.worker.as_ref().expect("spawned").1.unpark();
+                    std::thread::yield_now();
+                }
+            }
+            if let Some(p) = lock(&s.panic).take() {
+                std::panic::resume_unwind(p);
+            }
+            let mut w = lock(&s.walk);
+            apply(&mut w, &mut self.csr, &mut self.siglblid, &mut self.uploads);
+            if checking() {
+                let theirs = std::mem::take(&mut *lock(&s.snaps));
+                assert_eq!(theirs.len(), self.shadow_snaps.len(), "UYA_KICK_CHECK: the worker's walks and the inline walks differ in number");
+                for (k, (a, b)) in self.shadow_snaps.iter().zip(&theirs).enumerate() {
+                    let d = a.differences(b);
+                    let n = WORKER_CHECKS[0].fetch_add(1, Ordering::Relaxed) + 1;
+                    let bad = if d.is_empty() { WORKER_CHECKS[1].load(Ordering::Relaxed) } else { WORKER_CHECKS[1].fetch_add(1, Ordering::Relaxed) + 1 };
+                    if !d.is_empty() && checked(2, true) {
+                        println!("UYA_KICK_CHECK: the worker's walk {k} of {} (job {}): {}", theirs.len(), a.uploads.len(), d.join("; "));
+                    }
+                    if n == 1 || n % 500 == 0 {
+                        println!("UYA_KICK_CHECK: the GS events walked by the worker thread: {n} compared with the inline walk, {bad} differ");
+                    }
+                }
+                self.shadow_snaps.clear();
+            }
+        }
+    }
+
+    impl Drop for GsState {
+        fn drop(&mut self) {
+            let Some((h, t)) = self.worker.take() else { return };
+            let s = &self.shared;
+            while s.done.load(Ordering::Acquire) < s.submitted.load(Ordering::SeqCst) {
+                t.unpark();
+                std::thread::yield_now();
+            }
+            s.quit.store(true, Ordering::SeqCst);
+            t.unpark();
+            let _ = h.join();
+        }
+    }
+
+    /// What a walk did, handed over to CSR, SIGLBLID and the transfers.
+    fn apply(w: &mut Walk, csr: &mut u64, siglblid: &mut u64, uploads: &mut Vec<GsUpload>) {
+        *csr |= std::mem::take(&mut w.csr);
+        let (keep, set) = std::mem::replace(&mut w.sig, (!0, 0));
+        *siglblid = (*siglblid & keep) | set;
+        uploads.append(&mut w.uploads);
+    }
+
+    /// The worker thread: walks the tasks in order, spinning a while for the next and then parking.
+    fn worker(s: Arc<Shared>) {
+        loop {
+            let task = lock(&s.queue).tasks.pop_front();
+            let Some(t) = task else {
+                if s.quit.load(Ordering::SeqCst) {
+                    return;
+                }
+                let t0 = Instant::now();
+                while s.submitted.load(Ordering::SeqCst) == s.done.load(Ordering::Relaxed) && t0.elapsed() < SPIN && !s.quit.load(Ordering::Relaxed) {
+                    std::hint::spin_loop();
+                }
+                if s.submitted.load(Ordering::SeqCst) == s.done.load(Ordering::Relaxed) && !s.quit.load(Ordering::SeqCst) {
+                    s.asleep.store(true, Ordering::SeqCst);
+                    fence(Ordering::SeqCst);
+                    if s.submitted.load(Ordering::SeqCst) == s.done.load(Ordering::Relaxed) && !s.quit.load(Ordering::SeqCst) {
+                        std::thread::park();
+                    }
+                    s.asleep.store(false, Ordering::SeqCst);
+                }
+                continue;
+            };
+            if lock(&s.panic).is_none() {
+                let mut w = lock(&s.walk);
+                // SAFETY: the frame copy's bytes, unchanged until the game thread has joined this walk.
+                let ram = unsafe { std::slice::from_raw_parts(t.ram.0, t.ram.1) };
+                w.job = t.job;
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| vif1_events(&mut w, Stream::new(ram, &[], t.head, &t.blocks))));
+                if checking() && r.is_ok() {
+                    lock(&s.snaps).push(Events::of(&w));
+                }
+                drop(w);
+                if let Err(p) = r {
+                    *lock(&s.panic) = Some(p);
+                }
+            }
+            lock(&s.queue).pool.push(t.blocks);
+            s.done.fetch_add(1, Ordering::Release);
+        }
+    }
+}
+
+/// A kick's GS events (`vif1_events`) from its stream where it lies, done at once (`GsState::inline`); with UYA_KICK_CHECK also
+/// from its words as copied at the kick (`copied`: `vif1_events_words`, the way before), the two compared, the machine going on
+/// from the first.
+fn events(m: &mut Machine, head: (u32, u32), tagged: &[Block], copied: Option<&Vif1Words>, job: usize) {
+    let (ram, spr, field) = (&m.ram, &m.spr, m.field);
+    m.hw.walk.inline(|w| {
+        w.job = job;
+        let Some((words, marks, _)) = copied else {
+            vif1_events(w, Stream::new(ram, spr, head, tagged));
+            return;
+        };
+        let before = w.clone();
+        let tags: Vec<usize> = marks.iter().filter(|m| m.1 == 2).map(|m| m.0).collect();
+        vif1_events_words(w, words, &tags);
+        let old = Events::of(w);
+        *w = before;
+        vif1_events(w, Stream::new(ram, spr, head, tagged));
+        let d = Events::of(w).differences(&old);
+        if checked(2, !d.is_empty()) {
+            println!("UYA_KICK_CHECK: field {field} job {job}: the GS events: {}", d.join("; "));
+        }
+    });
+}
+
+/// What a VIF1 stream's GS events change (`vif1_events`), as a walk holds it: for UYA_KICK_CHECK.
+#[derive(Clone)]
 struct Events {
     cycle: (u32, u32),
     carry: GifCarry,
-    siglblid: u64,
+    sig: (u64, u64),
     csr: u64,
     trx: [u64; 3],
     uploads: Vec<GsUpload>,
 }
 
 impl Events {
-    fn of(h: &Hw, from: usize) -> Events {
-        Events { cycle: h.vif1_cycle, carry: h.gif_carry[0].clone(), siglblid: h.siglblid, csr: h.csr, trx: h.trx, uploads: h.uploads[from..].to_vec() }
+    fn of(w: &Walk) -> Events {
+        Events { cycle: w.cycle, carry: w.carry[0].clone(), sig: w.sig, csr: w.csr, trx: w.trx, uploads: w.uploads.clone() }
     }
 
-    fn put(&self, h: &mut Hw, from: usize) {
-        (h.vif1_cycle, h.gif_carry[0], h.siglblid, h.csr, h.trx) = (self.cycle, self.carry.clone(), self.siglblid, self.csr, self.trx);
-        h.uploads.truncate(from);
-        h.uploads.extend(self.uploads.iter().cloned());
-    }
-
-    /// What differs, these read where the stream lies, `old` from the words copied.
+    /// What differs, these read where the stream lies, `old` from the words copied (or, for the worker's walk, from the frame's
+    /// copy).
     fn differences(&self, old: &Events) -> Vec<String> {
         let mut d = Vec::new();
         if self.cycle != old.cycle {
@@ -1140,8 +1433,8 @@ impl Events {
         if self.carry != old.carry {
             d.push("the GIF packet carried on differs".to_string());
         }
-        if (self.siglblid, self.csr) != (old.siglblid, old.csr) {
-            d.push(format!("SIGLBLID {:x} and CSR {:x} in place, {:x} and {:x} from the copy", self.siglblid, self.csr, old.siglblid, old.csr));
+        if (self.sig, self.csr) != (old.sig, old.csr) {
+            d.push(format!("SIGLBLID (keep, set) {:x?} and CSR {:x} in place, {:x?} and {:x} from the copy", self.sig, self.csr, old.sig, old.csr));
         }
         if self.trx != old.trx {
             d.push(format!("BITBLTBUF, TRXPOS, TRXREG {:x?} in place, {:x?} from the copy", self.trx, old.trx));
@@ -1220,7 +1513,7 @@ fn chain(m: &mut crate::Machine, ch: usize, mut f: impl FnMut(&crate::Machine, O
 
 /// The GS events a VIF1 stream's GIF packets (DIRECT, DIRECTHL) raise (`gif_events`), read where the stream lies (`Stream`):
 /// what `vif1_events_words` finds in the stream's words copied. The rest of its codes are walked over by their lengths.
-fn vif1_events(h: &mut Hw, mut s: Stream) {
+fn vif1_events(h: &mut Walk, mut s: Stream) {
     // A DIRECT's data starts at the next quadword of the DMA stream after its code (`Stream::data_from`) and steps over the tags'
     // words it runs into; its quadwords go to the GIF from where they lie, by runs within one block (`runs`: each run's first
     // quadword of the DIRECT and its address). The data is at a tag's words (`seek` there) only at their first: it starts at a
@@ -1233,7 +1526,7 @@ fn vif1_events(h: &mut Hw, mut s: Stream) {
         i += 1;
         match cmd {
             0x00 | 0x02..=0x07 | 0x10 | 0x11 | 0x13 | 0x14 | 0x15 | 0x17 => {}
-            0x01 => h.vif1_cycle = (imm & 0xff, (imm >> 8) & 0xff),
+            0x01 => h.cycle = (imm & 0xff, (imm >> 8) & 0xff),
             0x20 => i += 1,
             0x30 | 0x31 => i += 4,
             0x4a => i += 2 * if num == 0 { 256 } else { num } as usize,
@@ -1272,7 +1565,7 @@ fn vif1_events(h: &mut Hw, mut s: Stream) {
             0x60..=0x7f => {
                 // The vectors read: all `num` of them, or with WL > CL (filling writes) CL of every WL.
                 let num = if num == 0 { 256 } else { num };
-                let (cl, wl) = (h.vif1_cycle.0.max(1), h.vif1_cycle.1.max(1));
+                let (cl, wl) = (h.cycle.0.max(1), h.cycle.1.max(1));
                 let read = if wl <= cl { num } else { num / wl * cl + (num % wl).min(cl) };
                 let (vn, vl) = ((cmd >> 2) & 3, cmd & 3);
                 let bits = if vl == 3 { 16 } else { [32, 16, 8][vl as usize] * (vn + 1) };
@@ -1295,7 +1588,7 @@ fn vif1_events(h: &mut Hw, mut s: Stream) {
 
 /// `vif1_events` from a stream's words copied (`assemble`) and its tags' places, as the kicks found them before: for
 /// UYA_KICK_CHECK.
-fn vif1_events_words(h: &mut Hw, w: &[u32], tags: &[usize]) {
+fn vif1_events_words(h: &mut Walk, w: &[u32], tags: &[usize]) {
     // A DMA tag's two VIF words (at each of `tags`, ascending) sit in the upper half of its quadword: a DIRECT's data starts at the
     // next quadword of the DMA stream after its code (the word after a tag's pair, or the next fourth word of a block) and steps
     // over the tags it runs into.
@@ -1314,7 +1607,7 @@ fn vif1_events_words(h: &mut Hw, w: &[u32], tags: &[usize]) {
         i += 1;
         match cmd {
             0x00 | 0x02..=0x07 | 0x10 | 0x11 | 0x13 | 0x14 | 0x15 | 0x17 => {}
-            0x01 => h.vif1_cycle = (imm & 0xff, (imm >> 8) & 0xff),
+            0x01 => h.cycle = (imm & 0xff, (imm >> 8) & 0xff),
             0x20 => i += 1,
             0x30 | 0x31 => i += 4,
             0x4a => i += 2 * if num == 0 { 256 } else { num } as usize,
@@ -1343,7 +1636,7 @@ fn vif1_events_words(h: &mut Hw, w: &[u32], tags: &[usize]) {
             0x60..=0x7f => {
                 // The vectors read: all `num` of them, or with WL > CL (filling writes) CL of every WL.
                 let num = if num == 0 { 256 } else { num };
-                let (cl, wl) = (h.vif1_cycle.0.max(1), h.vif1_cycle.1.max(1));
+                let (cl, wl) = (h.cycle.0.max(1), h.cycle.1.max(1));
                 let read = if wl <= cl { num } else { num / wl * cl + (num % wl).min(cl) };
                 let (vn, vl) = ((cmd >> 2) & 3, cmd & 3);
                 let bits = if vl == 3 { 16 } else { [32, 16, 8][vl as usize] * (vn + 1) };
@@ -1377,14 +1670,14 @@ enum GifCarry {
 /// The GS events of a path's GIF data (`path` 0: VIF1's DIRECT, PATH2; 1: the GIF DMA, PATH3): SIGNAL, FINISH and LABEL, the
 /// transfer registers, and each IMAGE transfer (`GsUpload`). A packet the data ends inside of is carried to the path's next data
 /// (`GifCarry`).
-fn gif_events(h: &mut Hw, path: usize, n: usize, q: impl Fn(usize) -> u128) {
-    let job = h.jobs.len();
+fn gif_events(h: &mut Walk, path: usize, n: usize, q: impl Fn(usize) -> u128) {
+    let job = h.job;
     let mut i = 0;
-    match std::mem::take(&mut h.gif_carry[path]) {
+    match std::mem::take(&mut h.carry[path]) {
         GifCarry::None => {}
         GifCarry::Skip(k) => {
             if k > n {
-                h.gif_carry[path] = GifCarry::Skip(k - n);
+                h.carry[path] = GifCarry::Skip(k - n);
                 return;
             }
             i = k;
@@ -1393,7 +1686,7 @@ fn gif_events(h: &mut Hw, path: usize, n: usize, q: impl Fn(usize) -> u128) {
             let m = k.min(n);
             up.data.extend((0..m).map(&q));
             if m < k {
-                h.gif_carry[path] = GifCarry::Image(up, k - m);
+                h.carry[path] = GifCarry::Image(up, k - m);
                 return;
             }
             h.uploads.push(up);
@@ -1401,7 +1694,7 @@ fn gif_events(h: &mut Hw, path: usize, n: usize, q: impl Fn(usize) -> u128) {
         }
         GifCarry::Packed { tag, nreg, loops, r } => {
             if let Some(c) = gif_packed(h, tag, nreg, loops, r, &mut i, n, &q) {
-                h.gif_carry[path] = c;
+                h.carry[path] = c;
                 return;
             }
         }
@@ -1415,9 +1708,9 @@ fn gif_events(h: &mut Hw, path: usize, n: usize, q: impl Fn(usize) -> u128) {
             0 => 16,
             n => n,
         };
-        let skip = |h: &mut Hw, i: &mut usize, k: usize| -> bool {
+        let skip = |h: &mut Walk, i: &mut usize, k: usize| -> bool {
             if *i + k > n {
-                h.gif_carry[path] = GifCarry::Skip(*i + k - n);
+                h.carry[path] = GifCarry::Skip(*i + k - n);
                 return false;
             }
             *i += k;
@@ -1432,7 +1725,7 @@ fn gif_events(h: &mut Hw, path: usize, n: usize, q: impl Fn(usize) -> u128) {
             }
             0 => {
                 if let Some(c) = gif_packed(h, tag, nreg, nloop, 0, &mut i, n, &q) {
-                    h.gif_carry[path] = c;
+                    h.carry[path] = c;
                     return;
                 }
             }
@@ -1445,7 +1738,7 @@ fn gif_events(h: &mut Hw, path: usize, n: usize, q: impl Fn(usize) -> u128) {
                 let m = nloop.min(n - i);
                 let up = GsUpload { job, bitbltbuf: h.trx[0], trxpos: h.trx[1], trxreg: h.trx[2], data: (i..i + m).map(&q).collect() };
                 if m < nloop {
-                    h.gif_carry[path] = GifCarry::Image(up, nloop - m);
+                    h.carry[path] = GifCarry::Image(up, nloop - m);
                     return;
                 }
                 if m > 0 {
@@ -1460,7 +1753,7 @@ fn gif_events(h: &mut Hw, path: usize, n: usize, q: impl Fn(usize) -> u128) {
 /// A PACKED packet's registers from loop `loops` left and register `r` on, the A+D writes read (SIGNAL, FINISH, LABEL and the
 /// transfer registers); its carry when the data ends first.
 #[allow(clippy::too_many_arguments)]
-fn gif_packed(h: &mut Hw, tag: u128, nreg: usize, mut loops: usize, mut r: usize, i: &mut usize, n: usize, q: &impl Fn(usize) -> u128) -> Option<GifCarry> {
+fn gif_packed(h: &mut Walk, tag: u128, nreg: usize, mut loops: usize, mut r: usize, i: &mut usize, n: usize, q: &impl Fn(usize) -> u128) -> Option<GifCarry> {
     while loops > 0 {
         while r < nreg {
             if *i >= n {
@@ -1473,11 +1766,11 @@ fn gif_packed(h: &mut Hw, tag: u128, nreg: usize, mut loops: usize, mut r: usize
                 let (lo, mask) = (v & 0xffff_ffff, v >> 32);
                 match addr {
                     0x60 => {
-                        h.siglblid = (h.siglblid & !mask) | (lo & mask);
+                        h.sig = (h.sig.0 & !mask, (h.sig.1 & !mask) | (lo & mask));
                         h.csr |= 1;
                     }
                     0x61 => h.csr |= 2,
-                    0x62 => h.siglblid = (h.siglblid & !(mask << 32)) | ((lo & mask) << 32),
+                    0x62 => h.sig = (h.sig.0 & !(mask << 32), (h.sig.1 & !(mask << 32)) | ((lo & mask) << 32)),
                     0x50..=0x52 => h.trx[(addr - 0x50) as usize] = v,
                     _ => {}
                 }
@@ -1514,6 +1807,8 @@ fn kick(c: &mut Cpu, ch: usize) -> bool {
                 // (`Machine::frame_ram`). A thread's second VIF1 kick from one call site in a field is the field's next frame.
                 // Before the copy is brought up to date, the chains read from it so far are built from it (`settle`).
                 if thread != 0 {
+                    // The frame's copy is about to change: the walk of the last kicks' GS events reads it.
+                    m.hw.walk.join();
                     m.hw.packets.begin(m.field, &mut m.hw.tie_costs);
                     if m.hw.vif1_sites.contains(&ra) {
                         m.hw.vif1_sites.clear();
@@ -1549,10 +1844,22 @@ fn kick(c: &mut Cpu, ch: usize) -> bool {
                 let read = thread == 0 && m.hw.burst.is_some_and(|b| holds(madr, qwc, b.flag) || tagged.iter().any(|t| holds(t.data, t.q, b.flag)));
                 let check = checking().then(|| assemble(&m.ram, &m.spr, madr, qwc, tagged));
                 let job = m.hw.jobs.len();
-                events(m, (madr, qwc), tagged, check.as_ref(), job);
+                // The scratchpad is read by these (and only the RAM copy's bytes are shared with the worker, not the scratchpad).
+                let spr_read = touches_spr(madr, qwc) || tagged.iter().any(|t| touches_spr(t.data, t.q));
+                if from_copy && !read && !spr_read && m.hw.walk.offload() {
+                    // The walk of this kick's GS events is read from the frame's copy, whose bytes stay as they are until the next
+                    // thread kick's copy (it joins first), off the game thread (`gsstate`).
+                    if checking() {
+                        let (ram, spr) = (&m.ram, &m.spr);
+                        m.hw.walk.shadow(job, |w| vif1_events(w, Stream::new(ram, spr, (madr, qwc), tagged)));
+                    }
+                    m.hw.walk.submit((madr, qwc), tagged, m.frame_ram.raw(), job);
+                } else {
+                    events(m, (madr, qwc), tagged, check.as_ref(), job);
+                }
                 let (dispfb, tadr) = (m.hw.dispfb(), m.hw.ch[1][3]);
                 let j = if from_copy && !read {
-                    if m.frame_ram.spr.is_empty() && (touches_spr(madr, qwc) || tagged.iter().any(|t| touches_spr(t.data, t.q))) {
+                    if m.frame_ram.spr.is_empty() && spr_read {
                         m.frame_ram.spr.extend_from_slice(&m.spr);
                     }
                     Job::Chain(Chain { copy: m.frame_ram.key(), head: (madr, qwc), blocks: first..rec.len(), dispfb, field: m.field, job, check: check.map(Box::new) })
@@ -1588,7 +1895,11 @@ fn kick(c: &mut Cpu, ch: usize) -> bool {
                 words(m, data, q, &mut w);
             }
             let qs: Vec<u128> = w.chunks_exact(4).map(|x| x[0] as u128 | (x[1] as u128) << 32 | (x[2] as u128) << 64 | (x[3] as u128) << 96).collect();
-            gif_events(&mut m.hw, 1, qs.len(), |k| qs[k]);
+            let job = m.hw.jobs.len();
+            m.hw.walk.inline(|w| {
+                w.job = job;
+                gif_events(w, 1, qs.len(), |k| qs[k]);
+            });
             let d = m.hw.dispfb();
             m.hw.job(Job::Gif { qs, dispfb: d }, || format!("GIF DMA from {madr:08x}"), ra);
         }

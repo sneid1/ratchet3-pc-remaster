@@ -149,6 +149,13 @@ pub struct RamCopy {
 }
 
 impl RamCopy {
+    /// The bytes' address and length: valid, and the bytes unchanged, until the next `Ram::copy_to` into this copy (the vector is
+    /// never resized): what the worker thread's walk of a kick's GS events reads (`hw::gsstate`), the game thread joining it
+    /// before the copy.
+    pub(crate) fn raw(&self) -> (*const u8, usize) {
+        (self.bytes.as_ptr(), self.bytes.len())
+    }
+
     pub fn new() -> RamCopy {
         RamCopy { bytes: vec![0; crate::RAM_SIZE as usize], owner: 0, generation: 0, chains: Vec::new(), spr: Vec::new(), level: None }
     }
