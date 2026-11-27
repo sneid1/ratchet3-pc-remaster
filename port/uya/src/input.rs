@@ -29,10 +29,12 @@
 //!
 //! The mouse aim (PLAN 10; always on with the keyboard and mouse, not a setting): in play the game runs its own lock-strafe
 //! camera for the keyboard and mouse (`rtgame.rs`, `uycpu::Host::aim`), and while that camera is the hero's (`Input::direct`)
-//! the mouse turns it itself, its motion an angle (`Input::look`). Where the game's follow camera runs instead (the hero's camera
-//! not allowed: swimming, a ledge, a vehicle) the mouse turns that, by angle too: `Input::direct` is set while it is the camera in
-//! use, and `rtgame.rs` moves its arm (`follow_turn`). The mouse never pushes the right stick, the pad's or a virtual one (the
-//! player, 16 November 2026, of a stick push: "i dont want that"); in the menus its motion is dropped.
+//! the mouse turns it itself, its motion an angle (`Input::look`; underwater, where the hero tilts, its look direction:
+//! `rtgame.rs` `fps_turn`). Where the game's follow camera runs instead (the hero's camera not allowed) the mouse turns that, by
+//! angle too: `Input::direct` is set while it is the camera in use, and `rtgame.rs` moves its arm (`follow_turn`). Flying the
+//! hovership, the mouse's vertical motion tilts the ship's aim and its chase camera, as the right stick's does
+//! (`hovership_aim`). The mouse never pushes the right stick, the pad's or a virtual one (the player, 16 November 2026, of a
+//! stick push: "i dont want that"); in the menus its motion is dropped.
 
 use crate::bindings::{Bindings, Key};
 use std::collections::{HashMap, HashSet};
