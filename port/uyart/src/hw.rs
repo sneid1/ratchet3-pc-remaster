@@ -158,6 +158,52 @@ pub(crate) struct Block {
     id: u32,
 }
 
+/// How far each frame's own chain words reach (the tags and the data inline after them: CNT, NEXT, CALL, RET and END tags, not
+/// the data a REF points to elsewhere), from the frame's first VIF1 kick on, in RAM: the game builds a frame's packets in one
+/// of its two frame packet buffers (`tiebudget::BUFFER` bytes each) and nothing in it holds them to the buffer's end. Each
+/// frame's reach goes to the tie ranges' room (`tiebudget::Costs::frame`); with UYA_PACKET_LOG a frame that reaches farther than
+/// any before is logged, with its tie pass's share, and one past a buffer's size at once.
+#[derive(Default)]
+struct Packets {
+    /// UYA_PACKET_LOG=N: every Nth frame logged too (120 when it names none).
+    log: Option<Option<u64>>,
+    frame: Option<(u32, u32)>,
+    most: u32,
+    frames: u64,
+}
+
+impl Packets {
+    fn log(&mut self) -> Option<u64> {
+        *self.log.get_or_insert_with(|| std::env::var("UYA_PACKET_LOG").ok().map(|v| v.parse().unwrap_or(120).max(1)))
+    }
+
+    /// A frame's first kick: the frame before ends (logged when it reached farther than any before, and every Nth).
+    fn begin(&mut self, field: u64, costs: &mut crate::tiebudget::Costs) {
+        let Some((lo, hi)) = self.frame.take() else { return };
+        costs.frame(lo, hi);
+        self.frames += 1;
+        if let Some(every) = self.log()
+            && (hi - lo > self.most || self.frames % every == 0)
+        {
+            self.most = self.most.max(hi - lo);
+            println!("packets: field {field}: the frame before's chain words from {lo:#x} to {hi:#x}, {} KB (a frame packet buffer holds {} KB){}", (hi - lo) / 1024, crate::tiebudget::BUFFER / 1024, costs.split(lo, hi));
+        }
+    }
+
+    /// The kick's blocks: their words in RAM, when they are the chain's own.
+    fn blocks(&mut self, field: u64, blocks: &[Block]) {
+        for b in blocks.iter().filter(|b| matches!(b.id, 1 | 2 | 5 | 6 | 7) && b.data & 0x8000_0000 == 0) {
+            let (lo, hi) = (b.data - 16, b.data + 16 * b.q);
+            let f = self.frame.get_or_insert((lo, hi));
+            let was = f.1 - f.0;
+            *f = (f.0.min(lo), f.1.max(hi));
+            if was <= crate::tiebudget::BUFFER && f.1 - f.0 > crate::tiebudget::BUFFER && self.log.flatten().is_some() {
+                println!("packets: field {field}: a frame's chain words from {:#x} to {:#x}, {} KB, past a frame packet buffer's {} KB", f.0, f.1, (f.1 - f.0) / 1024, crate::tiebudget::BUFFER / 1024);
+            }
+        }
+    }
+}
+
 /// A VIF1 chain whose words the renderer reads from the frame's RAM copy (`Machine::frame_ram`) as it takes the frame
 /// (`build`), off the game thread. The copy holds what the kick read: a thread's kick reads the RAM right after the copy is
 /// made, and a kick its VIF1 end handler makes inside it (`Burst`) reads it after only that handler ran, which stores nothing
@@ -303,6 +349,9 @@ pub struct Hw {
     /// The call sites of this field's VIF1 kicks made by a thread, and where its last frame starts in `jobs` (`kick`).
     vif1_sites: Vec<u32>,
     pub frame_from: usize,
+    /// The frame's own chain words so far (`Packets`), and the level's tie costs measured from its frames (`tiebudget`).
+    packets: Packets,
+    pub(crate) tie_costs: crate::tiebudget::Costs,
     /// Whether a thread kicked a VIF1 list this field (a frame's first; `Machine::frame_ram` holds the RAM at the last).
     pub kicked: bool,
     /// The VIF1 end handler's burst under way (`Burst`).
@@ -381,6 +430,8 @@ impl Default for Hw {
             skin_normals: Vec::new(),
             vif1_sites: Vec::new(),
             frame_from: 0,
+            packets: Packets::default(),
+            tie_costs: crate::tiebudget::Costs::default(),
             kicked: false,
             burst: None,
             blocks: Vec::new(),
@@ -1227,7 +1278,16 @@ fn vif1_events(h: &mut Hw, mut s: Stream) {
                 let bits = if vl == 3 { 16 } else { [32, 16, 8][vl as usize] * (vn + 1) };
                 i += (read * bits).div_ceil(32) as usize;
             }
-            _ => panic!("VIF1 code {code:08x} at word {} of a transfer: not a VIF code", i - 1),
+            _ => {
+                s.seek(i - 1);
+                // The word's block: the head's (piece 0), a tag's words (odd pieces) or a tag's data (even pieces).
+                let at = match s.piece {
+                    0 => format!("{:08x}", s.head.0.wrapping_add(4 * (i - 1) as u32)),
+                    p if p % 2 == 1 => format!("the words of tag {}", p / 2),
+                    p => format!("{:08x} (tag {}'s data, ID {})", s.blocks[p / 2 - 1].data.wrapping_add(4 * (i - 1 - s.from) as u32), p / 2 - 1, s.blocks[p / 2 - 1].id),
+                };
+                panic!("VIF1 code {code:08x} at word {} of a transfer from {:08x}: not a VIF code (at {at})", i - 1, s.head.0)
+            }
         }
     }
     h.runs = runs;
@@ -1454,6 +1514,7 @@ fn kick(c: &mut Cpu, ch: usize) -> bool {
                 // (`Machine::frame_ram`). A thread's second VIF1 kick from one call site in a field is the field's next frame.
                 // Before the copy is brought up to date, the chains read from it so far are built from it (`settle`).
                 if thread != 0 {
+                    m.hw.packets.begin(m.field, &mut m.hw.tie_costs);
                     if m.hw.vif1_sites.contains(&ra) {
                         m.hw.vif1_sites.clear();
                         m.hw.frame_from = m.hw.jobs.len();
@@ -1483,6 +1544,7 @@ fn kick(c: &mut Cpu, ch: usize) -> bool {
                     m.hw.ch[1][1] = madr.wrapping_add(qwc * 16);
                 }
                 let tagged = &rec[first..];
+                m.hw.packets.blocks(m.field, tagged);
                 // The end handler stored its flag word since the copy: a kick of the burst that reads it is copied now.
                 let read = thread == 0 && m.hw.burst.is_some_and(|b| holds(madr, qwc, b.flag) || tagged.iter().any(|t| holds(t.data, t.q, b.flag)));
                 let check = checking().then(|| assemble(&m.ram, &m.spr, madr, qwc, tagged));

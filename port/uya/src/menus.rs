@@ -3,9 +3,10 @@
 //!
 //! Everything here is the game's own state in its RAM, read and written between fields (docs/HANDOVER.md "Play window and
 //! controls"):
-//! - The front end's screen showing: the word at 0x306F5C points at its record (main menu 0x1DA1C8, Options 0x1DA1E8). Its list
+//! - The front end's screen showing: the screen word (`FrontEnd::screen`, 0x306F5C in the boot's front end, 0x302F5C in the one
+//!   a quit to the title loads) points at its record (main menu 0x1DA1C8, Options 0x1DA1E8). Its list
 //!   panel keeps its rows after Options closes, so it is a list only while Options shows.
-//! - Main menu: 5 items (table 0x3376C0, 16 bytes each, +8 enabled); the highlighted one is the word at 0x1D8978; item i's bar
+//! - Main menu: 5 items (`FrontEnd::main_table`, 16 bytes each, +8 enabled); the highlighted one is the word at 0x1D8978; item i's bar
 //!   is centred at (the float at 0x1D89A8, the float i at 0x1D89B0), sized (0x1D89A4, the float i at 0x1D89C8), in shares of the
 //!   picture. Cross picks the highlighted item.
 //! - A level's pause: the game's mode word is 1 while it is paused (its menus and their screens). The pause list
@@ -16,7 +17,7 @@
 //!   are `uyafmt::menucode::all`, read from each level's own code (Veldin's: mode 0x1D7DC0, table 0x1D8310, index 0x1D8318,
 //!   count 0x1D831C), and used only while the level's code is in RAM (`MenuGlobals::anchor`).
 //! - The option lists (the front end's Options, a pause's OPTIONS and AUDIO / VISUAL screens) are list panels: the front end's
-//!   at 0x280D70, a level's the first of `MenuGlobals::panels` (Veldin's 0x236868; +0 active, +4 scroll, +8 cursor, +0xC rows, +0x20 the two columns' x, +0x40 their
+//!   `FrontEnd::panel`, a level's the first of `MenuGlobals::panels` (Veldin's 0x236868; +0 active, +4 scroll, +8 cursor, +0xC rows, +0x20 the two columns' x, +0x40 their
 //!   widths, +0x50 the first row's centre y, +0x54 the row pitch, +0xB0 the cells, 0x44 bytes each, row by row, label then
 //!   value). The game writes the cells again every field before it draws them, so the port's text is put in the picture instead
 //!   (`Line`, drawn by `front.rs` in the game's font, colours and alignment, over the game's letters on that line).
@@ -284,10 +285,29 @@ const MC_MESSAGE: usize = 0x1D4CE8;
 const MC_SLOTS: u32 = 18;
 const FRONT_SLOTS: [usize; 4] = [0x1D8A70, 0x1D8AE4, 0x1D8AC8, 0x1D8A98];
 
-const SCREEN: usize = 0x306F5C;
+/// A front end program's own places: the word pointing at the screen showing, the main menu's table, the Options list panel, the
+/// count of the text table (its pointer, the main program's, is `FRONT_TEXT`'s), and play_ui_sound (its first words
+/// `UI_SOUND_WORDS`). The game has two front ends: the main program's own, which the disc boots into, and frontbin (WAD2 pair 3,
+/// uyatr's fe101: the rac3-decomp's addresses), which a game quit from a level loads over the level's code. Their code is one but
+/// laid out apart: frontbin's places are 0x4000 to 0x56E0 lower (RAM at both main menus and both Options screens, 27 November
+/// 2026). Read at the boot's alone (until 27 November 2026), the main menu after a quit showed MULTIPLAYER, and LOAD GAME with no
+/// save, as choosable (report 155269, v0.1.7: "Multiplayer is greyed out at startup but not after returning to the main menu
+/// from gameplay"), and its items, its Options list and its sounds did not follow the pointer.
+struct FrontEnd {
+    screen: usize,
+    main_table: usize,
+    panel: usize,
+    text_count: usize,
+    ui_sound: u32,
+}
+
+const FRONT_ENDS: [FrontEnd; 2] = [
+    FrontEnd { screen: 0x306F5C, main_table: 0x3376C0, panel: 0x280D70, text_count: 0x31CD2C, ui_sound: 0x3A_5608 },
+    FrontEnd { screen: 0x302F5C, main_table: 0x333680, panel: 0x27CD70, text_count: 0x318CEC, ui_sound: 0x39_FF28 },
+];
+
 const MAIN_MENU: u32 = 0x1DA1C8;
 const OPTIONS: u32 = 0x1DA1E8;
-const MAIN_TABLE: usize = 0x3376C0;
 const MAIN_INDEX: usize = 0x1D8978;
 const MAIN_X: usize = 0x1D89A8;
 const MAIN_W: usize = 0x1D89A4;
@@ -307,9 +327,7 @@ const PLAY_MODE: u32 = 0;
 /// The menus' sounds (play_ui_sound's ids, `MenuGlobals::ui_sound`): a cursor's step, and a choice.
 const CURSOR_SOUND: u32 = 3;
 const CHOICE_SOUND: u32 = 4;
-/// The main program's play_ui_sound (rac3-decomp func_0039FF28), the front end's menus' sound, and its words at +0 and +0xC to
-/// +0x18, the same in every copy (+4 and +8 load its sound table).
-const FRONT_UI_SOUND: u32 = 0x3A_5608;
+/// play_ui_sound's words at +0 and +0xC to +0x18 (`FrontEnd::ui_sound`), the same in every copy (+4 and +8 load its sound table).
 const UI_SOUND_WORDS: [u32; 5] = [0x27bd_ffe0, 0xffb0_0000, 0xffb1_0008, 0x0080_802d, 0xffbf_0010];
 
 /// The vendor's carousel pages (weapons, ship, armor; `uyafmt::menucode`'s doc): its words in the vendor's struct, the frame's size
@@ -431,10 +449,9 @@ impl Cell {
     }
 }
 
-/// The front end's list panel and text table (pointer, count: 16-byte entries {string, id, -1, 0xFFFF}); a level's are in its
-/// `MenuGlobals`.
-const FRONT_PANEL: usize = 0x280D70;
-const FRONT_TEXT: (usize, usize) = (0x1D9A20, 0x31CD2C);
+/// The front end's text table's pointer (the table: its count `FrontEnd::text_count`, 16-byte entries {string, id, -1, 0xFFFF});
+/// its list panel is `FrontEnd::panel`, and a level's are in its `MenuGlobals`.
+const FRONT_TEXT: usize = 0x1D9A20;
 /// PROGRESSIVE SCAN's text (its row is the PC SETTINGS row), and 16:9 (WIDESCREEN)'s (its row shows and changes the port's
 /// WIDESCREEN setting: the game's own 16:9 option crops the picture, `settings.rs`).
 const PROGRESSIVE: u32 = 0x509;
@@ -542,11 +559,11 @@ struct Slide {
 impl List {
     /// The option list showing with a PROGRESSIVE SCAN row, if there is one: the front end's (`g` None), or the level `g`'s.
     fn find(ram: &[u8], g: Option<&MenuGlobals>) -> Option<List> {
-        let (panel, (text, count)) = match g {
-            None if Menus::front_end(ram) && r32(ram, SCREEN) == OPTIONS => (FRONT_PANEL, FRONT_TEXT),
+        let (panel, (text, count)) = match (g, Menus::front(ram)) {
+            (None, Some(f)) if r32(ram, f.screen) == OPTIONS => (f.panel, (FRONT_TEXT, f.text_count)),
             // A level's list panel keeps its active byte after its screen closes: it is on the screen only while the pause list
             // is not (`Menus::pause_list`).
-            Some(g) if !Menus::pause_list(ram, g) => (g.panels as usize, (g.text as usize, g.text_count as usize)),
+            (Some(g), _) if !Menus::pause_list(ram, g) => (g.panels as usize, (g.text as usize, g.text_count as usize)),
             _ => return None,
         };
         let cells = r32(ram, panel + 0xB0) as usize;
@@ -696,16 +713,21 @@ impl Menus {
         self.sound.take()
     }
 
-    /// The menus' sound routine of the program in RAM (play_ui_sound(id, 0, 0)): the main program's while the front end runs and
-    /// its code is there (its first words: a quit to the title sets the level before the main program is back), the level's
-    /// while its code is there (`globals`).
+    /// The menus' sound routine of the program in RAM (play_ui_sound(id, 0, 0)): the front end's while it runs and its code is
+    /// there (`front`), the level's while its code is there (`globals`).
     pub fn ui_sound(&self, ram: &[u8]) -> Option<u32> {
         if Menus::front_end(ram) {
-            let a = FRONT_UI_SOUND as usize;
-            (r32(ram, a) == UI_SOUND_WORDS[0] && (0..4).all(|k| r32(ram, a + 0xC + 4 * k) == UI_SOUND_WORDS[1 + k])).then_some(FRONT_UI_SOUND)
+            Menus::front(ram).map(|f| f.ui_sound)
         } else {
             self.globals(ram).map(|g| g.ui_sound)
         }
+    }
+
+    /// The front end in RAM (`FrontEnd`): the one whose play_ui_sound is at its place, while the game is in its front end (its
+    /// first words: a quit to the title sets the level before the front end's code is in).
+    fn front(ram: &[u8]) -> Option<&'static FrontEnd> {
+        let at = |a: usize| r32(ram, a) == UI_SOUND_WORDS[0] && (0..4).all(|k| r32(ram, a + 0xC + 4 * k) == UI_SOUND_WORDS[1 + k]);
+        FRONT_ENDS.iter().find(|f| Menus::front_end(ram) && at(f.ui_sound as usize))
     }
 
     /// The pointer's highlight: `v` into the cursor word at `a`, with the cursor's sound when the highlight moved.
@@ -773,11 +795,17 @@ impl Menus {
         !Menus::front_end(ram) && !(30..=36).contains(&r32(ram, crate::LEVEL_CURRENT as usize)) && matches!(self.game_mode(ram), Some(0 | 4))
     }
 
-    /// Whether the game shows a menu: the front end, a level paused, a screen of the pause's family that a level opens from the
-    /// world (the battle missions, the galactic map, the ship's QWARK COMICS: the game's current mode 3), or the vendor (mode
-    /// 5; `MenuGlobals::current`). The cursor is shown and the mouse points and clicks.
+    /// Whether the game shows a menu: the front end, or a level's menu (`level_menu`). The cursor is shown and the mouse points
+    /// and clicks.
     pub fn menu(&self, ram: &[u8]) -> bool {
-        Menus::front_end(ram) || self.globals(ram).is_some_and(|g| r32(ram, g.mode as usize) == PAUSED || MENU_MODES.contains(&r32(ram, g.current as usize)))
+        Menus::front_end(ram) || self.level_menu(ram)
+    }
+
+    /// Whether a level shows a menu: the level paused, a screen of the pause's family that a level opens from the world (the
+    /// battle missions, the galactic map, the ship's QWARK COMICS: the game's current mode 3), or the vendor (mode 5;
+    /// `MenuGlobals::current`).
+    pub fn level_menu(&self, ram: &[u8]) -> bool {
+        self.globals(ram).is_some_and(|g| r32(ram, g.mode as usize) == PAUSED || MENU_MODES.contains(&r32(ram, g.current as usize)))
     }
 
     /// Before a field: LOAD GAME on the front end's main menu (item 0 of `MAIN_TABLE`) offered only while the memory card holds
@@ -793,12 +821,12 @@ impl Menus {
     /// InitTLB: Wired 0, then syscall 0x56, SetTLBEntry, for each entry of its table, from 0x124640), which the port's kernel does
     /// not answer, and the game stopped.
     pub fn main_menu_items(&self, ram: &mut [u8], saved: Option<bool>) {
-        if !Menus::front_end(ram) || r32(ram, SCREEN) != MAIN_MENU {
+        let Some(table) = Menus::front(ram).filter(|f| r32(ram, f.screen) == MAIN_MENU).map(|f| f.main_table) else {
             return;
-        }
+        };
         let saved = saved.expect("the front end's main menu before the game's first call of the memory card");
-        ram[MAIN_TABLE + 8] = saved as u8;
-        ram[MAIN_TABLE + 16 * MAIN_MULTIPLAYER + 8] = 0;
+        ram[table + 8] = saved as u8;
+        ram[table + 16 * MAIN_MULTIPLAYER + 8] = 0;
         if !saved && r32(ram, MAIN_INDEX) == 0 {
             ram[MAIN_INDEX..MAIN_INDEX + 4].copy_from_slice(&1u32.to_le_bytes());
         }
@@ -935,11 +963,11 @@ impl Menus {
                     _ => {}
                 }
             }
-        } else if front && r32(ram, SCREEN) == MAIN_MENU {
+        } else if let Some(table) = Menus::front(ram).filter(|f| r32(ram, f.screen) == MAIN_MENU).map(|f| f.main_table) {
             let hit = p.at.and_then(|(u, v)| {
                 (0..MAIN_ITEMS).find(|&i| {
                     let (x, w, y, h) = (rf(ram, MAIN_X), rf(ram, MAIN_W), rf(ram, MAIN_Y + 4 * i), rf(ram, MAIN_H + 4 * i));
-                    ram[MAIN_TABLE + 16 * i + 8] != 0 && (u - x).abs() <= w / 2.0 && (v - y).abs() <= h / 2.0
+                    ram[table + 16 * i + 8] != 0 && (u - x).abs() <= w / 2.0 && (v - y).abs() <= h / 2.0
                 })
             });
             match hit {

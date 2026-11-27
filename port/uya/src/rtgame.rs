@@ -402,9 +402,12 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
     // level's menu and save-message addresses (`uyafmt::menucode`).
     let bindings_file = format!("{profile}/bindings.txt");
     let mut menus = crate::menus::Menus::new(settings, crate::bindings::Bindings::load(&bindings_file)?, uyafmt::menucode::all(iso)?);
-    // Every level's globals: the ties drawn farther and finer by the game's own cull (`range.rs`), and the control channel's.
+    // Every level's globals: the ties drawn farther and finer by the game's own cull (`range.rs`), and the control channel's;
+    // every level's scene state (its SCENE record's word and its frame packet buffers' words: cutscene skip, below, and the tie
+    // ranges' room).
     let levels = uyafmt::levelcode::all(iso)?;
-    let range = crate::range::Range::new(levels.clone());
+    let scenes = uyafmt::scenecode::all(iso)?;
+    let range = crate::range::Range::new(levels.clone(), &scenes);
     let mut warps = warps.iter().copied().collect::<Warps>();
     // A warp due while the game does not ask for levels: said once.
     let mut warp_waits = false;
@@ -461,7 +464,7 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
     // The main program, for walking jobs the renderer does not get (`read_back`) and for the control channel's `until pause`.
     let boot = Arc::new(uyafmt::boot::boot(iso)?);
     // A frame the renderer was too busy to take is walked for its read-back (`main_read_back`) on a thread of its own, not on the
-    // game's core: the walk of a frame (Florana with DRAW DISTANCE FAR, 6.5 ms on this PC with the other cores busy) made a field
+    // game's core: the walk of a frame (several ms on this PC with the other cores busy) made a field
     // with a dropped picture overrun its 16.7 ms, so a renderer that fell behind slowed the game as well (the v0.1.4 player's
     // i7-13700K: a fifth to a third of the pictures dropped and 53 to 57 fields a second). It takes the frame's jobs and RAM
     // buffer and gives back the pages and the buffer; the game thread takes what it gave back each field, and all of it before it
@@ -486,9 +489,8 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
         Some(_) => Some(&*boot),
         None => None,
     };
-    // Cutscene skip (PLAN 10): every level's scene state (its SCENE record's word), the profile's seen cutscenes, and the
-    // in-engine cutscene playing.
-    let scenes = uyafmt::scenecode::all(iso)?;
+    // Cutscene skip (PLAN 10): every level's scene state (`scenes`, above), the profile's seen cutscenes, and the in-engine
+    // cutscene playing.
     // A cutscene's SCENE block, unpacked out of the frame packets' reach (`scenespace`).
     crate::scenespace::install(&scenes);
     crate::seen::open(profile)?;
@@ -752,11 +754,8 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
         }
         let playing = menus.in_play(&m.ram[..RAM]);
         let cutscene = menus.game_mode(&m.ram[..RAM]) == Some(CUTSCENE_MODE);
-        // DRAW DISTANCE (`uyart::drawdist`): FAR in play, the game's own distances elsewhere (cutscenes, menus, the vid-comics),
-        // as the field of view; from this field's culls on, and `range` gives the shrubs' reach by it.
-        uyart::drawdist::set(playing && menus.settings.get("draw_distance") == 1);
-        // The port's ranges this field's culls apply as they read (`range.rs`), and the shrubs' reach its frame is drawn with.
-        let far_reach = range.publish(&m.ram[..RAM], playing, cutscene).map_err(|e| format!("play: field {f}: {e}"))?;
+        // The port's ranges this field's culls apply as they read (`range.rs`).
+        range.publish(&m.ram[..RAM], playing, cutscene).map_err(|e| format!("play: field {f}: {e}"))?;
         if let Some(s) = crate::scenespace::before() {
             println!("play: field {f}: {s}");
         }
@@ -766,8 +765,17 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
         }
         // A level's menu keeps its lists where the game lays them out (`uycpu::Host::menu`).
         uyart::set_menu(menus.menu(&m.ram[..RAM]));
-        // The field of view setting in play, the game's own view elsewhere (`Menus::in_play`), from this field's first view on.
-        uyart::set_view_fov(if menus.in_play(&m.ram[..RAM]) { menus.settings.fov_factor() } else { 1.0 });
+        // The field of view setting in play, the game's own view elsewhere (`Menus::in_play`), from this field's first view on. A
+        // level's menu keeps the factor the field before it had: the pause and the screens of its family (the galactic map) hold
+        // the frame's projection (program 6's matrix, by which the renderer places the 2D layer: `effects::Projection::ndc`) at
+        // the last field's while the game still makes the view's tangents each field (Veldin's 0x1E78C0, the native camera's), and
+        // the frame's projection follows the tangents a field late, so a factor changed by a menu's mode put the two apart: at
+        // FIELD OF VIEW 110 the pause menu and the galactic map were drawn 1.67 times their size, past the screen's edges, the
+        // world behind the pause at the game's own view (report 155269, v0.1.7: "Menu size is tied to FOV: normal at default,
+        // bigger at 90, massive at 110"), and the field after the pause or a vendor the 2D layer was drawn at 0.6 times its size.
+        if !menus.level_menu(&m.ram[..RAM]) {
+            uyart::set_view_fov(if menus.in_play(&m.ram[..RAM]) { menus.settings.fov_factor() } else { 1.0 });
+        }
         ns[0] += t.elapsed().as_nanos() as u64;
         // Cutscene skip: an in-engine cutscene (the game's mode 2) not yet seen, with AFTER FIRST VIEWING, hears no button, so
         // nothing skips it (the game's own test, func_L01_004B66E0 +0x1C0: any of 0x9FF newly pressed, or Start); it is seen
@@ -837,7 +845,7 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
         // A main-frame read-back in the frames before the field's last (the game saving the picture shown: a pause's first
         // frame), which the renderer does not get: given with the next frame it draws (`read_back`).
         if out.earlier > 0 {
-            read_back.extend(main_read_back(&crate::jobs::Kicked::new(f, out.earlier_jobs, Vec::new(), far_reach).into_frame(&before)?, &boot));
+            read_back.extend(main_read_back(&crate::jobs::Kicked::new(f, out.earlier_jobs, Vec::new()).into_frame(&before)?, &boot));
         }
         // The transfers of the frames before the field's last, and the last's own.
         let mut uploads = out.uploads;
@@ -859,7 +867,7 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
             skin_before.pop_front();
         }
         // The field's jobs, its frame's draw lists still in the frame's RAM copy (`before`): built from it where they are walked.
-        let jobs = crate::jobs::Kicked::new(f, out.jobs, skin_before.iter().cloned().collect(), far_reach);
+        let jobs = crate::jobs::Kicked::new(f, out.jobs, skin_before.iter().cloned().collect());
         // --control: whether this field ends the running command (then its frame is drawn before the answer). An `until pause`
         // also asks whether the field's jobs carry a world frame, as the renderer does.
         let settle = match control.as_mut() {

@@ -1,7 +1,6 @@
 //! The port's own ranges, applied by the native culls as they read the game's values (port/uya `range.rs` says what each is
-//! and why): the ties at their finest LOD and out to the level's limit, the props with their near meshes at every distance,
-//! and the shrubs out to DRAW DISTANCE FAR's reach. The port sets them before each field (`set`); nothing is written into the
-//! game's memory.
+//! and why): the ties at their finest LOD and out to the level's limit, and the props with their near meshes at every distance.
+//! The port sets them before each field (`set`); nothing is written into the game's memory.
 //!
 //! They were written into the game's memory before each field (the classes' LOD distances, the instances' distance bytes, the
 //! props' near distances, the level's shrub limit), at the addresses the level's globals named. On level 35 (R3-034) the tie
@@ -15,8 +14,6 @@
 //! - `tiecull` (0x4AFA28): the class's LOD distances (`lqc2 $vf16, 0x10($s0)`) and the instance's distance byte (`lbu $v0,
 //!   0x3C($s6)`, the next instance's +0x1C) at 0x4AFCE0, before its PMINW with the level's limit;
 //! - `mobydraw` (0x43EA78): the moby's near distance (`lbu $at, 0x62($fp)`) before the near and far meshes' test at 0x43F128;
-//! - `shrubcull` (0x4A2200): the level's shrub limit (gp+0x45A8 on Veldin) at +0x44; the renderer's own shrub cull takes the
-//!   same reach (port/uya `objects::Shrubs::visible`).
 //!
 //! A check of the tie cull or the moby draw path (UYA_NATIVE_CHECK) runs the translation with the values written into RAM as
 //! they were (`for_translation`) and taken back after it (`translation_done`), so the native unit, which applies them as it
@@ -26,8 +23,17 @@ use crate::Cpu;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, RwLock};
 
-/// The LOD distances every tie class is culled with: past any depth the level's limit lets the cull list a tie at.
-pub const LOD_DISTANCES: [f32; 3] = [65536.0, 131072.0, 196608.0];
+/// The finest LOD's reach with nothing holding it in (units, the LOD distances' own): past any depth the level's limit lets the
+/// cull list a tie at, so every tie is at its finest LOD.
+pub(crate) const FINEST_FULL: f32 = 65536.0;
+
+/// A class's LOD distances (its +0x10 to +0x18, f32 bits) as the port's ranges have them: its finest LOD out to `finest` units
+/// (`tiebudget::Costs::finest`), its other LODs' bands after it as long as they were.
+pub(crate) fn lod_distances(own: [u32; 3], finest: f32) -> [u32; 3] {
+    let d = own.map(f32::from_bits);
+    let shift = (finest - d[0]).max(0.0);
+    d.map(|x| (x + shift).to_bits())
+}
 
 /// A moby instance's size in the level's array.
 const MOBY: u32 = 0x100;
@@ -39,8 +45,15 @@ pub struct Ranges {
     pub ties: Option<Ties>,
     /// The props' near distance, 255.
     pub props: Option<Props>,
-    /// DRAW DISTANCE FAR's reach in world units: the level's shrub limit at least that.
-    pub shrub_reach: Option<f32>,
+    /// The level's frame packet buffers, whose room the tie ranges keep to (`tiebudget`).
+    pub packets: Option<Packets>,
+}
+
+/// The words of the level's memory map holding its two frame packet buffers' starts (`uyafmt::scenecode`: `map + 0xC` and
+/// `map + 0x10`), and the level.
+pub struct Packets {
+    pub starts: [u32; 2],
+    pub level: u32,
 }
 
 /// The level's tie globals' addresses (`uyafmt::levelcode::TieAddrs`), for a check's translation run (`for_translation`).
@@ -104,7 +117,7 @@ impl TieView {
         if byte != 0 && byte < limit { limit } else { byte }
     }
 
-    /// Whether `class` is culled with `LOD_DISTANCES`.
+    /// Whether `class` is culled with its LOD distances moved out (`lod_distances`).
     pub(crate) fn lods(&self, class: u32) -> bool {
         self.classes.contains(&class)
     }
@@ -153,8 +166,8 @@ pub(crate) fn for_translation(c: &mut Cpu, u: Unit) {
     match u {
         Unit::Ties => {
             if let Some(v) = r.ties.as_ref().and_then(|t| TieView::read(c, t)) {
-                let lod: Vec<u8> = LOD_DISTANCES.iter().flat_map(|d| d.to_le_bytes()).collect();
                 for &class in &v.classes {
+                    let lod: Vec<u8> = lod_distances([0, 4, 8].map(|o| c.rd32(class + 0x10 + o)), FINEST_FULL).iter().flat_map(|d| d.to_le_bytes()).collect();
                     write(c, &mut w, class + 0x10, &lod);
                 }
                 let mut a = v.instances + 0x1c;

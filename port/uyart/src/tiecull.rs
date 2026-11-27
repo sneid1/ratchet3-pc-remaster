@@ -59,19 +59,6 @@
 //! the state as it was before; every difference in the machine's state they leave (`differences`) is reported with what the
 //! calls covered, a summary every 100 calls, and the game goes on from the translation's state. Both runs go with the
 //! thread's interrupts held (`Check::ints`), as the other units' checks do.
-//!
-//! DRAW DISTANCE FAR (`drawdist`, port/uya `settings.rs`): the tie cull's far test is the sign of vf3.y = (L - r) - (z - r),
-//! L = 16 x min(the instance's byte +0x1C, gp+0x46E4 >> 4) (vf4.y, ITOF0 of the PMINW at 0x4AFCF0 shifted), r its radius, z
-//! its centre's view depth, read by the QMFC2 of vf3 and its branch in 0x4AFCE0's block: a tie whose nearest point is past
-//! L is not listed. With FAR, vf19.y (L - r, the SUB.y after the ITOF0) is at least the reach, unless L is 0 (a byte of 0: a
-//! tie the level hides), so a tie is listed while its nearest point is within the reach. The fade the cull gives a tie over
-//! the last 8 units before its limit (vf19.y as FTOI4 of vf3.y, at most 0x80, at the record's +0x44 by 0x4B0010) comes with
-//! it. What is not the far test stays the game's: the tie's LOD (its class's distances against its depth: the port's
-//! `range` reads them as its finest LOD's), the near and side tests, the far clip (a tie whose corners are all past it is culled at 0x4B039C,
-//! and FAR's reach is never past it), and the cull's caps (1023 ties a frame, `t4`; 256 a class, scratchpad 0x1000 to
-//! 0x1800). The terrain cull is the game's at FAR too: the renderer draws every chunk that passes the zone test at any depth
-//! (port/uya `native::terrain_pass`), so its far limit (vf23.y, gp+0x4690: 960 units x 1024 on Veldin) decides nothing seen.
-//! A check of the tie cull stops the game while FAR is on (`drawdist::refuse_check`); the terrain cull's is the same at both.
 
 use crate::{Cpu, Ext};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
@@ -452,9 +439,6 @@ pub(crate) fn start(c: &mut Cpu, k: u32) {
             return;
         }
         if ck.job == job && ck.left > 0 {
-            if job == Job::Tie {
-                crate::drawdist::refuse_check("tie");
-            }
             CALL.with(|w| w.set((at, wide)));
             // Interrupts on as the kernel sees them (`kernel::K::ints_on`): EIE and IE, not in an exception.
             ck.ints = c.status & 0x1_0001 == 0x1_0001 && c.status & 6 == 0;
@@ -470,7 +454,7 @@ pub(crate) fn start(c: &mut Cpu, k: u32) {
             return;
         }
     }
-    run(c, job, at, wide);
+    run(c, job, at, wide, false);
     c.ret = c.r[RA] as u32;
 }
 
@@ -495,11 +479,8 @@ pub(crate) fn after(c: &mut Cpu, k: u32) {
     let want = State::take(c);
     before.put(c);
     let (at, wide) = CALL.with(|w| w.get());
-    if job == Job::Tie {
-        crate::drawdist::refuse_check("tie");
-    }
     let sp = c.r[SP] as u32;
-    run(c, job, at, wide);
+    run(c, job, at, wide, true);
     c.ret = c.r[RA] as u32;
     let got = State::take(c);
     let d = differences(&want, &got);
@@ -530,10 +511,30 @@ pub(crate) fn after(c: &mut Cpu, k: u32) {
 }
 
 /// The unit from either entry, natively.
-fn run(c: &mut Cpu, job: Job, at: u32, wide: bool) {
+fn run(c: &mut Cpu, job: Job, at: u32, wide: bool, checked: bool) {
     let mut n = [0u64; N];
     match job {
-        Job::Tie => f4afa28(c, F { at, l1: 0x4a_fa28 }, wide, &mut n),
+        Job::Tie => {
+            // The tie ranges' room in the frame's packets (`tiebudget`), from the chain pointer (gp+0x4838, the word the cull
+            // loads into fp) before the cull; none for a checked call, whose translation reads every range (`range`).
+            let k = F { at, l1: 0x4a_fa28 };
+            let ptr = k.gp(c, c.r[GP] as u32, 0x004afab8);
+            let before = c.rd32(ptr);
+            let ranges = crate::range::get();
+            let packets = ranges.packets.as_ref().filter(|_| !checked);
+            let budget = packets.and_then(|p| {
+                let starts = p.starts.map(|w| c.rd32(w));
+                crate::tiebudget::Budget::new(&mut c.mach().hw.tie_costs, p.level, starts, before)
+            });
+            static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if packets.is_some() && budget.is_none() && !SAID.swap(true, Relaxed) {
+                println!("tiebudget: the chain pointer {before:#x} lies in neither frame packet buffer; the tie ranges apply in full (said once)");
+            }
+            if let Some(b) = f4afa28(c, k, wide, &mut n, budget) {
+                let after = c.rd32(ptr);
+                c.mach().hw.tie_costs.tie_pass(ptr, before, after, &b);
+            }
+        }
         Job::Terrain => f4adc98(c, F { at, l1: 0x4a_dc98 }, wide, &mut n),
     }
     for (a, v) in DONE.iter().zip(n) {
@@ -549,13 +550,14 @@ fn run(c: &mut Cpu, job: Job, at: u32, wide: bool) {
 // the relocated words from the code (`k`), the safe points gone, 0x4B0964's polls `f4b0964`, the view's tangents widened when
 // `wide` (+0x198: vf20 = (h view_k fov, v fov, +0xB8, +0xBC)).
 #[allow(unused_assignments, unused_parens, clippy::all)]
-fn f4afa28(c: &mut Cpu, k: F, wide: bool, n: &mut [u64; N]) {
+fn f4afa28(c: &mut Cpu, k: F, wide: bool, n: &mut [u64; N], mut budget: Option<crate::tiebudget::Budget>) -> Option<crate::tiebudget::Budget> {
 let (mut r, mut h) = (c.r, c.rh);
 let gp = r[GP] as u32;
-let mut far: Option<u32> = None;
-// The port's tie ranges (`range`): the level's classes culled at their finest LOD, its instances out to its limit.
+// The port's tie ranges (`range`): the level's classes culled at their finest LOD (out to the budget's reach, `tiebudget`), its
+// instances out to its limit; a tie the budget's room cannot hold is passed over where the cull's own cap passes one (t4).
 let ranges = crate::range::get();
 let ties = ranges.ties.as_ref().and_then(|t| crate::range::TieView::read(c, t));
+let (finest, extend) = budget.as_ref().map_or((crate::range::FINEST_FULL, true), |b| (b.finest, b.extend));
 let mut l: u32 = 0x004afa28;
 loop { match l {
 0x004afa28 => {
@@ -659,8 +661,6 @@ uycpu::vu0::fmac::<6, 1>(c, 24, 0, uycpu::vu0::bcast(c.vf[1][0]));
 { let v = c.vf[4]; c.wr128((r[RA] as u32).wrapping_add(0x00003f70), v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32); }
 r[AT] = sx(k.hi(c, 0x004afbb0));
 r[AT] = add32(r[AT], k.lo(c, 0x004afbb4) as u64);
-// The view struct (at): DRAW DISTANCE FAR's reach for it (`drawdist`), in the cull's world units, as f32 bits.
-far = crate::drawdist::reach_of(c, r[AT] as u32).map(|d| (d / 1024.0).to_bits());
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x00000230)); c.vf[18] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x000000a0)); c.vf[19] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
 { let (a, b) = c.rd128((r[AT] as u32).wrapping_add(0x000000b0)); let (h, v) = if wide { (c.widen(a as u32), c.fov((a >> 32) as u32)) } else { (a as u32, (a >> 32) as u32) }; c.vf[20] = [h, v, b as u32, (b >> 32) as u32]; }
@@ -726,7 +726,7 @@ r[T5] = r[AT] & 0x6;
 r[S6] = sll(r[S6], 5);
 r[V1] = c.rd32((r[RA] as u32).wrapping_add(0x00003f88)) as i32 as i64 as u64;
 let t = r[V0] != 0u64;  { let (a, b) = c.rd128((r[S0] as u32).wrapping_add(0x00000010)); c.vf[16] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
-if let Some(v) = &ties && v.lods(r[S0] as u32) { let [x, y, z] = crate::range::LOD_DISTANCES.map(f32::to_bits); c.vf[16][0] = x; c.vf[16][1] = y; c.vf[16][2] = z; }
+if let Some(v) = &ties && v.lods(r[S0] as u32) { let [x, y, z] = crate::range::lod_distances([c.vf[16][0], c.vf[16][1], c.vf[16][2]], finest); c.vf[16][0] = x; c.vf[16][1] = y; c.vf[16][2] = z; }
  if t { l = 0x004b067c; continue; }
 r[S6] = add32(r[S6], r[V1]);
 r[T5] = srl(r[T5], 1);
@@ -741,7 +741,7 @@ let t = r[S6] == r[S7];  r[S4] = 0;
 l = 0x004afce0; continue; }
 0x004afce0 => {
 let t = r[S6] == r[S7];  r[V0] = c.rd8((r[S6] as u32).wrapping_add(0x0000003c)) as u64;
-if let Some(v) = &ties { r[V0] = v.byte((r[S6] as u32).wrapping_add(0x3c), r[V0]); }
+if extend && let Some(v) = &ties { r[V0] = v.byte((r[S6] as u32).wrapping_add(0x3c), r[V0]); }
  if t { l = 0x004b067c; continue; }
 n[1] += 1;
 { let (a, b) = c.rd128((r[S6] as u32).wrapping_add(0x00000020)); c.vf[1] = [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]; }
@@ -766,9 +766,6 @@ let t = r[AT] == 0u64;  uycpu::vu0::fmac::<2, 14>(c, 2, 27, uycpu::vu0::bcast(c.
 uycpu::vu0::fmac::<6, 12>(c, 8, 22, uycpu::vu0::bcast(c.vf[1][3]));
 r[AT] = c.rd32((r[RA] as u32).wrapping_add(0x00003f8c)) as i32 as i64 as u64;
 uycpu::vu0::fmac::<1, 4>(c, 19, 4, uycpu::vu0::bcast(c.vf[1][3]));
-// DRAW DISTANCE FAR (the module doc): the tie's limit less its radius at least the reach, unless the limit is 0 (a tie the
-// level hides).
-if let Some(d) = far { if c.vf[4][1] != 0 && uycpu::fpu::lt(c.vf[19][1], d) { c.vf[19][1] = d; } }
 r[T7] = sll(r[T9], 6);
 r[T7] = add32(r[T7], r[AT]);
 r[T6] = sx(0x00000001);
@@ -778,7 +775,8 @@ let t = r[AT] == r[S5];  uycpu::vu0::fmac::<6, 12>(c, 5, 20, uycpu::vu0::bcast(c
  if t { l = 0x004afce0; continue; }
 uycpu::vu0::abs::<12>(c, 2, 2);
 r[AT] = c.rd8((r[S6] as u32).wrapping_add(0x0000001e)) as u64;
-let t = (r[T4] as i64) <= 0;   if t { l = 0x004afce0; continue; }
+let out = budget.as_mut().is_some_and(|b| { let o = b.next_out(); if o { b.left_out(); } o });
+let t = (r[T4] as i64) <= 0 || out;   if t { l = 0x004afce0; continue; }
 uycpu::vu0::fmac::<1, 12>(c, 3, 19, c.vf[1]);
 r[AT] = r[AT] & 0x4;
 let t = r[AT] != 0u64;  uycpu::vu0::fmac::<1, 12>(c, 4, 1, c.vf[23]);
@@ -832,6 +830,7 @@ c.wr32((r[RA] as u32).wrapping_add(0x00003f98), r[V0] as u32);
 l = 0x004afe50; continue; }
 0x004afe50 => {
 n[2] += 1;
+if let Some(b) = budget.as_mut() { b.listed(); }
 { let (a, b) = { let v = c.vf[2]; (v[0] as u64 | (v[1] as u64) << 32, v[2] as u64 | (v[3] as u64) << 32) }; r[V0] = a; h[V0] = b; }
 r[T4] = add32(r[T4], 0xffffffff);
 r[A1] = c.rd8((r[S6] as u32).wrapping_add(0x0000001f)) as u64;
@@ -1550,6 +1549,7 @@ _ => unreachable!("0x4AFA28: no block at {l:08x}"),
 }
 c.r = r;
 c.rh = h;
+budget
 }
 
 // ---- 0x4ADC98: the terrain cull --------------------------------------------------------------------------------------------------

@@ -23,43 +23,6 @@
 //! in what the game reads afterwards (`differences`) is reported with what the calls covered, and the game goes on from the
 //! translation's state. Both runs go with the thread's interrupts held (`Check::ints`), so that what the host's clock decides
 //! (the field's end, the timers' interrupts) lands after them, once, and not inside one of them.
-//!
-//! DRAW DISTANCE FAR (`drawdist`, port/uya `settings.rs`): the moby cull's far test (0x43EE70's block) is the sign of vf3.y =
-//! (D x 1024 - r) - (z - r), D = min(the moby's +0x32, gp+0x3820) (the PMINW with s7; the level's setup stores 960 there on
-//! Veldin, and most mobies' own is 64, the gameplay record's +0x30), r the sphere's radius and z its centre's view depth (both
-//! x 1024), read by the QMFC2 of vf3 and its branch: a moby whose nearest point is past D is culled. With FAR, vf19.y (D x
-//! 1024 - r, the SUB.y after the ITOF0) is at least the reach, unless D is not above 0, so a moby is drawn while its nearest
-//! point is within the reach. Not for every moby the game's own D culls, though, because the game leans on D where nothing
-//! else would stop its code:
-//! - a moby with no class (+0x24 zero: one with no model, or one being spawned) has a zero sphere, at the world origin, which
-//!   D always culls from where the game is played. Drawn, its LOD table (0x43FBC8) and meshes come from address 0, and the
-//!   mesh loop (0x43F680, until s1 reaches s0) never ends: the chain pointer walks through all of RAM into the hardware
-//!   registers (on Veldin with the camera turned to the origin from the middle of the level). FAR leaves such a moby at D.
-//! - what the cull fills, it fills for the mobies the game draws itself first: the moby chain up to gp+0x483C's end (tested
-//!   before each moby, 0x43EFA0: past it the cull ends, the second pass's near mobies with it), the job list (from 0x1DFBF0's
-//!   word) up to the second list's entries (gp+0x3344, 60 KB: the cull never tests it) and the near list's 128 entries
-//!   (scratchpad 0x1000 to 0x1800: a near-flag moby past them is culled). FAR's extra mobies drawn in the game's own passes
-//!   filled them first: on Obani Draco's corridor its lamps and robots took the near list and the chain before the second pass,
-//!   and Ratchet, the crate's hologram and the walkway were not drawn (likewise on Mylon; a v0.1.4 player with FAR on, on
-//!   Veldin and Florana: "ratchet is sometimes invisible"). So a moby inside the reach but past its own limit is culled in the game's own
-//!   passes as the game culls it, and drawn after them in an extras' pass (`f43ea78`'s `extras`): each as the first pass draws
-//!   a moby, a near-flag one from the near list's slot 0 as the second pass draws an entry (the game's near list kept aside
-//!   and put back), while the job list has 2 KB left (a record in each pass) and until the chain's end ends the pass. The game's
-//!   own mobies get the room they get at ORIGINAL. The chain's end is 72 KB short of the job list (on Mylon, 0x674000 and
-//!   0x686000): the one moby a pre-draw test lets past it (23 KB at most seen there) stays inside the frame's buffer.
-//! - the near list's entries with a drop-shadow mark go to 0x21F0E0 at the cull's end (0x43FA90), 48 of them before the
-//!   texture list (0x21F260), which past them the game's code overwrites; with FAR the copy ends there (only the game's own
-//!   mobies are in the list).
-//!
-//! The fade over the last 16 units before the limit (0x43EFA0: vf3.y's FTOI0 >> 7, at most 0x80,
-//! times +0x23) comes with it, and the near list's fades (0x43FD30, 0x43FFB0: +0x32 x 1024 less the depth) read the draw
-//! distance at least the reach (`far_distance`). The drawn byte (+0x31, which the game's code acts on: its targets, the drop
-//! shadows, debris removed off screen) stays the game's own decision (`drawn`), as with the widened view. What is not the far
-//! test stays the game's: the near and far meshes (+0x62 x 1024 against the depth, 0x43F128), the near and side tests, the
-//! far clip (a moby across it is sent to program 0's clipping run; FAR's reach is never past it), and what bounds the cull:
-//! the chain's end and the near list's 128 entries (above: FAR's extras get what the game's own leave). UYA_FAR_LOG sums what
-//! the culls did (`FarLog`). A check of the cull (`moby`) stops the game while FAR is on
-//! (`drawdist::refuse_check`); `moby2`, which has no cull, is the same at both.
 
 use crate::{Cpu, Ext};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
@@ -623,9 +586,6 @@ pub(crate) fn start(c: &mut Cpu, k: u32) {
             return;
         }
         if ck.job == job && ck.left > 0 {
-            if job == Job::Draw {
-                crate::drawdist::refuse_check("moby");
-            }
             CALL.with(|w| w.set((at, wide)));
             // Interrupts on as the kernel sees them (`kernel::K::ints_on`): EIE and IE, not in an exception.
             ck.ints = c.status & 0x1_0001 == 0x1_0001 && c.status & 6 == 0;
@@ -667,9 +627,6 @@ pub(crate) fn after(c: &mut Cpu, k: u32) {
     before.put(c);
     // The wrapper's `c.ret` at the start: the function's address and the view bit, which the translation's run replaced.
     let (at, wide) = (CALL.with(|w| w.get()).0, CALL.with(|w| w.get()).1);
-    if job == Job::Draw {
-        crate::drawdist::refuse_check("moby");
-    }
     run(c, job, at, wide);
     let got = State::take(c);
     let d = differences(&want, &got, sp);
@@ -737,12 +694,7 @@ fn f438120(c: &mut Cpu, k: F, sp: u32, _ra: u64, wide: bool) {
     }
     let a0 = c.rd32(k.a(c, 0x43_8154, 0x43_8158));
     let a1 = c.rd32(k.gp(c, gp, 0x43_8164));
-    // The end of the draw records' room: where the second list's entries go (0x437B48's a0, gp+0x3344), for FAR's bound.
-    let room = {
-        let second = k.call(c, 0x43_8168, 0x43_80c0).call(c, 0x43_80e8, 0x43_7b48);
-        c.rd32(second.gp(c, gp, 0x43_7bfc))
-    };
-    let v0 = { let kk = k.call(c, 0x43_8160, 0x43_ea78); f43ea78(c, kk, a0, a1, u32::MAX, a3, k.pc(0x43_8168) as u64, sp, wide, room) };
+    let v0 = { let kk = k.call(c, 0x43_8160, 0x43_ea78); f43ea78(c, kk, a0, a1, u32::MAX, a3, k.pc(0x43_8168) as u64, sp, wide) };
     let a = k.gp(c, gp, 0x43_816c);
     c.wr32(a, v0);
     { let kk = k.call(c, 0x43_8168, 0x43_80c0); f4380c0(c, kk, sp, k.pc(0x43_8170) as u64); }
@@ -2575,9 +2527,9 @@ fn add32(a: u64, b: u64) -> u64 {
 /// its registers at scratchpad 0x3FA8, works on 128-bit registers (the high halves of ra, sp, s4 to s7 carry its state), and
 /// builds each drawn moby's draw record in the scratchpad (0x2800 and 0x2C00 in turn, SPR_FROM to the job list) and its VIF1
 /// chain at gp+0x4838. Returns the job list's end (v0). The program's view is widened when `wide` (`VIEW_LOADS` "the moby cull"
-/// +0x214, `DRAWN`); `room` is the end of the job list's room, which DRAW DISTANCE FAR keeps its extra mobies inside.
+/// +0x214, `DRAWN`).
 #[allow(clippy::too_many_arguments)]
-fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u32, wide: bool, room: u32) -> u32 {
+fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u32, wide: bool) -> u32 {
     let gp = c.r[28] as u32;
     let g = |c: &mut Cpu, pc: u32| k.gp(c, gp, pc);
     // The relocated addresses.
@@ -2597,26 +2549,9 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
     let (g3880, g4838, g27d0, g483c, g4d30, g3820) = (g(c, 0x43_eb18), g(c, 0x43_ec08), g(c, 0x43_ec10), g(c, 0x43_ec18), g(c, 0x43_ec28), g(c, 0x43_ec30));
     let gtpl: [u32; 7] = std::array::from_fn(|q| if q < 6 { k.gp(c, gp, 0x43_ecd8 + 4 * q as u32) } else { k.gp(c, gp, 0x43_ed08) });
     let (g3830, g3880b, g4838b, g3834) = (g(c, 0x43_fad0), g(c, 0x43_fadc), g(c, 0x43_faf8), g(c, 0x43_fc78));
-    // DRAW DISTANCE FAR's reach for the view struct (`drawdist`), in the cull's units (view depth x 1024) as f32 bits, and in
-    // whole world units for the near list's draw distances; whether the moby being culled passed the game's own far test.
-    let far = crate::drawdist::reach_of(c, view).map(f32::to_bits);
-    let far_units = far.map(|d| (f32::from_bits(d) / 1024.0).ceil() as i64);
     // The port's props (`range`).
     let ranges = crate::range::get();
     let props = ranges.props.as_ref();
-    let mut game_far = true;
-    // DRAW DISTANCE FAR's extra mobies (the module doc): those the game's own far test culls and FAR's reach keeps, left out of
-    // the game's own passes and drawn after them (`extras`, their addresses); `extra_pass`, the next one while their pass runs;
-    // the near list as the game's passes left it and its end (the pass draws a near-flag extra from slot 0); `ra_first`, the
-    // first pass's RA (the pass draws as the first pass does). With UYA_FAR_LOG, what the cull did with them (`FarLog`).
-    let mut extras: Vec<u32> = Vec::new();
-    let mut extra_pass: Option<usize> = None;
-    let mut near_saved: Vec<(u64, u64)> = Vec::new();
-    let mut near_end_saved = (0u64, 0u64);
-    let (mut cursor_saved, mut ra_saved, mut ra_first) = (0u32, 0u64, 0u64);
-    let mut far_log = FarLog::default();
-    let chain_start = c.rd32(g4838);
-
     let mut r = c.r;
     let mut h = c.rh;
     r[A0] = sx(a0);
@@ -2786,36 +2721,13 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
         match l {
             0x43_ee70 => {
                 count(0, 1);
-                if let Some(next) = extra_pass {
-                    // DRAW DISTANCE FAR's extras' pass (`extras`): a near-flag extra the last one put into the near list's slot 0
-                    // is drawn as the second pass draws an entry (0x43FD30); then the next extra, culled and drawn as the first
-                    // pass does a moby; after the last, the pass ends (0x43FA88).
-                    let end = h[S5] as u32;
-                    if end != SPR + 0x1000 {
-                        if c.rd32(SPR + 0x3ef0) != end {
-                            l = 0x43_fd30;
-                            continue;
-                        }
-                        h[S5] = sx(SPR + 0x1000);
-                        c.wr32(SPR + 0x3ef0, SPR + 0x1000);
-                    }
-                    let Some(&fp) = extras.get(next) else {
-                        l = 0x43_fa88;
-                        continue;
-                    };
-                    extra_pass = Some(next + 1);
-                    r[V0] = c.rd16(fp + 0x32) as i16 as i64 as u64;
-                    r[FP] = sx(fp);
-                    lqc2(c, 1, fp);
-                } else {
-                    r[V0] = c.rd16(r[FP] as u32 + 0x132) as i16 as i64 as u64;
-                    r[FP] = add32(r[FP], 0x100);
-                    let t = r[FP] == r[S5];
-                    lqc2(c, 1, r[FP] as u32);
-                    if t {
-                        l = 0x43_fa88;
-                        continue;
-                    }
+                r[V0] = c.rd16(r[FP] as u32 + 0x132) as i16 as i64 as u64;
+                r[FP] = add32(r[FP], 0x100);
+                let t = r[FP] == r[S5];
+                lqc2(c, 1, r[FP] as u32);
+                if t {
+                    l = 0x43_fa88;
+                    continue;
                 }
                 r[AT] = c.rd8(r[FP] as u32 + 0x20) as i8 as i64 as u64;
                 { let v = uycpu::mmi::pminw(rq(&r, &h, V0), rq(&r, &h, S7)); setq(&mut r, &mut h, V0, v); }
@@ -2837,18 +2749,6 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
                 vop::<2, 14>(c, 2, 27, bc(c, 2, 2));
                 r[A2] = c.rd8(r[A2] as u32 + 0x3800) as u64;
                 vop::<1, 4>(c, 19, 19, bc(c, 1, 3));
-                // DRAW DISTANCE FAR (the module doc): the draw distance less the radius at least the reach, unless the distance
-                // is not above 0 (vf4.y, the PMINW's word times 1024) or the moby has no class (+0x24); in the extras' pass
-                // (`extras`) only while the job list has room left for its record in both passes (1 KB each at most, the
-                // scratchpad buffer it is built in). In the game's own passes the reach is the limit of the mobies the game
-                // draws itself (their fade is FAR's, not their own limit's); one past its own limit waits for the extras' pass.
-                let game_limit = c.vf[19][1];
-                if let Some(d) = far {
-                    let drawable = c.rd32(r[FP] as u32 + 0x24) != 0 && (extra_pass.is_none() || r[T9] as u32 + 0x800 <= room);
-                    if (c.vf[4][1] as i32) > 0 && uycpu::fpu::lt(game_limit, d) && drawable {
-                        c.vf[19][1] = d;
-                    }
-                }
                 r[T0] = c.rd8(r[FP] as u32 + 0x31) as u64;
                 vop::<6, 12>(c, 8, 22, bc(c, 1, 3));
                 r[A3] &= r[A2];
@@ -2871,10 +2771,6 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
                 vop::<6, 12>(c, 7, 8, bc(c, 22, 2));
                 r[T1] = sx((r[A3] as u32) << 1);
                 vop::<1, 12>(c, 3, 19, c.vf[1]);
-                // The game's own far test, vf3.y's sign from its own limit: the drawn byte follows it (`drawn`).
-                if far.is_some() {
-                    game_far = uycpu::fpu::sub(game_limit, c.vf[1][1]) >> 31 == 0;
-                }
                 r[T2] = c.rd8(r[FP] as u32 + 0x23) as u64;
                 vop::<6, 12>(c, 9, 5, c.vf[21]);
                 r[A3] = sx((r[A3] as u32) << 2);
@@ -2899,13 +2795,6 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
                 let t = (r[AT] as i64) < 0;
                 { let v = qmfc2(c, 4); setq(&mut r, &mut h, A0, v); }
                 if t {
-                    l = 0x43_fa60;
-                    continue;
-                }
-                // DRAW DISTANCE FAR: a moby inside the reach but past its own limit is culled here as the game culls it, and
-                // drawn after the game's own passes, in whatever room they leave (`extras`).
-                if far.is_some() && extra_pass.is_none() && !game_far {
-                    extras.push(r[FP] as u32);
                     l = 0x43_fa60;
                     continue;
                 }
@@ -2947,7 +2836,7 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
             0x43_ef90 => {
                 // The drawn byte: set when it was clear; with the view widened or FAR, only when the game's own view and
                 // distance would draw it.
-                drawn(c, r[FP] as u32 + 0x31, r[T0], h[RA], wide, game_far);
+                drawn(c, r[FP] as u32 + 0x31, r[T0], h[RA], wide);
                 r[AT] = 1;
                 l = 0x43_efa0;
             }
@@ -3561,9 +3450,6 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
                 r[T8] &= 0x2c00;
                 r[A0] = sx((r[A0] as u32) >> 4);
                 spr_from(c, 0x100, r[T9] as u32, r[A0] as u32, r[T8] as u32);
-                if extra_pass.is_some() {
-                    far_log.drawn += 1;
-                }
                 r[A0] = sx((r[A0] as u32) << 4);
                 r[V0] = 0x100;
                 r[T9] = add32(r[T9], r[A0]);
@@ -3681,19 +3567,8 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
             }
             0x43_fa88 => {
                 // The first pass's end (or the chain full): the second pass when the mode asks for it (RA positive), else the
-                // end. With DRAW DISTANCE FAR: the extras' pass after the first pass of a cull with no second pass; its own end
-                // when it runs (its last extra, or the chain full); the chain full in the second pass ends the cull.
-                l = if extra_pass.is_some() {
-                    EXTRAS_END
-                } else if (r[RA] as i64) > 0 {
-                    ra_first = r[RA];
-                    0x43_fc60
-                } else if r[RA] == 0 && far.is_some() && !extras.is_empty() {
-                    ra_first = r[RA];
-                    EXTRAS_START
-                } else {
-                    0x43_fa90
-                };
+                // end.
+                l = if (r[RA] as i64) > 0 { 0x43_fc60 } else { 0x43_fa90 };
             }
             0x43_fa90 => {
                 // The end: the near list's entries with a second pass mark into 0x21F0E0 (their count at gp+0x3830), the texture
@@ -3703,11 +3578,6 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
                 r[AT] = (SPR + 0x1000) as u64;
                 r[V1] = 0;
                 while r[AT] != r[V0] {
-                    // DRAW DISTANCE FAR: the list ends where the texture list starts (48 entries), however many near mobies
-                    // the game's own passes drew (FAR's extras are not in the list: `extras`).
-                    if far.is_some() && r[A0] as u32 == tex_list {
-                        break;
-                    }
                     r[A1] = c.rd64(r[AT] as u32);
                     r[AT] = add32(r[AT], 0x10);
                     r[A2] = r[A1] >> 32;
@@ -3716,11 +3586,6 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
                         r[A0] = add32(r[A0], 8);
                         r[V1] = add32(r[V1], 1);
                     }
-                }
-                if far.is_some() {
-                    let chain = (r[SP] as u32).wrapping_sub(chain_start);
-                    let chain_room = (h[SP] as u32).wrapping_sub(chain_start);
-                    far_log.end(extras.len(), (r[T9] as u32).wrapping_sub(a1), room.wrapping_sub(a1), chain, chain_room);
                 }
                 c.wr32(g3830, r[V1] as u32);
                 r[AT] = sx(c.rd32(SPR + 0x3e00));
@@ -3875,15 +3740,8 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
                 let t = r[T5] == r[AT];
                 r[FP] = sx(c.rd32(r[T5] as u32));
                 if t {
-                    // The list's end: the cull's end, or with DRAW DISTANCE FAR the extras' pass after the second pass, or its
-                    // next extra once it has drawn (or skipped) the one in slot 0.
-                    l = if extra_pass.is_some() {
-                        0x43_ee70
-                    } else if far.is_some() && !extras.is_empty() {
-                        EXTRAS_START
-                    } else {
-                        0x43_fa90
-                    };
+                    // The list's end: the cull's end.
+                    l = 0x43_fa90;
                     continue;
                 }
                 count(2, 1);
@@ -3893,7 +3751,6 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
                 r[T6] = c.rd16(r[FP] as u32 + 0x34) as u64;
                 r[A3] = sx((r[T1] as u32) << 1);
                 r[AT] = c.rd16(r[FP] as u32 + 0x32) as i16 as i64 as u64;
-                r[AT] = far_distance(r[AT], far_units);
                 r[S3] = c.rd16(t5 + 0xa) as i16 as i64 as u64;
                 r[T5] = add32(r[T5], 0x10);
                 c.wr32(SPR + 0x3ef0, r[T5] as u32);
@@ -3931,7 +3788,7 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
                     }
                 } else {
                     r[S3] = 10;
-                    drawn(c, r[FP] as u32 + 0x31, r[T0], h[RA], wide, game_far);
+                    drawn(c, r[FP] as u32 + 0x31, r[T0], h[RA], wide);
                     let t = r[T0] != 0;
                     r[V1] |= r[A0];
                     if !t {
@@ -4095,7 +3952,6 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
             0x43_ffb0 => {
                 let t = r[S3] == 0;
                 r[AT] = c.rd16(r[FP] as u32 + 0x32) as i16 as i64 as u64;
-                r[AT] = far_distance(r[AT], far_units);
                 if t {
                     l = 0x43_ee70;
                     continue;
@@ -4419,32 +4275,6 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
                 }
                 l = 0x43_f568;
             }
-            EXTRAS_START => {
-                // DRAW DISTANCE FAR's extras' pass (`extras`), after the game's own passes: the near list, its end (S5's high
-                // half), the second pass's cursor and RA kept as those passes left them; the pass draws with the first pass's RA
-                // (a record's next block is 0x43EE70) and the near list's slot 0 for a near-flag extra.
-                near_saved = (0..128).map(|i| c.rd128(SPR + 0x1000 + 16 * i)).collect();
-                near_end_saved = (r[S5], h[S5]);
-                cursor_saved = c.rd32(SPR + 0x3ef0);
-                ra_saved = r[RA];
-                h[S5] = sx(SPR + 0x1000);
-                c.wr32(SPR + 0x3ef0, SPR + 0x1000);
-                r[RA] = ra_first;
-                extra_pass = Some(0);
-                l = 0x43_ee70;
-            }
-            EXTRAS_END => {
-                // The extras' pass ends (every extra culled or drawn, or the chain full): the game's passes' near list, its end,
-                // the cursor and RA back, for the cull's end (0x43FA90) and the caller.
-                far_log.cut = extras.len() - extra_pass.expect("the extras' pass ends only while it runs").min(extras.len());
-                for (i, q) in near_saved.iter().enumerate() {
-                    c.wr128(SPR + 0x1000 + 16 * i as u32, q.0, q.1);
-                }
-                (r[S5], h[S5]) = near_end_saved;
-                c.wr32(SPR + 0x3ef0, cursor_saved);
-                r[RA] = ra_saved;
-                l = 0x43_fa90;
-            }
             _ => unreachable!("0x43EA78: no block at {l:08x}"),
         }
     }
@@ -4457,62 +4287,13 @@ fn f43ea78(c: &mut Cpu, k: F, a0: u32, a1: u32, a2: u32, a3: u32, ra: u64, sp: u
     add32(r[T9], 0x10) as u32
 }
 
-/// UYA_FAR_LOG: what DRAW DISTANCE FAR's culls did, summed over each 300 of them (`FarLog::end`): the extra mobies left for the
-/// extras' pass (`f43ea78`'s `extras`), the records that pass made, the extras it never reached (the chain full), and the
-/// fullest job list (its bytes against the room up to the second list, `room`) and moby chain (against gp+0x483C's end).
-#[derive(Default)]
-struct FarLog {
-    drawn: u32,
-    cut: usize,
-}
-
-static FAR_LOG_ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-static FAR_LOG: std::sync::Mutex<[u64; 8]> = std::sync::Mutex::new([0; 8]);
-
-impl FarLog {
-    /// The cull's end: `extras` left for the extras' pass; the job list `job` bytes of `room`, the chain `chain` of `chain_room`.
-    fn end(&self, extras: usize, job: u32, room: u32, chain: u32, chain_room: u32) {
-        if !*FAR_LOG_ON.get_or_init(|| std::env::var_os("UYA_FAR_LOG").is_some()) {
-            return;
-        }
-        let mut s = FAR_LOG.lock().expect("far log lock");
-        let [calls, deferred, drawn, cut, job_max, room_min, chain_max, chain_room_min] = &mut *s;
-        *calls += 1;
-        *deferred += extras as u64;
-        *drawn += self.drawn as u64;
-        *cut += self.cut as u64;
-        *job_max = (*job_max).max(job as u64);
-        *room_min = if *room_min == 0 { room as u64 } else { (*room_min).min(room as u64) };
-        *chain_max = (*chain_max).max(chain as u64);
-        *chain_room_min = if *chain_room_min == 0 { chain_room as u64 } else { (*chain_room_min).min(chain_room as u64) };
-        if *calls == 300 {
-            println!("far: 300 culls: {deferred} extra mobies left for the extras' pass, {drawn} records made in it, {cut} never reached (the chain full); the fullest job list {job_max} of {room_min} bytes, moby chain {chain_max} of {chain_room_min}");
-            *s = [0; 8];
-        }
-    }
-}
-
-/// `f43ea78`'s own blocks for DRAW DISTANCE FAR's extras' pass: no address of the game's (its blocks are at 0x43xxxx and 0x44xxxx).
-const EXTRAS_START: u32 = 1;
-const EXTRAS_END: u32 = 2;
-
-/// A moby's draw distance (its +0x32 as the near list's fades read it, sign-extended) with DRAW DISTANCE FAR's reach in whole
-/// units (`far`): at least the reach when it is above 0, as the far test's limit is (the module doc); itself at ORIGINAL.
-#[inline(always)]
-fn far_distance(d: u64, far: Option<i64>) -> u64 {
-    match far {
-        Some(f) if (d as i64) > 0 => (d as i64).max(f) as u64,
-        _ => d,
-    }
-}
-
 /// The drawn byte (moby +0x31, `flag`; `was` the byte as the cull read it) of a moby that passed the cull's tests, as the
 /// game's own cull leaves it: set when it was clear and the game would draw the moby, and where the game would not (outside
-/// its own view when the view is widened, `wide`: `uycpu::Cpu::in_original_view`, uyatr's `DRAWN`; past its own far limit,
-/// `game_far` false, with DRAW DISTANCE FAR) what the culled path makes it: cleared, unless it was clear or the cull's mode
-/// (ra's high half, positive) keeps it. With the game's own view and ORIGINAL, the byte as the translation leaves it.
-fn drawn(c: &mut Cpu, flag: u32, was: u64, ra_hi: u64, wide: bool, game_far: bool) {
-    let seen = (!wide || c.in_original_view()) && game_far;
+/// its own view when the view is widened, `wide`: `uycpu::Cpu::in_original_view`, uyatr's `DRAWN`) what the culled path makes it:
+/// cleared, unless it was clear or the cull's mode (ra's high half, positive) keeps it. With the game's own view, the byte as the
+/// translation leaves it.
+fn drawn(c: &mut Cpu, flag: u32, was: u64, ra_hi: u64, wide: bool) {
+    let seen = !wide || c.in_original_view();
     if !seen && was as u8 != 0 && ra_hi as i64 <= 0 {
         c.wr8(flag, 0);
     }

@@ -84,10 +84,6 @@ pub struct Frame {
     pub pool: Vec<[u8; 64]>,
     /// `[gp+0x3A58]`: the far limit (1/4096 view-depth units).
     pub limit: i32,
-    /// The port's DRAW DISTANCE FAR reach (1/4096 view-depth units, `uyart::drawdist`): each entry's far distance (its own and
-    /// the limit's nearer) at least this, unless it is 0 (an entry that is never drawn), so effects are drawn as far as the
-    /// mobies and ties. None, the game's own: as `from_ram_at` reads a frame.
-    pub reach: Option<i64>,
     /// 0x1E2A40: the camera position.
     pub cam: [f32; 4],
     /// 0x1E2900, 0x1E2910, 0x1E2920: the world-to-view rotation (vf29, vf30, vf31).
@@ -264,7 +260,6 @@ impl Frame {
         Ok(Frame {
             pool,
             limit: u32_ram(ram, a.limit)? as i32,
-            reach: None,
             cam: qf(qw_ram(ram, a.cam)?),
             rot,
             clip,
@@ -389,17 +384,13 @@ fn ftoi12(x: f32) -> i32 {
     (x as f64 * 4096.0).trunc().clamp(i32::MIN as f64, i32::MAX as f64) as i32
 }
 
-fn near_far(b9: u8, limit: i32, special: bool, reach: Option<i64>) -> (i64, i64) {
+fn near_far(b9: u8, limit: i32, special: bool) -> (i64, i64) {
     let near = ((b9 & 0xF) as i64) << 10;
     let mut far = ((b9 & 0xF0) as i64) << 13;
     if special && 0x1D0000 < far {
         far += 1 << 23;
     }
-    let far = far.min(limit as i64);
-    match reach {
-        Some(r) if far > 0 && far < r => (near, r),
-        _ => (near, far),
-    }
+    (near, far.min(limit as i64))
 }
 
 /// The culling and sorting pass (0x45E980..0x45EC70): the sorted entry indices, deepest first.
@@ -417,7 +408,7 @@ fn sort(f: &Frame, flags: &mut [u8]) -> Vec<usize> {
         let depth: i64;
         if fl & 2 == 0 {
             let size = f32_at(e, 0xC);
-            let (near, far) = near_far(e[9], f.limit, true, f.reach);
+            let (near, far) = near_far(e[9], f.limit, true);
             let v = m3(&f.rot, rel);
             let s3x = f.vf25[0] * size;
             let s3y = f.vf25[1] * size;
@@ -434,7 +425,7 @@ fn sort(f: &Frame, flags: &mut [u8]) -> Vec<usize> {
             }
         } else {
             let p2 = [f32_at(e, 0x20) - f.cam[0], f32_at(e, 0x24) - f.cam[1], f32_at(e, 0x28) - f.cam[2]];
-            let (near, far) = near_far(e[9], f.limit, false, f.reach);
+            let (near, far) = near_far(e[9], f.limit, false);
             let c1 = m4(&f.clip, rel);
             let c3 = m4(&f.clip, p2);
             let first = clip_bits(c1) << 6 | clip_bits(c3);
@@ -523,7 +514,7 @@ fn build(f: &Frame, flags: &mut [u8], order: &[usize], vram: &mut u32, resolved:
         if flags[i] & 0x20 == 0 {
             flags[i] |= 0x20;
         }
-        let (near, far_raw) = near_far(e[9], f.limit, false, f.reach);
+        let (near, far_raw) = near_far(e[9], f.limit, false);
         let rgba = expand(bytes4(e, 4));
         let alpha_reg = e[3] as u32;
         let mut push = |qws: &[[u32; 4]]| cur.extend(qws.iter().map(|&q| (q, i)));

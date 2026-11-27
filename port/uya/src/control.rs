@@ -39,7 +39,7 @@
 //!   ram ADDR LEN               LEN bytes of EE RAM from ADDR (hex), answered in hex
 //!   write ADDR HEX             bytes written to EE RAM at ADDR
 //!   set KEY=VALUE[,...]        settings changed from the next field on, as settings.txt names them (not saved): one run shows
-//!                              the same moment at two settings (DRAW DISTANCE ORIGINAL, then FAR a field later)
+//!                              the same moment at two settings (AMBIENT OCCLUSION off, then high a field later)
 //!   shot FILE                  the picture the window shows, as the renderer drew it (not a window grab), to FILE as a PNG
 //!   dump DIR                   the next field's RAM and jobs written to DIR (ramFFFFF.bin, jobsFFFFF.bin), as UYA_RAM_AT writes
 //!                              them, for `uya native` to redraw (`uya native --surfaces`: PLAN 9.2's counts in gameplay)

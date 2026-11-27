@@ -2030,19 +2030,15 @@ impl Shrubs {
     }
 
     /// The instances the frame draws, in the game's array order: not hidden (+0x16 bit 0), nearer than their own distance (+0x10)
-    /// and the level's limit (at least `reach`, DRAW DISTANCE FAR's: `range.rs`), not wholly behind the eye, and not wholly
+    /// and the level's limit, not wholly behind the eye, and not wholly
     /// outside one of the picture's side planes.
-    pub fn visible(&self, ram: &[u8], g: &ShrubGlobals, cam: &Camera, reach: Option<f32>) -> Result<Vec<usize>, String> {
+    pub fn visible(&self, ram: &[u8], g: &ShrubGlobals, cam: &Camera) -> Result<Vec<usize>, String> {
         let n = rd_u32(ram, g.count as usize)? as usize;
         if n != self.instance_class.len() {
             return Err(format!("native: the game has {n} shrub instances, the gameplay block {}", self.instance_class.len()));
         }
         let (arr, mats) = (rd_u32(ram, g.instances as usize)? as usize, rd_u32(ram, g.matrices as usize)? as usize);
         let limit = rd_f32(ram, g.limit as usize)?;
-        let limit = match reach {
-            Some(r) if r > limit => r,
-            _ => limit,
-        };
         let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
         // The picture's side planes, as `Camera::matrix` projects (x the right axis, forward x up, over tan[0]; y the up axis over
         // tan[1]; w the view depth): inside is w - x, w + x, w - y and w + y at least 0, each the dot of a world direction with the

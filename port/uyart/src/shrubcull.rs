@@ -646,9 +646,6 @@ pub(crate) fn start(c: &mut Cpu, k: u32) {
             return;
         }
         if ck.job == job && ck.left > 0 {
-            if job == Job::Cull {
-                crate::drawdist::refuse_check("shrub");
-            }
             CALL.with(|w| w.set((at, wide)));
             // Interrupts on as the kernel sees them (`kernel::K::ints_on`): EIE and IE, not in an exception.
             ck.ints = c.status & 0x1_0001 == 0x1_0001 && c.status & 6 == 0;
@@ -717,7 +714,14 @@ pub(crate) fn after(c: &mut Cpu, k: u32) {
 fn run(c: &mut Cpu, job: Job, at: u32, wide: bool) {
     let mut n = [0u64; N];
     match job {
-        Job::Cull => f4a2198(c, F { at, l1: 0x4a_2198 }, wide, &mut n),
+        Job::Cull => {
+            // The tie ranges' room (`tiebudget`): the chain pointer as the shrub pass begins is the tie pass's end.
+            if let Some(ptr) = c.mach().hw.tie_costs.ptr() {
+                let at_shrubs = c.rd32(ptr);
+                c.mach().hw.tie_costs.shrub_pass(at_shrubs);
+            }
+            f4a2198(c, F { at, l1: 0x4a_2198 }, wide, &mut n)
+        }
         Job::Light => f4a3d80(c, F { at, l1: 0x4a_3d80 }, &mut n),
     }
     for (a, v) in DONE.iter().zip(n) {
@@ -913,10 +917,6 @@ fn f4a2200(c: &mut Cpu, k: F, wide: bool, n: &mut [u64; N]) {
                 r[V0] = sx(k.hi(c, 0x004a223c));
                 r[V0] = add32(r[V0], k.lo(c, 0x004a2240) as u64);
                 r[V1] = sx(c.rd32(k.gp(c, gp, 0x004a2244)));
-                // The level's shrub limit at least DRAW DISTANCE FAR's reach (`range`).
-                if let Some(reach) = crate::range::get().shrub_reach && reach > f32::from_bits(r[V1] as u32) {
-                    r[V1] = sx(reach.to_bits());
-                }
                 r[A0] = sx(c.rd32(k.gp(c, gp, 0x004a2248)));
                 r[A1] = add32(r[RA], 0x00003700);
                 r[A2] = add32(r[RA], 0x00003d00);

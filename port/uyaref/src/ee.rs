@@ -59,7 +59,6 @@ pub fn summary(m: &Machine) -> String {
 
 /// The field's GS jobs as the emulated DMA sent them (`jobs`, as rac-rs's pipe receives them) with the blocks the oracle's VIF1
 /// trace recorded for each VIF1 chain (`blocks`, one list per chain in kick order), as the port's renderer takes a field's jobs.
-/// The reference runs the game's own draw distance (DRAW DISTANCE ORIGINAL: no far reach).
 pub fn frame_jobs(field: u64, jobs: &[ee_oracle::gs::Job], blocks: Vec<Vec<(usize, u32, u32, u32)>>) -> Result<uya::jobs::FrameJobs, String> {
     use uya::jobs::Job;
     let chains = jobs.iter().filter(|j| matches!(j, ee_oracle::gs::Job::Vif1(..))).count();
@@ -74,5 +73,5 @@ pub fn frame_jobs(field: u64, jobs: &[ee_oracle::gs::Job], blocks: Vec<Vec<(usiz
             ee_oracle::gs::Job::Gif(q, d) => Job::Gif { qs: q.clone(), dispfb: *d },
         })
         .collect();
-    Ok(uya::jobs::FrameJobs { field, jobs, skin: Default::default(), far_reach: None })
+    Ok(uya::jobs::FrameJobs { field, jobs, skin: Default::default() })
 }

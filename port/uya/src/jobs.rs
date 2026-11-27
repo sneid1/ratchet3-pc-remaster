@@ -53,13 +53,11 @@ pub struct Kicked {
     field: u64,
     jobs: Vec<uyart::hw::Job>,
     skin: Vec<(u64, std::sync::Arc<uyart::hw::SkinJoints>)>,
-    far_reach: Option<f32>,
 }
 
 impl Kicked {
-    /// `far_reach`: the field's DRAW DISTANCE FAR reach (`range`, `FrameJobs::far_reach`).
-    pub fn new(field: u64, jobs: Vec<uyart::hw::Job>, skin: Vec<(u64, std::sync::Arc<uyart::hw::SkinJoints>)>, far_reach: Option<f32>) -> Kicked {
-        Kicked { field, jobs, skin, far_reach }
+    pub fn new(field: u64, jobs: Vec<uyart::hw::Job>, skin: Vec<(u64, std::sync::Arc<uyart::hw::SkinJoints>)>) -> Kicked {
+        Kicked { field, jobs, skin }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -69,13 +67,13 @@ impl Kicked {
     /// The frame's jobs, its draw lists read from `ram`, the RAM copy they were kicked with.
     pub fn into_frame(self, ram: &uyart::RamCopy) -> Result<FrameJobs, String> {
         let jobs = self.jobs.into_iter().map(|j| Job::of(j, ram)).collect::<Result<Vec<Job>, String>>()?;
-        Ok(FrameJobs { field: self.field, jobs, skin: self.skin, far_reach: self.far_reach })
+        Ok(FrameJobs { field: self.field, jobs, skin: self.skin })
     }
 
     /// The same, these left as they are (for the game thread's own looks at a frame it also hands over: `rtgame`).
     pub fn frame(&self, ram: &uyart::RamCopy) -> Result<FrameJobs, String> {
         let jobs = self.jobs.iter().map(|j| Job::of_ref(j, ram)).collect::<Result<Vec<Job>, String>>()?;
-        Ok(FrameJobs { field: self.field, jobs, skin: self.skin.clone(), far_reach: self.far_reach })
+        Ok(FrameJobs { field: self.field, jobs, skin: self.skin.clone() })
     }
 }
 
@@ -85,10 +83,6 @@ pub struct FrameJobs {
     /// The skin job's joint matrices of the last fields, by field, oldest first: the frame's mobies were skinned with one of them
     /// (`uyart::hw::SkinJoints`, `rtgame`, `mobies::SKIN_FIELDS`; none without the per-pixel lighting).
     pub skin: Vec<(u64, std::sync::Arc<uyart::hw::SkinJoints>)>,
-    /// DRAW DISTANCE FAR's reach in units, as the field's culls took it (`range`, `uyart::range::Ranges::shrub_reach`): the
-    /// renderer's shrub cull takes the level's shrub limit, and its effects cull (`uyafmt::prog6`) each effect's far distance, as
-    /// at least it. None at ORIGINAL, and in a frame read from a file (`read`), which does not hold it.
-    pub far_reach: Option<f32>,
 }
 
 impl FrameJobs {
@@ -191,6 +185,6 @@ impl FrameJobs {
                 skin.push((h[0] as u64 | (h[1] as u64) << 32, std::sync::Arc::new(s)));
             }
         }
-        Ok(FrameJobs { field, jobs, skin, far_reach: None })
+        Ok(FrameJobs { field, jobs, skin })
     }
 }

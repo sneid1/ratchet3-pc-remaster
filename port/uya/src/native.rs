@@ -1527,8 +1527,6 @@ impl Native {
         let queue = self.queue.clone();
         let queue = &queue;
         let (cam, g, fog, pic_ref, objects) = (&cam, &g, &fog, &pic, &objects);
-        // DRAW DISTANCE FAR's reach, as the field's own culls took it (`range.rs`): the renderer's shrubs and effects go as far.
-        let far_reach = jobs.far_reach;
         let pool = self.pool.clone();
         let pool = &pool;
         let ties_shared = ties.clone();
@@ -1607,7 +1605,7 @@ impl Native {
                 let Some(sh) = &shrubs else { return Ok(None) };
                 let t = std::time::Instant::now();
                 // The drawn instances, in the game's order, as runs of the level's built shrubs (`Shrubs::frame`).
-                let visible = sh.visible(ram, &g.shrubs, cam, far_reach)?;
+                let visible = sh.visible(ram, &g.shrubs, cam)?;
                 let (mut draws, mut groups) = shrub_room;
                 draws.clear();
                 groups.clear();
@@ -1895,9 +1893,7 @@ impl Native {
         tm.mark("walk");
         // Program 6's inputs, which also give the frame's projection: it puts the shadows the EE writes into the moby chain, and the
         // water, back in the world.
-        // At DRAW DISTANCE FAR each effect is drawn out to the reach too (`uyafmt::prog6::Frame::reach`, in 1/4096 view-depth units).
-        let fx_reach = jobs.far_reach.map(|r| (r as f64 * 4096.0) as i64);
-        let fx_frame = uyafmt::prog6::Frame::from_ram_at(ram, &g.fx).map(|f| uyafmt::prog6::Frame { reach: fx_reach, ..f }).and_then(|f| crate::effects::Projection::of(&f).map(|p| (f, p)));
+        let fx_frame = uyafmt::prog6::Frame::from_ram_at(ram, &g.fx).and_then(|f| crate::effects::Projection::of(&f).map(|p| (f, p)));
         // The water reflections option (`reflections.rs`): the frame's water plane from the passes' output (a frame with no
         // projection, a level's first, reflects nothing).
         let mut passes = std::mem::take(&mut walk.passes);

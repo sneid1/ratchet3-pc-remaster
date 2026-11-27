@@ -322,6 +322,14 @@ static GAME_CORE: std::sync::OnceLock<Vec<u32>> = std::sync::OnceLock::new();
 #[cfg(windows)]
 const FAST_CORES: usize = 4;
 
+/// How many cores besides the game's a PC needs for one to be kept for the game's threads (`keep_game_core`). With fewer, every
+/// other thread would share what is left: the issue #2 player's two-core laptop (an Intel HD 520's, four logical processors)
+/// kept one core for the game, whose code took 1 to 13 ms a field, and left the other to the frame builder, its crew, the
+/// presenter and the movies, which built a frame in 24 to 35 ms, drew 144 to 241 of every 300 frames and played the first
+/// movie's 13.3 s in 14.3.
+#[cfg(windows)]
+const LEAST_OTHER_CORES: usize = 3;
+
 /// Keeps a core for the game's threads (Windows' CPU sets): the PC's last core of its fastest class, both its logical
 /// processors, for the host's field loop and the game's own threads (`uyart::kernel::THREAD_START`), which take turns, one
 /// running at a time. Every other thread of the process (the frame builder, the command encoders, the crew, the presenter, the
@@ -336,8 +344,10 @@ const FAST_CORES: usize = 4;
 /// On a PC with cores of two classes (Intel's performance and efficiency cores), the other threads take the fastest class's
 /// other cores alone when it has `FAST_CORES` of them, leaving the slower cores to the rest of the PC: the frame builder and its
 /// helpers each wait on the slowest of them, and the v0.1.4 player's i7-13700K (8 performance cores, 8 efficiency cores) built a
-/// Florana frame with DRAW DISTANCE FAR in 15 to 26 ms where this PC's one class of cores takes 8 to 10, every picture after
+/// Florana frame (DRAW DISTANCE FAR, an option since removed) in 15 to 26 ms where this PC's one class of cores takes 8 to 10, every picture after
 /// the GPU late with it. A PC with fewer such cores keeps them all, as one with one class does.
+///
+/// A PC with fewer than `LEAST_OTHER_CORES` cores besides the game's keeps none: every thread may run on every core.
 #[cfg(windows)]
 fn keep_game_core() -> Result<(), String> {
     use windows::Win32::System::SystemInformation::{CpuSetInformation, GetSystemCpuSetInformation, SYSTEM_CPU_SET_INFORMATION};
@@ -363,8 +373,12 @@ fn keep_game_core() -> Result<(), String> {
     }
     let &(class, group, core, _) = sets.iter().max().ok_or("play: the PC lists no CPU sets")?;
     let (own, rest): (Vec<&(u8, u16, u8, u32)>, Vec<_>) = sets.iter().partition(|s| (s.0, s.1, s.2) == (class, group, core));
-    if rest.is_empty() {
-        return Err("play: the PC has one core: none to keep for the game's threads".into());
+    let mut rest_cores: Vec<(u16, u8)> = rest.iter().map(|s| (s.1, s.2)).collect();
+    rest_cores.sort_unstable();
+    rest_cores.dedup();
+    if rest_cores.len() < LEAST_OTHER_CORES {
+        println!("play: the PC's {} cores ({} logical processors) are every thread's: a core is kept for the game's threads only with {LEAST_OTHER_CORES} more besides it", rest_cores.len() + 1, sets.len());
+        return Ok(());
     }
     // The fastest class's other cores, when the PC has a slower class and enough of them (`FAST_CORES`).
     let fast: Vec<&(u8, u16, u8, u32)> = rest.iter().copied().filter(|s| s.0 == class).collect();
@@ -387,11 +401,12 @@ fn keep_game_core() -> Result<(), String> {
     uyart::kernel::THREAD_START.set(enter_game_core).map_err(|_| "play: the game threads' start set twice".into())
 }
 
-/// The calling thread (the host's field loop, or a game thread's host thread) runs on the core kept for the game's threads.
+/// The calling thread (the host's field loop, or a game thread's host thread) runs on the core kept for the game's threads; on
+/// a PC that keeps none (`LEAST_OTHER_CORES`), on any core.
 #[cfg(windows)]
 fn enter_game_core() {
     use windows::Win32::System::Threading::{GetCurrentThread, SetThreadSelectedCpuSets};
-    let ids = GAME_CORE.get().expect("the game's core is kept before its threads start");
+    let Some(ids) = GAME_CORE.get() else { return };
     // SAFETY: the calling thread's own handle and CPU set ids the system listed.
     unsafe { SetThreadSelectedCpuSets(GetCurrentThread(), ids) }.ok().expect("a thread of the game onto the game's core");
 }
@@ -1599,17 +1614,18 @@ impl Timeline {
     /// (`lead`: the frame it shows is there): the slack before its refresh is on the GPU's side, so a picture slow on the GPU
     /// still makes its refresh, and one quick waits for it. The picture is then presented the refresh before its own
     /// (`present_from`), so it shows at the refresh its game time was drawn for, in every mode. Each game frame shown once
-    /// (`own`): the newest frame, at the refresh the clock reaches it (its field's time and the latency).
+    /// (`own`): the frame `own_frame` names now, at the refresh the clock reaches it (its field's time and the latency).
     fn plan(&self, now: Instant) -> Option<(Instant, Instant)> {
-        let newest = self.frames.back()?;
-        if self.own && self.shown_own == Some(newest.field) {
-            return None;
-        }
+        self.frames.back()?;
+        let own = match self.own {
+            true => Some(self.own_frame(now)?),
+            false => None,
+        };
         let ms = |v: f64| Duration::from_secs_f64(v.max(0.0) / 1e3);
         let (encode, display, lead) = (ms(self.encode_ms), ms(self.display_ms), Duration::from_secs_f64(self.lead()));
         let step = if self.own { 1 } else { self.step.max(least_step()) };
         let pace = self.shown.map(|(_, s)| s + Duration::from_secs_f64(self.period * step as f64));
-        let due = self.own.then(|| self.refresh_from(self.field_time(newest.field) + Duration::from_secs_f64(self.latency)));
+        let due = own.map(|field| self.own_due(field));
         let reach = |start: Instant| {
             let at = |gpu_ms: f64| {
                 let at = self.refresh_from(start + ms(gpu_ms) + ms(gpu_ms / 5.0 + 1.0));
@@ -1626,6 +1642,26 @@ impl Timeline {
         let shown = p.done.unwrap_or_else(|| p.submitted.expect("submitted") + ms(self.gpu_ms[!p.first as usize])).max(now).max(self.present_from(p.at));
         let at = reach((shown + display).max(now + encode));
         Some((at.checked_sub(lead).unwrap_or(now).max(now), at))
+    }
+
+    /// Each game frame shown once (`own`): the refresh the clock reaches frame `field` at (its field's time and the latency).
+    fn own_due(&self, field: u64) -> Instant {
+        self.refresh_from(self.field_time(field) + Duration::from_secs_f64(self.latency))
+    }
+
+    /// Each game frame shown once (`own`): the field of the frame a picture at refresh `at` shows, the newest frame not shown yet
+    /// that the clock has reached there (`own_due`), else the first not shown yet; None with every frame shown. Its picture is
+    /// planned for that frame and records that frame: when the newest frame was recorded instead, a latency of more than a field
+    /// (the frames arrive a field and more after their field began) had a newer frame there by the time a picture was recorded,
+    /// and the next picture waited for a frame after that, so the pictures came every second or third frame (the report 157844
+    /// player's RTX 4080 SUPER at 36 and 52 pictures a second with the GPU 2.6 to 5.3 ms a picture, the v0.1.4 player's 20 to
+    /// 55). A frame the clock passed while another was on its way is passed over, and none is older than the game's time of the
+    /// last picture (a picture between two frames before the pace fell to this one).
+    fn own_frame(&self, at: Instant) -> Option<u64> {
+        let past = self.shown.map_or(0, |(g, _)| g.ceil() as u64);
+        let mut unshown = self.frames.iter().map(|f| f.field).filter(|&f| f >= past && self.shown_own.is_none_or(|s| f > s)).peekable();
+        let first = *unshown.peek()?;
+        Some(unshown.filter(|&f| self.own_due(f) <= at).last().unwrap_or(first))
     }
 
     /// How long before its refresh a picture may be recorded (s): its recording's and GPU time as a frame's first picture, with
@@ -1678,12 +1714,12 @@ impl Timeline {
     /// target), reached by the clock's own rate from the last picture's, with a correction toward the target of 2 % at most (a
     /// picture's game time advances by the refreshes it spans, over the game's seconds a field, whatever the frames' arrivals
     /// do); never past the newest frame and never back: no picture is shown out of order. Each game frame shown once (`own`),
-    /// the newest frame's.
+    /// the frame `own_frame` names (the newest with every frame shown).
     fn time_at(&self, at: Instant) -> f64 {
         let newest = self.frames.back().expect("running");
         let top = newest.field as f64;
         if self.own {
-            return top;
+            return self.own_frame(at).unwrap_or(newest.field) as f64;
         }
         let target = top + (at.saturating_duration_since(self.field_time(newest.field)).as_secs_f64() - self.latency) / self.rate;
         match self.shown {
@@ -1837,12 +1873,12 @@ impl Timeline {
 
     /// The next picture recorded (`staged`) for refresh `at` (`plan`): the game's time there, the frame whose interval holds that
     /// time, and its replay drawn there (or the frame's own picture as the renderer drew it). Each game frame shown once (`own`):
-    /// the newest frame's own picture.
+    /// the own picture of the frame `own_frame` names.
     fn record(&mut self, screen: &Screen, at: Instant) -> Result<(), String> {
         self.slew_latency(at);
         let g = self.time_at(at);
         if self.own {
-            self.shown_own = self.frames.back().map(|f| f.field);
+            self.shown_own = Some(g as u64);
         }
         let again = self.shown.is_some_and(|(g0, _)| g <= g0);
         // The frame whose interval holds the time: frame j's from j - 1 to j. The changes of the frames passed and then of that

@@ -18,7 +18,6 @@
 
 pub(crate) mod anim;
 pub(crate) mod collide;
-pub mod drawdist;
 pub(crate) mod fxpool;
 pub mod hw;
 pub mod iop;
@@ -30,6 +29,7 @@ pub(crate) mod mobydraw;
 pub mod ram;
 pub mod range;
 pub(crate) mod shrubcull;
+pub(crate) mod tiebudget;
 pub(crate) mod tiecull;
 pub(crate) mod skycull;
 pub mod vu0;
