@@ -134,9 +134,14 @@ pub(crate) fn rt_reflections() -> u8 {
     level("ray_traced_reflections")
 }
 
-/// Whether the FPS counter is shown (`play.rs` `Fps`, the DISPLAY tab's FPS COUNTER).
+/// Whether the FPS counter is shown (`play.rs` `Fps`, the DISPLAY tab's FPS COUNTER: ON, or DETAILED).
 pub(crate) fn fps_counter() -> bool {
-    level("fps_counter") == 1
+    level("fps_counter") >= 1
+}
+
+/// Whether the FPS counter shows the diagnostics under its figure (FPS COUNTER's DETAILED, `play.rs` `Fps`).
+pub(crate) fn diagnostics() -> bool {
+    level("fps_counter") == 2
 }
 
 /// DLSS's level (`dlss.rs`): 0 off, 1 DLAA, 2 quality, 3 balanced, 4 performance.
@@ -184,6 +189,31 @@ fn auto_level(budget: f64, integrated: bool, ram: f64, height: u32) -> u8 {
         .unwrap_or(TEXTURES_OFF)
 }
 
+/// The renderer's adapter in DXGI, found as the renderer opens (`video_memory`): the diagnostics read the video memory in use
+/// on it and the OS's budget for it (`vram`).
+#[cfg(windows)]
+struct Dxgi(windows::Win32::Graphics::Dxgi::IDXGIAdapter3);
+
+// SAFETY: DXGI's objects are free-threaded; the adapter is only queried.
+#[cfg(windows)]
+unsafe impl Send for Dxgi {}
+
+#[cfg(windows)]
+static DXGI_ADAPTER: std::sync::Mutex<Option<Dxgi>> = std::sync::Mutex::new(None);
+
+/// The video memory this process uses on the renderer's adapter and the OS's budget for it there, in MB (DXGI's local segment,
+/// the budget AUTO reads as the renderer opens): FPS COUNTER's DETAILED and the play log's diagnostics line.
+#[cfg(windows)]
+pub(crate) fn vram() -> Result<(f64, f64), String> {
+    use windows::Win32::Graphics::Dxgi::{DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO};
+    let adapter = DXGI_ADAPTER.lock().expect("DXGI adapter lock");
+    let adapter = adapter.as_ref().ok_or("diagnostics: the renderer's adapter has not been found in DXGI")?;
+    let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
+    // SAFETY: a query of the adapter found by `video_memory` into a struct made here.
+    unsafe { adapter.0.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info) }.map_err(|e| format!("diagnostics: QueryVideoMemoryInfo: {e}"))?;
+    Ok((info.CurrentUsage as f64 / 1048576.0, info.Budget as f64 / 1048576.0))
+}
+
 /// The video memory the OS lets this process use on the adapter with PCI ids `vendor` and `device` (DXGI's
 /// `IDXGIAdapter3::QueryVideoMemoryInfo`, the local segment), and the PC's physical memory, in MB.
 #[cfg(windows)]
@@ -209,6 +239,7 @@ fn video_memory(vendor: u32, device: u32) -> Result<(f64, f64), String> {
         adapter.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info).map_err(e("QueryVideoMemoryInfo"))?;
         let mut ram = MEMORYSTATUSEX { dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32, ..Default::default() };
         GlobalMemoryStatusEx(&mut ram).map_err(e("GlobalMemoryStatusEx"))?;
+        *DXGI_ADAPTER.lock().expect("DXGI adapter lock") = Some(Dxgi(adapter));
         Ok((info.Budget as f64 / 1048576.0, ram.ullTotalPhys as f64 / 1048576.0))
     }
 }

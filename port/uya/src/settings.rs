@@ -95,15 +95,17 @@ pub const OPTIONS: &[Opt] = &[
         about: "On: the picture fills the screen's shape, more of the world at the sides. Off: the original 4:3 picture.",
     },
     // The FPS counter (`play.rs` `Fps`): the pictures the window showed in the last second, in its top right corner (the player,
-    // 17 November 2026: "Add an FPS counter and FPS counter option in settings").
+    // 17 November 2026: "Add an FPS counter and FPS counter option in settings"); DETAILED adds the diagnostics under it (the
+    // report 155269 player: "an optional diagnostics overlay (shader compile status, frame time, VRAM) so players and bug
+    // reports can see what's happening").
     Opt {
         key: "fps_counter",
         tab: Tab::Display,
         name: "FPS COUNTER",
-        values: &[("off", "OFF"), ("on", "ON")],
+        values: &[("off", "OFF"), ("on", "ON"), ("detailed", "DETAILED")],
         default: 0,
         presets: None,
-        about: "The pictures shown each second, in the top right corner of the screen.",
+        about: "The pictures shown each second, in the top right corner of the screen. DETAILED adds the milliseconds each frame takes on the game's own thread, to prepare and on the graphics card, and the video memory and memory in use.",
     },
     // FRAME PACING (`play.rs` `Timeline`; the player, 24 November 2026: "do the uncapped mode like other games"): UNCAPPED draws
     // the pictures between the game's frames back to back, as many as the GPU keeps up with, each drawn for the refresh it is

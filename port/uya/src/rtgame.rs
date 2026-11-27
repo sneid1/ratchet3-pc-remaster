@@ -879,6 +879,7 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
         let own = uploads.split_off(uploads.partition_point(|u| u.job < out.earlier));
         pending.extend(uploads);
         let ee_ms = t.elapsed().as_secs_f64() * 1e3;
+        crate::play::diag_fold(&crate::play::DIAG_GAME, ee_ms);
         ns[1] += t.elapsed().as_nanos() as u64;
         let lines = menus.lines(&m.ram[..RAM]);
         let tab_bar = menus.tab_bar(&m.ram[..RAM]);

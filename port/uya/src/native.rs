@@ -3148,6 +3148,19 @@ impl Times {
 
 /// The process's private memory (its commit, MB), for the presenter's line (`play`).
 pub(crate) fn private_mb() -> f64 {
+    memory_counters()[6] as f64 / (1 << 20) as f64
+}
+
+/// The process's working set in MB: the memory of the PC it holds now (FPS COUNTER's DETAILED, `play::Fps`). The private commit
+/// (`private_mb`) is larger by the GPU memory blocks this PC's driver charges to it (with the texture packs at MAX on Veldin,
+/// 5,984 MB private beside 4,833 MB of video memory in use).
+pub(crate) fn working_set_mb() -> f64 {
+    memory_counters()[1] as f64 / (1 << 20) as f64
+}
+
+/// PROCESS_MEMORY_COUNTERS after its size and page faults: the peak working set, the working set, the four pool quotas, the
+/// private commit (PagefileUsage) and its peak, in bytes.
+fn memory_counters() -> [usize; 8] {
     #[repr(C)]
     struct MemoryCounters {
         cb: u32,
@@ -3160,11 +3173,11 @@ pub(crate) fn private_mb() -> f64 {
         fn K32GetProcessMemoryInfo(p: *mut std::ffi::c_void, counters: *mut MemoryCounters, cb: u32) -> i32;
     }
     let mut m = MemoryCounters { cb: std::mem::size_of::<MemoryCounters>() as u32, page_faults: 0, rest: [0; 8] };
-    // SAFETY: the struct is PROCESS_MEMORY_COUNTERS's layout; its PagefileUsage is the private commit.
+    // SAFETY: the struct is PROCESS_MEMORY_COUNTERS's layout.
     unsafe {
         assert!(K32GetProcessMemoryInfo(GetCurrentProcess(), &mut m, m.cb) != 0, "GetProcessMemoryInfo");
     }
-    m.rest[6] as f64 / (1 << 20) as f64
+    m.rest
 }
 
 /// UYA_MEM_LOG: the GPU memory wgpu's allocator holds beside the process's private commit (this PC's driver charges the GPU's

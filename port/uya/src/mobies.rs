@@ -403,6 +403,13 @@ fn captured_skin(mesh: &uyafmt::moby::Mesh, output: &uyart::hw::SkinOutput, stag
 /// frames, a list buffer met again).
 const SKIN_KEPT: usize = 3;
 
+/// How many skin passes an address's outputs stay after the last one written there (`Mobies::skinned`; about 10 s of play). The
+/// game puts each field's outputs in its list buffers wherever they fall, so the addresses move from field to field, and kept
+/// until the same address came again, the outputs held 369 MB a minute into Veldin and 530 MB after three (the heap census,
+/// 487,105 and 702,337 blocks), growing on as long as the level ran. The oldest a frame draws is a few fields' (a scene's cut:
+/// more than five), and a paused game runs no passes, so nothing ages while it stands.
+const SKIN_AGE: u64 = 600;
+
 /// How many fields' skin job transfers a frame's jobs carry (`rtgame`, `Mobies::skin_pass`): the renderer skins each field's once,
 /// those of fields it drew no frame of too (a field's job skins the frame the next field sends, a later one when the game misses
 /// fields).
@@ -1681,7 +1688,11 @@ pub(crate) struct Mobies {
     /// positions' address.
     skin_state: uyafmt::moby::SkinState,
     packet_bs: HashMap<u32, (Vec<u8>, uyafmt::moby::Mesh, Vec<usize>)>,
-    skinned: HashMap<u32, Vec<std::sync::Arc<SkinOut>>>,
+    /// Each address's outputs with the skin pass that last wrote there (`skin_passes`): an address not written for `SKIN_AGE`
+    /// passes is let go (`skin_pass`).
+    skinned: HashMap<u32, (u64, Vec<std::sync::Arc<SkinOut>>)>,
+    /// The fields' skin passes run so far (`skin_field`): the age of `skinned`'s addresses.
+    skin_passes: u64,
     /// The last field whose transfers `skinned` holds the outputs of.
     skin_done: Option<u64>,
     /// The outputs of the frame before by packet B, with the inputs they were made from (the joint matrices the packet names, the
@@ -2033,7 +2044,7 @@ impl Mobies {
                 }
             }
         }
-        Ok(Mobies { iso: iso.to_string(), specials, armors: HashMap::new(), level, scenes: HashMap::new(), bodies: HashMap::new(), gadgets: HashMap::new(), wad_pairs: HashMap::new(), classes, records: records.iter().map(|r| r.textures).collect(), modes: records.iter().map(|r| r.mode).collect(), by_packet, materials: HashMap::from([((0, 0), base)]), last: None, skin_state: uyafmt::moby::SkinState::new(), packet_bs: HashMap::new(), skinned: HashMap::new(), skin_done: None, skin_kept: HashMap::new(), prepared: Vec::new(), work: Vec::new() })
+        Ok(Mobies { iso: iso.to_string(), specials, armors: HashMap::new(), level, scenes: HashMap::new(), bodies: HashMap::new(), gadgets: HashMap::new(), wad_pairs: HashMap::new(), classes, records: records.iter().map(|r| r.textures).collect(), modes: records.iter().map(|r| r.mode).collect(), by_packet, materials: HashMap::from([((0, 0), base)]), last: None, skin_state: uyafmt::moby::SkinState::new(), packet_bs: HashMap::new(), skinned: HashMap::new(), skin_passes: 0, skin_done: None, skin_kept: HashMap::new(), prepared: Vec::new(), work: Vec::new() })
     }
 
     /// Armor WAD entry `entry`'s meshes and textures, decoded from the disc the first time a frame needs them.
@@ -2211,14 +2222,21 @@ impl Mobies {
                 continue;
             }
             self.skin_done = Some(*f);
+            self.skin_passes += 1;
             errors.extend(self.skin_field(ram, sj));
+            // The addresses no pass has written for `SKIN_AGE` passes, looked for once every 60.
+            if self.skin_passes % 60 == 0 {
+                let now = self.skin_passes;
+                self.skinned.retain(|_, (pass, _)| now - *pass < SKIN_AGE);
+            }
         }
         errors
     }
 
     /// An output at `at`, the newest of the `SKIN_KEPT` kept there.
     fn put_skinned(&mut self, at: u32, out: std::sync::Arc<SkinOut>) {
-        let v = self.skinned.entry(at).or_default();
+        let (pass, v) = self.skinned.entry(at).or_default();
+        *pass = self.skin_passes;
         v.insert(0, out);
         v.truncate(SKIN_KEPT);
     }
@@ -2465,7 +2483,7 @@ impl Mobies {
                     cpu_wide(|| world_all(&u, &ci, cam.eye, vf23x, vf22, &run.vu.positions, &mut p.world));
                 }
                 if lighting && run.frame == 0x800f4 {
-                    let skin = run.vu.positions_at.and_then(|at| skinned.get(&at)).map_or(&[][..], |v| v.as_slice());
+                    let skin = run.vu.positions_at.and_then(|at| skinned.get(&at)).map_or(&[][..], |(_, v)| v.as_slice());
                     moby_lit((part * chunk + i) as u32, rows, &mut p.stats, &u, &ci, run, skin, &mut p.lit);
                 } else {
                     p.lit.clear();

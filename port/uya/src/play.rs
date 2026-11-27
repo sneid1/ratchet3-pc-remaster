@@ -1015,11 +1015,13 @@ fn render(iso: &str, height: u32, settings: crate::settings::Settings, atlas: &s
         if show.send(Show::Frame { field: Some((fr.field, fr.at, handing)), shown, shape: native.size(), replay, set, outbox }).is_err() {
             return Err(stopped(presenter));
         }
-        handed_ns += handing.elapsed().as_nanos() as u64;
+        let handed = handing.elapsed();
+        handed_ns += handed.as_nanos() as u64;
         RENDER_BUSY.store(0, Ordering::Relaxed);
         frame_drawn(t.elapsed().as_nanos() as u64);
         if frame_times() { println!("frame stages: render {} prepare {:.3} send {:.3}", fr.field, prepared_ms, t.elapsed().as_secs_f64() * 1e3 - prepared_ms); }
         ns += t.elapsed().as_nanos() as u64;
+        diag_fold(&DIAG_FRAME, t.elapsed().saturating_sub(handed).as_secs_f64() * 1e3);
         n += 1;
         if fr.field % 300 == 0 {
             let ee = native.ee_census().map_or(String::new(), |c| format!("; the level's EE draws {c}"));
@@ -1033,6 +1035,18 @@ fn render(iso: &str, height: u32, settings: crate::settings::Settings, atlas: &s
                 _ => String::new(),
             };
             println!("play: field {}, {:.1} s: drawn in {:.1} ms a frame (the builder's own work {:.1} ms, the wait to hand the frame over {:.1} ms){plain}{ee}", fr.field, t0.elapsed().as_secs_f64(), per(ns), per(ns - handed_ns), per(handed_ns));
+            // The figures FPS COUNTER's DETAILED shows, whatever the option, so a report's log has them.
+            let (vram, budget) = crate::enhance::vram()?;
+            println!(
+                "play: field {}: diagnostics: {} pictures a second; the game's own thread {:.1} ms a field, the frame builder {:.1} ms a frame, the GPU {:.1} ms a picture; video memory {vram:.0} MB used of a {budget:.0} MB budget; {:.0} MB of memory in use, {:.0} MB private",
+                fr.field,
+                DIAG_FPS.load(Ordering::Relaxed),
+                diag(&DIAG_GAME),
+                diag(&DIAG_FRAME),
+                diag(&DIAG_GPU),
+                crate::native::working_set_mb(),
+                crate::native::private_mb()
+            );
             if let Some(m) = crate::native::mem_log(native.gpu().2) {
                 println!("play: field {}: {m}", fr.field);
             }
@@ -1190,6 +1204,26 @@ impl Stat {
 static PLAIN_GPU: Mutex<Stat> = Mutex::new(Stat { sum: 0.0, n: 0, max: 0.0 });
 static PLAIN_SHOWN: Mutex<Stat> = Mutex::new(Stat { sum: 0.0, n: 0, max: 0.0 });
 
+/// The diagnostics (FPS COUNTER's DETAILED, `Fps`, and the play log's diagnostics line, every 300 fields): the recent time in ms
+/// of a field on the game's own thread (its EE work, `rtgame`), of a frame on the frame builder (its own work, without the wait
+/// to hand the frame to the presenter) and of a picture on the GPU, each an f32's bits with each new time weighed in a tenth
+/// (`diag_fold`); and the pictures the window showed in the last second (`Fps::count`).
+pub(crate) static DIAG_GAME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static DIAG_FRAME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static DIAG_GPU: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static DIAG_FPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// A new time `ms` weighed into the recent time `a` holds (a tenth of it).
+pub(crate) fn diag_fold(a: &std::sync::atomic::AtomicU32, ms: f64) {
+    let recent = f32::from_bits(a.load(Ordering::Relaxed)) as f64;
+    a.store(((recent * 0.9 + ms * 0.1) as f32).to_bits(), Ordering::Relaxed);
+}
+
+/// The recent time `a` holds (ms).
+fn diag(a: &std::sync::atomic::AtomicU32) -> f64 {
+    f32::from_bits(a.load(Ordering::Relaxed)) as f64
+}
+
 struct ClockState {
     /// When the GPU finished the last picture.
     last: Mutex<Option<Instant>>,
@@ -1245,7 +1279,9 @@ impl GpuClock {
             let done = Instant::now();
             let mut last = state.last.lock().expect("GPU clock lock");
             let began = last.map_or(submitted, |l| l.max(submitted));
-            PLAIN_GPU.lock().expect("GPU time lock").add(done.saturating_duration_since(began).as_secs_f64() * 1e3);
+            let gpu_ms = done.saturating_duration_since(began).as_secs_f64() * 1e3;
+            PLAIN_GPU.lock().expect("GPU time lock").add(gpu_ms);
+            diag_fold(&DIAG_GPU, gpu_ms);
             *last = Some(last.map_or(done, |l| l.max(done)));
             state.pending.fetch_sub(1, Ordering::Relaxed);
         });
@@ -1740,21 +1776,29 @@ impl Timeline {
         let step = if self.own { 1 } else { self.step.max(least_step()) };
         let pace = self.shown.map(|(_, s)| s + Duration::from_secs_f64(self.period * step as f64));
         let due = own.map(|field| self.own_due(field));
-        let reach = |start: Instant| {
+        // The refresh after the one the picture before takes (presented at `t`): a picture drawn for an earlier refresh would be
+        // held past it (`present_from`) and shown a refresh late, and the one after it planned from that refresh again, so one
+        // late picture left every picture after it late (the report 157844 player's RTX 4080 SUPER at 165 Hz, every picture
+        // of 330 a refresh late for seconds at a time, at 2 to 3 ms a picture on the GPU). The plan goes on from where the
+        // pictures are shown.
+        let next = |t: Instant| self.refresh_after(t) + Duration::from_secs_f64(self.period);
+        let reach = |start: Instant, floor: Option<Instant>| {
             let at = |gpu_ms: f64| {
                 let at = self.refresh_from(start + ms(gpu_ms) + ms(gpu_ms / 5.0 + 1.0));
                 let at = pace.map_or(at, |p| at.max(p));
+                let at = floor.map_or(at, |f| at.max(f));
                 due.map_or(at, |d| at.max(d))
             };
             let after = at(self.gpu_p90[1]);
             if self.first_at(after) { at(self.gpu_p90[0]) } else { after }
         };
         let Some(p) = &self.gpu else {
-            let at = reach(now + encode);
+            let at = reach(now + encode, self.presented.map(next));
             return Some((at.checked_sub(lead).unwrap_or(now).max(now), at));
         };
         let shown = p.done.unwrap_or_else(|| p.submitted.expect("submitted") + ms(self.gpu_ms[!p.first as usize])).max(now).max(self.present_from(p.at));
-        let at = reach((shown + display).max(now + encode));
+        // The picture on the GPU is presented after the window's copy of it.
+        let at = reach((shown + display).max(now + encode), Some(next(shown + display)));
         Some((at.checked_sub(lead).unwrap_or(now).max(now), at))
     }
 
@@ -2098,6 +2142,7 @@ impl Timeline {
         let gpu_ms = p.done.zip(p.submitted).map_or(0.0, |(d, s)| d.saturating_duration_since(s).as_secs_f64() * 1e3);
         let k = !p.first as usize;
         if p.drawn {
+            diag_fold(&DIAG_GPU, gpu_ms);
             for i in [k, 2] {
                 let ring = &mut self.gpu_ring[i];
                 ring.push_back(gpu_ms);
@@ -2512,6 +2557,12 @@ impl Glyphs {
 /// GENERATION, DLSS-G's, the frames it generated included: `streamline::shown`; the player, 24 November 2026, at 2X: "The in game
 /// FPS counter didnt show 347", the frames DLSS-G showed, as it counted only the port's own pictures), in its top
 /// right corner over everything (the top left's is the HUD's weapon panel), white on a dark shadow, in Bahnschrift Bold as the port's own text (`text.rs`).
+///
+/// FPS COUNTER's DETAILED (`enhance::diagnostics`) adds the diagnostics under it, smaller, taken with the figure (the report
+/// 155269 player: "an optional diagnostics overlay (shader compile status, frame time, VRAM) so players and bug reports can see
+/// what's happening"): the game's own thread's ms a field, the frame builder's ms a frame and the GPU's ms a picture (`DIAG_*`),
+/// the video memory in use of the OS's budget (`enhance::vram`) and the memory of the PC the game holds now (its working set: the private commit also counts the GPU memory this PC's driver charges to it, `native::working_set_mb`). Every shader is made before
+/// play, so there is no compile status to show.
 struct Fps {
     g: Glyphs,
     /// When the window showed each picture of the last second and how many frames it showed for it; the figure shown and when
@@ -2519,6 +2570,8 @@ struct Fps {
     shown: std::collections::VecDeque<(Instant, u32)>,
     value: usize,
     taken: Instant,
+    /// The diagnostics' lines as taken with the figure (DETAILED only).
+    detail: Vec<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -2556,24 +2609,38 @@ struct VOut { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32>, @loca
 "#;
 
 impl Fps {
-    /// The figures, the space and F, P, S.
+    /// The figures, the space, the point and the slash, and the letters of FPS and the diagnostics' names and units.
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Result<Fps, String> {
-        Ok(Fps { g: Glyphs::new(device, queue, format, "0123456789FPS", "fps counter")?, shown: std::collections::VecDeque::new(), value: 0, taken: Instant::now() })
+        Ok(Fps { g: Glyphs::new(device, queue, format, "0123456789./FPSGAMERUVB", "fps counter")?, shown: std::collections::VecDeque::new(), value: 0, taken: Instant::now(), detail: Vec::new() })
     }
 
     /// The window showed a picture at `now`, and as many frames for it as the last picture presented had (`streamline::shown`).
-    fn count(&mut self, now: Instant) {
+    fn count(&mut self, now: Instant) -> Result<(), String> {
         self.shown.push_back((now, crate::streamline::shown()));
         while self.shown.front().is_some_and(|&(t, _)| now - t > Duration::from_secs(1)) {
             self.shown.pop_front();
         }
         if now - self.taken >= Duration::from_millis(500) {
             (self.value, self.taken) = (self.shown.iter().map(|&(_, n)| n as usize).sum(), now);
+            DIAG_FPS.store(self.value as u32, Ordering::Relaxed);
+            self.detail.clear();
+            if crate::enhance::diagnostics() {
+                let (vram, budget) = crate::enhance::vram()?;
+                let gb = |mb: f64| mb / 1024.0;
+                self.detail = vec![
+                    format!("GAME {:.1} MS", diag(&DIAG_GAME)),
+                    format!("FRAME {:.1} MS", diag(&DIAG_FRAME)),
+                    format!("GPU {:.1} MS", diag(&DIAG_GPU)),
+                    format!("VRAM {:.1}/{:.1} GB", gb(vram), gb(budget)),
+                    format!("RAM {:.1} GB", gb(crate::native::working_set_mb())),
+                ];
+            }
         }
+        Ok(())
     }
 
     /// The counter into `view` (`size` pixels), when the option is on: its cap height 2.2 % of the height, as far from the top
-    /// and the right as 1.2 % of it.
+    /// and the right as 1.2 % of it; the diagnostics' lines under it at three quarters of its height.
     fn draw(&self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, size: (u32, u32)) {
         if !crate::enhance::fps_counter() || size.0 == 0 || size.1 == 0 {
             return;
@@ -2582,11 +2649,18 @@ impl Fps {
         let cap = (0.022 * h).max(10.0);
         let margin = (0.012 * h).round();
         let shadow = (0.0016 * h).round().max(1.0);
-        let text = format!("{} FPS", self.value);
-        let width = self.g.width(&text, cap);
+        let figure = format!("{} FPS", self.value);
+        let detail = if crate::enhance::diagnostics() { &self.detail[..] } else { &[] };
+        let small = (cap * 0.75).max(8.0);
         let mut verts = Vec::new();
-        for (d, colour) in [(shadow, [0.0, 0.0, 0.0, 0.8]), (0.0, [1.0, 1.0, 1.0, 1.0])] {
-            self.g.text(&mut verts, (w, h), &text, (w - margin - width + d, margin + cap + d), cap, colour);
+        let mut base = margin;
+        for (text, cap) in std::iter::once((&figure, cap)).chain(detail.iter().map(|t| (t, small))) {
+            base += cap;
+            let width = self.g.width(text, cap);
+            for (d, colour) in [(shadow, [0.0, 0.0, 0.0, 0.8]), (0.0, [1.0, 1.0, 1.0, 1.0])] {
+                self.g.text(&mut verts, (w, h), text, (w - margin - width + d, base + d), cap, colour);
+            }
+            base += cap * 0.5;
         }
         self.g.draw(device, enc, view, &verts, "fps counter");
     }
@@ -3318,7 +3392,7 @@ impl Screen {
         self.tab_bar.draw(device, &mut enc, &view, (win.width, win.height), [vx, vy, vw, vh], &tabs);
         let notice = self.kbm.lock().expect("input lock").notice.clone();
         self.notice.draw(device, &mut enc, &view, (win.width, win.height), [vx, vy, vw, vh], notice.as_ref());
-        self.fps.count(Instant::now());
+        self.fps.count(Instant::now())?;
         self.fps.draw(device, &mut enc, &view, (win.width, win.height));
         let done_encoding = Instant::now();
         let commands = enc.finish();

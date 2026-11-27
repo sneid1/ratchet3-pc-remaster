@@ -18,12 +18,10 @@
 //!   while the memory-card messages are answered) has what does not fit (`LIMIT`) dropped, counted: the sound never makes the
 //!   game wait, and what is made while the game fast-forwards is not played.
 //! - A field that runs long does not starve the device: between fields the mixer thread makes frames ahead of the game's fields
-//!   when the ring runs low (`mix`), as the IOP's sound runs on through a long EE field, and the fields after it make theirs
-//!   only once their count passes what was made ahead, of which no more than the ring holds (`LIMIT`) is owed: a field held
-//!   for seconds (a level's first picture on a slow PC, the game standing between the control channel's commands) is time the
-//!   game stood still, and owing it would leave the engine unpulled for as long once the ring ran dry, the game waiting on its
-//!   sound (a travel's level load stalled on black). Should the ring still run dry (an underrun, counted), the device plays
-//!   silence, smoothly faded, until `PRIME` frames are in the ring again, and then plays on.
+//!   when the ring runs low (`mix`), as the IOP's sound runs on through a long EE field. Those frames only refill what the
+//!   device took meanwhile, and the fields after it still make their own 800.8 each: the game's sound calls of one field land
+//!   a field's frames after the last field's, so its sounds keep their rhythm. Should the ring still run dry (an underrun,
+//!   counted), the device plays silence, smoothly faded, until `PRIME` frames are in the ring again, and then plays on.
 //! - A movie plays inside one field. Its sound goes into the ring ahead of its pictures and the audio hardware's clock is the
 //!   movie's clock: a picture is shown when `Link::heard` has reached its time (`cinema.rs`).
 //!
@@ -87,9 +85,12 @@ const FADE: f32 = 64.0;
 /// A field that takes longer than this (ms of wall time from one `Audio::field` to the next) is "slow" in the log.
 const SLOW_MS: f64 = 25.0;
 /// Between fields the mixer looks at the ring this often, and makes frames ahead of the game's fields when the ring is below
-/// `LOW` (25 ms of sound; in step with the game a field's frames come before the ring falls under about 1700).
+/// `LOW` (25 ms of sound; in step with the game a field's frames come before the ring falls under about 1700) and the field has
+/// run longer than `OVERDUE`: in step with the game the fields' own frames feed the device, and frames made ahead of them would
+/// move the engine's clock off the fields' (each field's sound calls land at its own frames).
 const WAKE: Duration = Duration::from_millis(2);
 const LOW: usize = 1200;
+const OVERDUE: Duration = Duration::from_millis(25);
 
 /// `--mute` and `--wav FILE` of `uya play`.
 #[derive(Clone, Default)]
@@ -667,15 +668,19 @@ impl Drop for Audio {
 }
 
 /// The mixer thread: each field's frames, pulled from the engine and put in the ring (a field is 1001 / 60000 s: 800.8 frames);
-/// and between fields, every `WAKE`, the frames a ring below `LOW` needs to be back at `TARGET` while the game's sound plays. So a
+/// and between fields, every `WAKE`, the frames a ring below `LOW` needs to be back at `TARGET` while the game's sound plays and
+/// the field has run past `OVERDUE`. So a
 /// field that runs long (the game thread held by the renderer loading a level's data for its first picture) does not starve the
-/// device: the engine runs on, as the IOP's sound runs through a long EE field. What was made ahead counts against the fields
-/// that follow, up to what the ring holds (`LIMIT`): a field's frames are made only once the fields' count passes what is
-/// owed. Past `LIMIT` the game's time stood still while the device was fed, and nothing is owed for it: owed seconds would
-/// leave the engine unpulled for as many seconds of fields once the ring ran dry, and the game, waiting on its sound, stalls.
+/// device: the engine runs on, as the IOP's sound runs through a long EE field. What was made ahead refills only what the device
+/// took meanwhile and is not owed by the fields that follow: each field makes its own frames (`made` counts the fields' frames
+/// alone). Owed frames left the fields after a level's load making none until their count caught up, the ring fell under `LOW`
+/// again meanwhile, and so the ring was fed from then on only in refills of 1,400 frames, the engine's clock moving 0 or 7 ticks
+/// from one field to the next instead of 4: each field's sound calls landed up to a field early or late, and a sound the game
+/// starts again and again (Veldin's background gunfire, 6 a second) came out in uneven bursts (the report 159190 player:
+/// "buggy shooting sound in the background on the first few planets").
 fn mix(link: Arc<Link>, engine: Arc<Mutex<Engine>>, rx: Receiver<()>) {
     raise_priority();
-    let (mut fields, mut made) = (0u64, 0u64);
+    let (mut fields, mut made, mut last) = (0u64, 0u64, Instant::now());
     let mut buf: Vec<Frame> = Vec::new();
     let make = |n: usize, buf: &mut Vec<Frame>| {
         buf.resize(n, [0, 0]);
@@ -685,6 +690,7 @@ fn mix(link: Arc<Link>, engine: Arc<Mutex<Engine>>, rx: Receiver<()>) {
     loop {
         match rx.recv_timeout(WAKE) {
             Ok(()) => {
+                last = Instant::now();
                 fields += 1;
                 let to = (fields as f64 * link.rate * 1001.0 / 60000.0) as u64;
                 if to > made {
@@ -695,10 +701,10 @@ fn mix(link: Arc<Link>, engine: Arc<Mutex<Engine>>, rx: Receiver<()>) {
                 link.done_cv.notify_all();
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                if let Some(n) = link.short_of(LOW, TARGET as usize) {
+                if last.elapsed() >= OVERDUE
+                    && let Some(n) = link.short_of(LOW, TARGET as usize)
+                {
                     make(n, &mut buf);
-                    let due = (fields as f64 * link.rate * 1001.0 / 60000.0) as u64;
-                    made = (made + n as u64).min(due + LIMIT as u64);
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
