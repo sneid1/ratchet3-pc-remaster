@@ -3606,6 +3606,16 @@ fn execute_bundle(
         );
     }
 
+    // PORT CHANGE (4): the bundle's draws test against the pass's stencil reference, as a pass's own draws do once their
+    // pipeline is set (`set_pipeline`'s STENCIL_REFERENCE); the bundle's pipelines never set it, so without this the draws took
+    // whatever reference the command buffer last held.
+    unsafe {
+        state
+            .pass
+            .base
+            .raw_encoder
+            .set_stencil_reference(state.stencil_reference);
+    }
     unsafe {
         bundle.execute(
             state.pass.base.raw_encoder,

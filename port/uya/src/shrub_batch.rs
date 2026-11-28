@@ -52,6 +52,10 @@ const BORDER: u32 = 8;
 /// The array's size limit, in bytes.
 const ARRAY_MAX: u64 = 256 << 20;
 
+/// The most hidden corners a draw spans to reach the next run of its chunk (`Batch::draw`): past it the span ends there and a
+/// draw of its own begins at the run.
+const SPAN_GAP: u32 = 1024;
+
 pub(crate) fn supported(device: &wgpu::Device) -> bool {
     device.features().contains(
         wgpu::Features::TEXTURE_BINDING_ARRAY
@@ -609,7 +613,10 @@ fn wrap(l: i32, n: i32, clamped: bool) -> i32 {
         // clipped on the GPU; material selection no longer needs a CPU bind/draw between neighbouring strips. The failing
         // pixels' pipeline draws only the runs of draws whose material can fail its alpha test (`Materials::keys`' flag, as the
         // material-by-material path takes it): over a material that never fails it draws nothing, and spanning those runs too
-        // ran every shrub's vertices a second time (1.2 million in Veldin, 49 MB more read a frame).
+        // ran every shrub's vertices a second time (1.2 million in Veldin, 49 MB more read a frame). A span also ends where more
+        // than `SPAN_GAP` hidden corners lie before the next run: their vertices are read and clipped for nothing (at Veldin's
+        // first checkpoint 190,000 corners drawn spanned 600,000, 400,000 of them in some 40 gaps of over 1,024; a weak GPU pays
+        // for each vertex read from the memory it shares, more than for a draw).
         pass.set_bind_group(1, &self.group);
         for fail in [false, true] {
             pass.set_pipeline(if fail { &self.fail } else { &self.pass });
@@ -632,11 +639,32 @@ fn wrap(l: i32, n: i32, clamped: bool) -> i32 {
                         }
                         continue;
                     }
+                    if let Some((first, last)) = span.filter(|s| dr.first - s.1 > SPAN_GAP) {
+                        self.span(pass, &mut bound, vertices, indices, materials, chunk, first..last)?;
+                        span = None;
+                    }
                     span = Some((span.map_or(dr.first, |s| s.0), end));
                 }
                 if let Some((first, last)) = span {
                     self.span(pass, &mut bound, vertices, indices, materials, chunk, first..last)?;
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// One bundle's draws with the vegetation's cull (`veg_cull`): its lists of the passing pixels, then of the failing pixels
+    /// (`lists`: whether failing, the list and its chunk), in the order `draw` draws their spans, each list's corners those of
+    /// its pieces the cull keeps, packed in their order, drawn with the count the GPU wrote.
+    pub fn draw_culled<'a, E: crate::replay::Enc<'a>>(&'a self, pass: &mut E, cull: &'a crate::veg_cull::FrameCull, vertices: &'a [Option<wgpu::Buffer>], materials: &'a [Option<wgpu::Buffer>], lists: &[(bool, usize, usize)]) -> Result<(), String> {
+        pass.set_bind_group(1, &self.group);
+        pass.set_index_buffer(&cull.packed);
+        for fail in [false, true] {
+            pass.set_pipeline(if fail { &self.fail } else { &self.pass });
+            for &(_, list, chunk) in lists.iter().filter(|l| l.0 == fail) {
+                pass.set_vertex_buffer(0, vertices[chunk].as_ref().ok_or("native: missing vegetation vertices")?);
+                pass.set_vertex_buffer(1, materials[chunk].as_ref().ok_or("native: missing vegetation material indices")?);
+                pass.draw_indexed_indirect(&cull.state, cull.args_offset(list));
             }
         }
         Ok(())

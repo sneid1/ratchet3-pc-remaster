@@ -34,6 +34,7 @@ pub mod mpeg;
 pub mod native;
 pub mod objects;
 mod shrub_batch;
+mod veg_cull;
 mod tie_batch;
 pub mod pic;
 pub mod pipelines;

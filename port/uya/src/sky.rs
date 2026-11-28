@@ -120,6 +120,7 @@ impl SkyPipelines {
             color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Src1Alpha, dst_factor: wgpu::BlendFactor::OneMinusSrc1Alpha, operation: wgpu::BlendOperation::Add },
             alpha: wgpu::BlendComponent::REPLACE,
         };
+        let uncovered = wgpu::StencilFaceState { compare: wgpu::CompareFunction::Equal, fail_op: wgpu::StencilOperation::Keep, depth_fail_op: wgpu::StencilOperation::Keep, pass_op: wgpu::StencilOperation::Keep };
         let pipeline = |layout: &wgpu::PipelineLayout, entry: &str, blend: Option<wgpu::BlendState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(entry),
@@ -131,11 +132,13 @@ impl SkyPipelines {
                     buffers: &[Some(wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<Vertex>() as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &attrs })],
                 },
                 primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, ..Default::default() },
+                // Where the stencil is 0: not where the terrain's cover marks a pixel the terrain replaces (`native::Cover`; without
+                // it the stencil is clear).
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: crate::native::DEPTH,
                     depth_write_enabled: Some(false),
                     depth_compare: Some(wgpu::CompareFunction::Always),
-                    stencil: Default::default(),
+                    stencil: wgpu::StencilState { front: uncovered, back: uncovered, read_mask: 0xff, write_mask: 0 },
                     bias: Default::default(),
                 }),
                 multisample: Default::default(),

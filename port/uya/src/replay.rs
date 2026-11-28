@@ -37,6 +37,8 @@ pub(crate) trait Enc<'a> {
     fn draw(&mut self, vertices: Range<u32>);
     fn draw_indexed(&mut self, indices: Range<u32>);
     fn draw_instanced(&mut self, vertices: Range<u32>, instances: Range<u32>);
+    /// An indexed draw whose count and first corner the GPU wrote at `offset` of `args` (`veg_cull`).
+    fn draw_indexed_indirect(&mut self, args: &'a wgpu::Buffer, offset: u64);
     fn set_blend_constant(&mut self, c: wgpu::Color) -> Result<(), String>;
     fn set_stencil_reference(&mut self, r: u32) -> Result<(), String>;
     fn set_scissor_rect(&mut self, r: [u32; 4]) -> Result<(), String>;
@@ -63,6 +65,9 @@ impl<'a> Enc<'a> for wgpu::RenderPass<'_> {
     }
     fn draw_instanced(&mut self, vertices: Range<u32>, instances: Range<u32>) {
         wgpu::RenderPass::draw(self, vertices, instances);
+    }
+    fn draw_indexed_indirect(&mut self, args: &'a wgpu::Buffer, offset: u64) {
+        wgpu::RenderPass::draw_indexed_indirect(self, args, offset);
     }
     fn set_blend_constant(&mut self, c: wgpu::Color) -> Result<(), String> {
         wgpu::RenderPass::set_blend_constant(self, c);
@@ -100,6 +105,9 @@ impl<'a> Enc<'a> for wgpu::RenderBundleEncoder<'a> {
     fn draw_instanced(&mut self, vertices: Range<u32>, instances: Range<u32>) {
         wgpu::RenderBundleEncoder::draw(self, vertices, instances);
     }
+    fn draw_indexed_indirect(&mut self, args: &'a wgpu::Buffer, offset: u64) {
+        wgpu::RenderBundleEncoder::draw_indexed_indirect(self, args, offset);
+    }
     fn set_blend_constant(&mut self, _: wgpu::Color) -> Result<(), String> {
         Err("native: a blend constant in the static world's render bundle".into())
     }
@@ -120,6 +128,8 @@ pub(crate) enum Cmd {
     Draw(Range<u32>),
     DrawIndexed(Range<u32>),
     DrawInstanced(Range<u32>, Range<u32>),
+    /// An indexed draw the GPU wrote at an offset of a buffer (`Enc::draw_indexed_indirect`).
+    DrawIndexedIndirect(wgpu::Buffer, u64),
     Blend(wgpu::Color),
     Stencil(u32),
     Scissor([u32; 4]),
@@ -320,6 +330,9 @@ impl<'a> Enc<'a> for Rec {
     fn draw_instanced(&mut self, vertices: Range<u32>, instances: Range<u32>) {
         self.cmds.push(Cmd::DrawInstanced(vertices, instances));
     }
+    fn draw_indexed_indirect(&mut self, args: &'a wgpu::Buffer, offset: u64) {
+        self.cmds.push(Cmd::DrawIndexedIndirect(args.clone(), offset));
+    }
     fn set_blend_constant(&mut self, c: wgpu::Color) -> Result<(), String> {
         if self.held.blend != Some(c) {
             self.held.blend = Some(c);
@@ -372,23 +385,64 @@ pub(crate) struct Ctx<'c> {
     pub upscale: Option<(&'c crate::dlss::Upscaler, &'c crate::dlss::Shot)>,
 }
 
-/// The static world's bundles in one pass of `t` that clears it first (the frame's clear), in order.
-pub(crate) fn statics(enc: &mut wgpu::CommandEncoder, t: &Target, bundles: &[wgpu::RenderBundle], labels: &[&'static str], profile: Option<&crate::gpu_profile::Recording>) {
-    let mut p = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("native static world"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: t.tv, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } })],
-        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: t.dv, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0.0), store: wgpu::StoreOp::Store }), stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Store }) }),
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
-    });
-    if profile.is_some() {
-        for (bundle, &label) in bundles.iter().zip(labels) {
-            let timing = crate::gpu_profile::Span::begin_render(profile, &mut p, label);
-            p.execute_bundles(std::iter::once(bundle));
-            timing.end_render(&mut p);
+/// The static world's bundles in one pass of `t` that clears it first (the frame's clear), in order. A first bundle named
+/// "cover" (the terrain's cover, `native::Cover`) is a pass of the depth and stencil alone (cleared), the sky's bundle after it
+/// a pass of the colour (cleared) keeping them, and the rest the pass that clears the depth and stencil again. The vegetation's
+/// cull (`veg_cull`, its bundles' draws written by it) runs before the static world, against the cover's depth after its pass.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn statics(device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, t: &Target, bundles: &[wgpu::RenderBundle], labels: &[(&'static str, u32)], cull: Option<(&crate::veg_cull::Cull, &crate::veg_cull::FrameCull)>, profile: Option<&crate::gpu_profile::Recording>) -> Result<(), String> {
+    let colour = |load| Some(wgpu::RenderPassColorAttachment { view: t.tv, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load, store: wgpu::StoreOp::Store } });
+    let depth = |load: Option<(f32, u32)>, store| wgpu::RenderPassDepthStencilAttachment {
+        view: t.dv,
+        depth_ops: Some(wgpu::Operations { load: load.map_or(wgpu::LoadOp::Load, |l| wgpu::LoadOp::Clear(l.0)), store }),
+        stencil_ops: Some(wgpu::Operations { load: load.map_or(wgpu::LoadOp::Load, |l| wgpu::LoadOp::Clear(l.1)), store }),
+    };
+    let pass = |enc: &mut wgpu::CommandEncoder, label, colour: Option<wgpu::RenderPassColorAttachment>, depth| {
+        let colours = [colour];
+        enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: Some(label), color_attachments: if colours[0].is_some() { &colours } else { &[] }, depth_stencil_attachment: Some(depth), timestamp_writes: None, occlusion_query_set: None, multiview_mask: None }).forget_lifetime()
+    };
+    let cover = labels.first().is_some_and(|l| l.0 == "cover");
+    let (bundles, labels) = if cover {
+        assert!(labels.get(1).is_some_and(|l| l.0 == "colour_sky"), "native: the terrain's cover with no sky after it");
+        let mut p = pass(enc, "native terrain cover", None, depth(Some((0.0, 0)), wgpu::StoreOp::Store));
+        execute(&mut p, &bundles[..1], &labels[..1], profile);
+        drop(p);
+        if let Some((c, f)) = cull {
+            c.run(device, queue, enc, f, Some((t.depth, t.size)), profile)?;
         }
-    } else { p.execute_bundles(bundles.iter()); }
+        let mut p = pass(enc, "native sky", colour(wgpu::LoadOp::Clear(wgpu::Color::BLACK)), depth(None, wgpu::StoreOp::Discard));
+        execute(&mut p, &bundles[1..2], &labels[1..2], profile);
+        drop(p);
+        (&bundles[2..], &labels[2..])
+    } else {
+        if let Some((c, f)) = cull {
+            c.run(device, queue, enc, f, None, profile)?;
+        }
+        (bundles, labels)
+    };
+    let mut p = pass(enc, "native static world", colour(if cover { wgpu::LoadOp::Load } else { wgpu::LoadOp::Clear(wgpu::Color::BLACK) }), depth(Some((0.0, 0)), wgpu::StoreOp::Store));
+    execute(&mut p, bundles, labels, profile);
+    Ok(())
+}
+
+/// `bundles` executed in `p`, each timed and counted apart with UYA_GPU_PASSES.
+fn execute(p: &mut wgpu::RenderPass<'_>, bundles: &[wgpu::RenderBundle], labels: &[(&'static str, u32)], profile: Option<&crate::gpu_profile::Recording>) {
+    if profile.is_some() {
+        for (bundle, &(label, draws)) in bundles.iter().zip(labels) {
+            let timing = crate::gpu_profile::Span::begin_render(profile, p, label);
+            if let Some(r) = profile {
+                r.count_begin(p, label);
+                r.count_draws(label, draws as u64);
+            }
+            p.execute_bundles(std::iter::once(bundle));
+            if let Some(r) = profile {
+                r.count_end(p);
+            }
+            timing.end_render(p);
+        }
+    } else {
+        p.execute_bundles(bundles.iter());
+    }
 }
 
 /// The world's own target with DLSS (`dlss::Upscaler`): its scene's colour and depth at the render size.
@@ -468,7 +522,7 @@ enum Open<'c> {
 
 /// A command a pass draws with (a render bundle could hold it), as against one of the pass's own settings or a pass.
 fn is_raw(c: &Cmd) -> bool {
-    matches!(c, Cmd::Pipeline(_) | Cmd::Group(..) | Cmd::Vertices(..) | Cmd::Indices(_) | Cmd::Draw(_) | Cmd::DrawIndexed(_) | Cmd::DrawInstanced(..))
+    matches!(c, Cmd::Pipeline(_) | Cmd::Group(..) | Cmd::Vertices(..) | Cmd::Indices(_) | Cmd::Draw(_) | Cmd::DrawIndexed(_) | Cmd::DrawInstanced(..) | Cmd::DrawIndexedIndirect(..))
 }
 
 /// The pass `open` into `t` begun with what it binds itself (the frame's view as group 0, the casters' light as group 1): the
@@ -568,6 +622,8 @@ pub(crate) fn play(cmds: &[Cmd], enc: &mut wgpu::CommandEncoder, t_out: &Target,
     // The picture's ambient occlusion from `Cmd::Ao` to `Cmd::AoMobies`.
     let mut ao = None;
     let mut timing = crate::gpu_profile::Span::none();
+    // UYA_GPU_COUNTS: the name the open pass's counts go to.
+    let mut counting: Option<&'static str> = None;
     for c in cmds {
         let label = match c {
             Cmd::Picture => Some("colour_dynamic"),
@@ -628,6 +684,10 @@ pub(crate) fn play(cmds: &[Cmd], enc: &mut wgpu::CommandEncoder, t_out: &Target,
                     _ => unreachable!("matched above"),
                 };
                 pass = Some(begin(enc, o, t, ctx, true, clear));
+                if let (Some(r), Some(name), Some(p)) = (ctx.profile, label, pass.as_mut()) {
+                    r.count_begin(p, name);
+                    counting = Some(name);
+                }
                 open = Some(o);
                 bound = Bound::default();
                 if !clear {
@@ -638,6 +698,9 @@ pub(crate) fn play(cmds: &[Cmd], enc: &mut wgpu::CommandEncoder, t_out: &Target,
                 }
             }
             Cmd::End => {
+                if let (Some(r), Some(_), Some(p)) = (ctx.profile, counting.take(), pass.as_mut()) {
+                    r.count_end(p);
+                }
                 pass.take().ok_or("native: a recorded pass ends twice")?;
                 open = None;
                 std::mem::replace(&mut timing, crate::gpu_profile::Span::none()).end(enc);
@@ -653,6 +716,9 @@ pub(crate) fn play(cmds: &[Cmd], enc: &mut wgpu::CommandEncoder, t_out: &Target,
             // On a GPU that cannot run DLSS the two are the same picture, and `snap` alone is copied: the GS blend reads it as its
             // destination (`native::ee_draw`), one copy of the whole picture a step fewer.
             Cmd::CopyPicture(snap, dst) => {
+                if let Some(r) = ctx.profile {
+                    r.count_draws("copies", 1 + dst.is_some() as u64);
+                }
                 let copy = |to: &wgpu::Texture, enc: &mut wgpu::CommandEncoder| enc.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo { texture: t.tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                     wgpu::TexelCopyTextureInfo { texture: to, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
@@ -667,20 +733,33 @@ pub(crate) fn play(cmds: &[Cmd], enc: &mut wgpu::CommandEncoder, t_out: &Target,
                     ctx.upscale.expect("a scene target only with DLSS").0.scaled_copy(ctx.device, enc, t.tex, snap);
                 }
             }
-            Cmd::Copy(from, to, size) => enc.copy_texture_to_texture(
+            Cmd::Copy(from, to, size) => {
+                if let Some(r) = ctx.profile {
+                    r.count_draws("copy_targets", 1);
+                }
+                enc.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo { texture: from, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                 wgpu::TexelCopyTextureInfo { texture: to, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                 wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
-            ),
+                )
+            }
             // The map is in the picture's pixels; from the scene at DLSS's render size, in its pixels.
             Cmd::Downsample(to, map) => {
+                if let Some(r) = ctx.profile {
+                    r.count_draws("shadow_downsample", 1);
+                }
                 let map = match scale.filter(|_| !std::ptr::eq(t, t_out)) {
                     Some((sx, sy)) => [map[0] * sx, map[1] * sx, map[2] * sy, map[3] * sy],
                     None => *map,
                 };
                 ctx.shadows.downsample(ctx.device, enc, t.tex, to, map)
             }
-            Cmd::DepthAlpha(params) => ctx.shadows.depth_alpha(ctx.device, enc, t.depth, t.tv, t.size, params),
+            Cmd::DepthAlpha(params) => {
+                if let Some(r) = ctx.profile {
+                    r.count_draws("depth_alpha", 1);
+                }
+                ctx.shadows.depth_alpha(ctx.device, enc, t.depth, t.tv, t.size, params)
+            }
             Cmd::Ao(level, mask) => ao = Some(ctx.ao.begin(ctx.device, enc, t.depth, mask, t.tv, t.size, ctx.cam, ctx.fog, (crate::native::NEAR, crate::native::FAR), *level)),
             Cmd::AoMobies => ctx.ao.mobies(enc, t.tv, ao.as_ref().ok_or("native: the mobies' ambient occlusion before the picture's")?),
             Cmd::Shadows(f, mask, mobies) => ctx.light_shadows.apply(ctx.device, enc, f, t.depth, mask, t.tv, t.size, ctx.cam, ctx.fog, (crate::native::NEAR, crate::native::FAR), *mobies),
@@ -711,9 +790,18 @@ pub(crate) fn play(cmds: &[Cmd], enc: &mut wgpu::CommandEncoder, t_out: &Target,
                         p.set_index_buffer(b.slice(..), wgpu::IndexFormat::Uint32);
                         bound.indices = Some(b);
                     }
-                    Cmd::Draw(r) => p.draw(r.clone(), 0..1),
-                    Cmd::DrawIndexed(r) => p.draw_indexed(r.clone(), 0, 0..1),
-                    Cmd::DrawInstanced(r, n) => p.draw(r.clone(), n.clone()),
+                    Cmd::Draw(_) | Cmd::DrawIndexed(_) | Cmd::DrawInstanced(..) | Cmd::DrawIndexedIndirect(..) => {
+                        if let (Some(r), Some(name)) = (ctx.profile, counting) {
+                            r.count_draws(name, 1);
+                        }
+                        match c {
+                            Cmd::Draw(r) => p.draw(r.clone(), 0..1),
+                            Cmd::DrawIndexed(r) => p.draw_indexed(r.clone(), 0, 0..1),
+                            Cmd::DrawInstanced(r, n) => p.draw(r.clone(), n.clone()),
+                            Cmd::DrawIndexedIndirect(b, o) => p.draw_indexed_indirect(b, *o),
+                            _ => unreachable!("matched above"),
+                        }
+                    }
                     Cmd::Blend(c) => {
                         p.set_blend_constant(*c);
                         bound.blend = Some(*c);
@@ -740,12 +828,18 @@ pub(crate) fn play(cmds: &[Cmd], enc: &mut wgpu::CommandEncoder, t_out: &Target,
                 if is_raw(c) {
                     drawn += 1;
                 }
-                if drawn >= part && matches!(c, Cmd::Draw(_) | Cmd::DrawIndexed(_) | Cmd::DrawInstanced(..)) {
+                if drawn >= part && matches!(c, Cmd::Draw(_) | Cmd::DrawIndexed(_) | Cmd::DrawInstanced(..) | Cmd::DrawIndexedIndirect(..)) {
                     let o = open.ok_or("native: a recorded draw outside every pass")?;
+                    if let (Some(r), Some(_), Some(p)) = (ctx.profile, counting, pass.as_mut()) {
+                        r.count_end(p);
+                    }
                     drop(pass.take()); // the pass ends before its encoder is handed over
                     done.encoder(std::mem::replace(enc, ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("native picture part") })))?;
                     let mut p = begin(enc, o, t, ctx, false, false);
                     bound.restore(&mut p);
+                    if let (Some(r), Some(name)) = (ctx.profile, counting) {
+                        r.count_begin(&mut p, name);
+                    }
                     pass = Some(p);
                     drawn = 0;
                 }
@@ -789,7 +883,10 @@ pub struct Replay {
     pub level: u32,
     pub size: (u32, u32),
     pub(crate) bundles: Vec<wgpu::RenderBundle>,
-    pub(crate) bundle_labels: Vec<&'static str>,
+    /// Each bundle's GPU time's name and its draw calls.
+    pub(crate) bundle_labels: Vec<(&'static str, u32)>,
+    /// The vegetation's cull, which writes its bundles' draws (`veg_cull`).
+    pub(crate) cull: Option<(std::sync::Arc<crate::veg_cull::Cull>, std::sync::Arc<crate::veg_cull::FrameCull>)>,
     pub(crate) surface_bundles: Vec<wgpu::RenderBundle>,
     pub(crate) raster: Option<std::sync::Arc<crate::surface_buffer::Buffers>>,
     pub(crate) cmds: Vec<Cmd>,
@@ -852,7 +949,7 @@ impl Replay {
         let world = scene.as_ref().unwrap_or(t);
         let total = crate::gpu_profile::Span::begin(profile, enc, "total");
         let colour = crate::gpu_profile::Span::begin(profile, enc, "colour_static");
-        statics(enc, world, &self.bundles, &self.bundle_labels, profile);
+        statics(device, queue, enc, world, &self.bundles, &self.bundle_labels, self.cull.as_ref().map(|(c, f)| (&**c, &**f)), profile)?;
         colour.end(enc);
         let surfaces = crate::gpu_profile::Span::begin(profile, enc, "surface_static");
         if let Some(raster) = &self.raster { raster.draw(enc, world.dv, true, &self.surface_bundles, &[]); }

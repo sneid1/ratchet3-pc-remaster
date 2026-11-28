@@ -649,6 +649,16 @@ fn blended(p: vec4<f32>) -> FOut {
     if (p.a >= mat.aref) { discard; }
     return blended(p);
 }
+
+// The terrain's cover (`Cover`): in a pass of the depth alone, the pixels fs_pass draws (their depth), and of them those whose
+// As is 0x80 or more (marked in the stencil), whose colour and alpha replace the frame's whatever lies behind them.
+@fragment fn fs_cover_pass(i: VOut) {
+    if (gs(i).a < mat.aref) { discard; }
+}
+
+@fragment fn fs_cover_mark(i: VOut) {
+    if (gs(i).a < max(mat.aref, 128.0)) { discard; }
+}
 "#;
 
 pub struct Native {
@@ -673,6 +683,8 @@ pub struct Native {
     /// The pixels that pass the alpha test (colour and depth) and those that fail it (colour only).
     pass: wgpu::RenderPipeline,
     fail: wgpu::RenderPipeline,
+    /// The terrain's cover pipelines (`Cover`).
+    cover: Cover,
     /// Shared with the ties' and the shrubs' threads, which record their passes (`Native::render`).
     objects: std::sync::Arc<crate::objects::Pipelines>,
     /// The shadow steps' pipelines (`eedraw.rs`), shared with the frames' replays.
@@ -780,7 +792,7 @@ struct Gpu {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     /// Shared with the terrain's thread (`Native::render`), as are the buffers and the sky.
-    keys: std::sync::Arc<Vec<(wgpu::BindGroup, bool)>>,
+    keys: std::sync::Arc<Vec<(wgpu::BindGroup, bool, bool)>>,
     draws: std::sync::Arc<Vec<Draw>>,
     visibility: std::sync::Arc<Vec<(u8, u8)>>,
     /// The sky the game's pointer names (`Native::render`): its address and header, from which it was made.
@@ -860,7 +872,7 @@ impl Native {
         let timing = (crate::raytrace::times_wanted() || crate::gpu_profile::wanted()) && adapter.features().contains(crate::raytrace::times_features());
         let live_timing = crate::gpu_profile::wanted();
         if live_timing && !adapter.features().contains(crate::gpu_profile::features()) {
-            return Err("UYA_GPU_PASSES requires timestamp queries inside passes".into());
+            return Err("UYA_GPU_PASSES requires timestamp queries inside passes (and UYA_GPU_COUNTS pipeline statistics queries)".into());
         }
         let rt_features = rt_features | if live_timing { crate::gpu_profile::features() } else if timing { crate::raytrace::times_features() } else { wgpu::Features::empty() };
         // Memory in blocks of 32 MB (host-visible: 16 MB, half the device size; gpu-allocator keeps the last block of a memory
@@ -996,6 +1008,38 @@ impl Native {
             }, depth_write.then_some("fs_surface_terrain"))
         };
         let (pass, fail) = (pipeline("fs_pass", true), pipeline("fs_fail", false));
+        // The cover's (`Cover`): a pass of the depth and stencil alone, the terrain's vertices as `pass` places them (the position
+        // `@invariant`), its Z test, the stencil counting up where a pixel covers.
+        let cover_pipeline = |entry: Option<&str>, depth_write: bool, depth_compare: wgpu::CompareFunction, mark: bool| {
+            let up = wgpu::StencilFaceState { compare: wgpu::CompareFunction::Always, fail_op: wgpu::StencilOperation::Keep, depth_fail_op: wgpu::StencilOperation::Keep, pass_op: wgpu::StencilOperation::IncrementClamp };
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("terrain cover"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<Vertex>() as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &attrs })],
+                },
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, ..Default::default() },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH,
+                    depth_write_enabled: Some(depth_write),
+                    depth_compare: Some(depth_compare),
+                    stencil: if mark { wgpu::StencilState { front: up, back: up, read_mask: 0xff, write_mask: 0xff } } else { Default::default() },
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: entry.map(|e| wgpu::FragmentState { module: &module, entry_point: Some(e), compilation_options: Default::default(), targets: &[] }),
+                multiview_mask: None,
+                cache: crate::pipelines::cache(),
+            })
+        };
+        let cover = Cover {
+            opaque: cover_pipeline(None, true, wgpu::CompareFunction::GreaterEqual, true),
+            pass: cover_pipeline(Some("fs_cover_pass"), true, wgpu::CompareFunction::GreaterEqual, false),
+            mark: cover_pipeline(Some("fs_cover_mark"), false, wgpu::CompareFunction::Equal, true),
+        };
         let objects = std::sync::Arc::new(crate::objects::Pipelines::new(&device, &view_layout, &mat_layout));
         let shadow_pipes = std::sync::Arc::new(crate::eedraw::Pipelines::new(&device, &view_layout));
         println!("native: {} ({:?}), pictures {width}x{height}, globals of {} levels", adapter.get_info().name, adapter.get_info().backend, globals.len());
@@ -1008,7 +1052,7 @@ impl Native {
         println!("native: ray tracing: {}", if rays { "hardware ray queries (EXPERIMENTAL_RAY_QUERY)" } else { "none on this GPU" });
         println!("native: pipelines made in {:.0} ms", made.elapsed().as_secs_f64() * 1000.0);
         let lighting = std::sync::Arc::new(crate::lighting::Lighting::new(&device, &terrain, &view_layout, &mat_layout, blend, DEPTH));
-        Ok(Native { no_view: false, gsm: crate::gsmem::GsMemory::new(), broken: None, instance, adapter, quiet: false, prompts: None, device, queue, pass, fail, objects, shadow_pipes, view_layout, mat_layout, size: (width, height), k: 1.0, iso: iso.to_string(), globals, pool: std::sync::Arc::new(Pool::new(POOL_THREADS)?), fx_micro, boot, level: None, reload_level: false, walker: Some(walker), ao, lighting, sky_pipes, reflections, shafts, light_shadows, rt, ee_spare: Vec::new(), moby_spare: Vec::new(), moby_prev_spare: Vec::new(), moby_lit_spare: Vec::new(), fx_spare: Vec::new(), fx_prev_spare: Vec::new(), fx_lit_spare: Vec::new(), fx_draw_spare: Vec::new(), light_spare: Vec::new(), moby_draw_spare: Vec::new(), run_spare: Vec::new(), rec_spare: Vec::new(), rec_cap: 0, shrub_spare: (Vec::new(), Vec::new()), sets: (0..SETS).map(|_| FrameSet::default()).collect(), ee_vert_spare: Vec::new(), water_spare: Vec::new(), replays: false, defer_world: false, outbox: Outbox::default(), raster: None, dlss_skipped: false, replay: None, set_held: None, depth: None, last_stale: None, last_world: None, dlss_offered: dlss_support.super_resolution_supported, dlss_sdk: None, dlss_pipes, upscaler: None, screen_tex: None, said: Default::default(), gpu_passes: crate::gpu_profile::Profiler::new() })
+        Ok(Native { no_view: false, gsm: crate::gsmem::GsMemory::new(), broken: None, instance, adapter, quiet: false, prompts: None, device, queue, pass, fail, cover, objects, shadow_pipes, view_layout, mat_layout, size: (width, height), k: 1.0, iso: iso.to_string(), globals, pool: std::sync::Arc::new(Pool::new(POOL_THREADS)?), fx_micro, boot, level: None, reload_level: false, walker: Some(walker), ao, lighting, sky_pipes, reflections, shafts, light_shadows, rt, ee_spare: Vec::new(), moby_spare: Vec::new(), moby_prev_spare: Vec::new(), moby_lit_spare: Vec::new(), fx_spare: Vec::new(), fx_prev_spare: Vec::new(), fx_lit_spare: Vec::new(), fx_draw_spare: Vec::new(), light_spare: Vec::new(), moby_draw_spare: Vec::new(), run_spare: Vec::new(), rec_spare: Vec::new(), rec_cap: 0, shrub_spare: (Vec::new(), Vec::new()), sets: (0..SETS).map(|_| FrameSet::default()).collect(), ee_vert_spare: Vec::new(), water_spare: Vec::new(), replays: false, defer_world: false, outbox: Outbox::default(), raster: None, dlss_skipped: false, replay: None, set_held: None, depth: None, last_stale: None, last_world: None, dlss_offered: dlss_support.super_resolution_supported, dlss_sdk: None, dlss_pipes, upscaler: None, screen_tex: None, said: Default::default(), gpu_passes: crate::gpu_profile::Profiler::new() })
     }
 
     /// Level `level`'s scene on the GPU: its vertices and indices, each terrain texture with its mip levels, and per GS register
@@ -1094,11 +1138,13 @@ impl Native {
             views.push(tex.create_view(&Default::default()));
         }
         // Each texture's pack replacement on the GPU (`texnames`): its view, level count and whether a texel is below AREF.
-        let hd: Vec<Option<(wgpu::TextureView, usize, bool)>> = s
+        let hd: Vec<Option<(wgpu::TextureView, usize, u8)>> = s
             .textures
             .iter()
-            .map(|t| -> Result<Option<(wgpu::TextureView, usize, bool)>, String> { Ok(crate::texnames::hd(d, &self.queue, t)?.map(|h| (h.view, h.levels, h.min_alpha < AREF))) })
+            .map(|t| -> Result<Option<(wgpu::TextureView, usize, u8)>, String> { Ok(crate::texnames::hd(d, &self.queue, t)?.map(|h| (h.view, h.levels, h.min_alpha))) })
             .collect::<Result<_, String>>()?;
+        // Whether every terrain vertex's alpha is 0x80 or more: with it, a texel of 0x80 or more gives As 0x80 or more.
+        let vertex_opaque = s.vertices.iter().all(|v| v.colour[3] >= 0x80);
         // Each texture's Rift Apart material (`texnames::rift`), the map of those without one and the materials' sampler.
         let rift: Vec<Option<crate::texnames::RiftMat>> = s.textures.iter().map(|t| crate::texnames::rift(d, &self.queue, t)).collect::<Result<_, String>>()?;
         let lights: Vec<[f32; 2]> = s.textures.iter().map(crate::texnames::light).collect::<Result<_, String>>()?;
@@ -1137,11 +1183,19 @@ impl Native {
                 })
             });
             // The vertex alpha is 0x80, so As is the texel's alpha: a texture with a texel below AREF has pixels that fail.
+            // The lowest alpha the draw's texels give (the levels it samples: a pack replacement's own), and so whether each of its
+            // pixels passes the alpha test with As 0x80 or more: drawn, its colour and alpha replace the frame's whatever lay behind
+            // it (the blend factor As / 0x80 held at 1), which `cover` takes.
+            let low = match &hd[texture as usize] {
+                Some((_, _, low)) => *low,
+                None => t.levels[..levels].iter().flatten().map(|p| p[3]).min().ok_or("native: a terrain texture with no texels")?,
+            };
+            let opaque = vertex_opaque && low >= 0x80;
             let (u, view, sampler, fails) = match (&hd[texture as usize], crate::enhance::aniso()) {
                 // A pack replacement: its own levels, trilinear and anisotropic (the terrain has no clamp region).
-                (Some((v, n, fails)), _) => {
+                (Some((v, n, low)), _) => {
                     let sampler = samplers.entry((cs, ct, crate::objects::HD_MMIN)).or_insert_with(|| crate::texnames::hd_sampler(d, cs, ct, false, 16));
-                    (MatU { k: 0.0, last: (n - 1) as f32, qlog: 5.0, aref: AREF as f32, region: crate::objects::NO_REGION, extra: [1.0, 0.0, 0.0, 0.0], rift: [0.0; 4], tiles: [0.0; 4], tiles3: [0.0; 4], grains: [0.0; 4], specs: [0.0; 4], refls: [0.0; 4], furs: [0.0; 4], catches: [0.0; 4], metals: [0.0; 4], emit: [0.0; 4], relief: [0.0; 4], lodq: [0.0; 4] }, v, &*sampler, *fails)
+                    (MatU { k: 0.0, last: (n - 1) as f32, qlog: 5.0, aref: AREF as f32, region: crate::objects::NO_REGION, extra: [1.0, 0.0, 0.0, 0.0], rift: [0.0; 4], tiles: [0.0; 4], tiles3: [0.0; 4], grains: [0.0; 4], specs: [0.0; 4], refls: [0.0; 4], furs: [0.0; 4], catches: [0.0; 4], metals: [0.0; 4], emit: [0.0; 4], relief: [0.0; 4], lodq: [0.0; 4] }, v, &*sampler, *low < AREF)
                 }
                 // The texture filtering option (`enhance`): the original's own levels by their density on screen (level 0 alone for
                 // MMIN 0 and 1), at the option's anisotropy.
@@ -1177,7 +1231,7 @@ impl Native {
                     e9,
                 ],
             });
-            keys.push((bg, fails));
+            keys.push((bg, fails, opaque));
             rt_views.push((view.clone(), cs, ct, r.cloned()));
         }
         let (mut shrubs, mut ties) = (None, None);
@@ -1515,7 +1569,8 @@ impl Native {
             // The lighting option (`lighting.rs`): the terrain lit per pixel, its pipelines and the light pass's inputs.
             let lit = crate::enhance::lighting().then(|| gpu.lit.clone());
             let (pass, fail) = if lit.is_some() { (self.lighting.pass.clone(), self.lighting.fail.clone()) } else { (self.pass.clone(), self.fail.clone()) };
-            let scene = TerrainScene { vertices: gpu.vertices.clone(), indices: gpu.indices.clone(), draws: gpu.draws.clone(), keys: gpu.keys.clone(), visibility: gpu.visibility.clone(), sky, pass, fail, lit };
+            let cover = lit.is_none().then(|| self.cover.clone());
+            let scene = TerrainScene { vertices: gpu.vertices.clone(), indices: gpu.indices.clone(), draws: gpu.draws.clone(), keys: gpu.keys.clone(), visibility: gpu.visibility.clone(), sky, pass, fail, cover, lit };
             (scene, gpu.shrubs.clone(), gpu.ties.clone())
         };
         // With the world deferred to the presenter, the ties' corners laid out anew wait for it in the frame's outbox (collected here
@@ -1537,10 +1592,10 @@ impl Native {
         let shrub_room = std::mem::take(&mut self.shrub_spare);
         let result = pool.scope(|s| {
             let device_w = device.clone();
-            let terrain_part = s.spawn(move || -> Result<(Static, usize, f64), String> {
+            let terrain_part = s.spawn(move || -> Result<(Option<Static>, Option<Static>, Static, usize, f64), String> {
                 let t = std::time::Instant::now();
-                let (b, chunks) = terrain_pass(&device_w, pic_ref, &scene, terrain, zones, set)?;
-                Ok((b, chunks, t.elapsed().as_secs_f64() * 1000.0))
+                let (cover, sky, b, chunks) = terrain_pass(&device_w, pic_ref, &scene, terrain, zones, set)?;
+                Ok((cover, sky, b, chunks, t.elapsed().as_secs_f64() * 1000.0))
             });
             let device_t = device.clone();
             let ties_part = s.spawn(move || -> Result<Option<TiePart>, String> {
@@ -1626,7 +1681,10 @@ impl Native {
                     stages[k] = lap.elapsed().as_secs_f64() * 1000.0;
                     lap = std::time::Instant::now();
                 };
-                let bundles = match sh.frame(&device, queue, &objects.shrub_layout, ram, &g.shrubs, cam, fog, &visible, set, &mut draws, &mut groups)? {
+                // With the batch, the vegetation's cull (`veg_cull`): the drawn instances' spheres and runs.
+                let mut pieces = sh.batch.is_some().then(crate::objects::ShrubPieces::default);
+                let mut cull = None;
+                let bundles = match sh.frame(&device, queue, &objects.shrub_layout, ram, &g.shrubs, cam, fog, &visible, set, &mut draws, &mut groups, pieces.as_mut())? {
                     Some((vertices, indices, batch_vertices, fog_group)) if !draws.is_empty() => {
                         stage(0);
                         stage(1);
@@ -1638,11 +1696,48 @@ impl Native {
                         let per = groups.len().div_ceil(SHRUB_THREADS);
                         let cuts: Vec<usize> = (0..SHRUB_THREADS).filter_map(|k| groups.get(k * per).copied()).chain([draws.len()]).collect();
                         let runs: Vec<&[(usize, crate::objects::Draw)]> = cuts.windows(2).map(|w| &draws[w[0]..w[1]]).collect();
-                        let record = |run: &[(usize, crate::objects::Draw)]| shrub_bundle(&device, pic_ref, &fog_group, |p| match &sh.batch { Some(batch) => batch.draw(p, &sh.materials, &vertices, &indices, &batch_vertices, run), None => objects.draw_shrubs(p, &sh.materials, &vertices, &indices, run) });
+                        // The cull's lists, a bundle's at a time: its passing pixels' lists, then its failing pixels', one for each
+                        // run of one chunk among its draws (as `Batch::draw` walks them), of the pieces it draws there (the failing
+                        // pixels' of the settings that can fail their alpha test), none where it draws none.
+                        let mut lists = crate::veg_cull::Lists::default();
+                        let mut bundle_lists: Vec<Vec<(bool, usize, usize)>> = Vec::new();
+                        if let (Some(_), Some(p)) = (&sh.batch, &pieces) {
+                            for w in cuts.windows(2) {
+                                let at = |d: usize| p.draw_at.get(d).map_or(p.pieces.len(), |&k| k as usize);
+                                let mine = &p.pieces[at(w[0])..at(w[1])];
+                                let mut own = Vec::new();
+                                for fail in [false, true] {
+                                    let mut group: Option<(usize, bool)> = None;
+                                    for &(chunk, key, piece) in mine {
+                                        if group.is_none_or(|(c, _)| c != chunk) {
+                                            group = Some((chunk, false));
+                                        }
+                                        if fail && !sh.materials.keys.get(&key).ok_or("native: a shrub texture setting made at load is missing")?.1 {
+                                            continue;
+                                        }
+                                        let g = group.as_mut().expect("set above");
+                                        if !g.1 {
+                                            lists.begin(chunk);
+                                            own.push((fail, lists.lists.len() - 1, chunk));
+                                            g.1 = true;
+                                        }
+                                        lists.push(piece);
+                                    }
+                                }
+                                bundle_lists.push(own);
+                            }
+                            cull = Some(objects.veg_cull.frame(&device, queue, set, &pic_ref.view, &p.spheres, &lists, &indices)?);
+                        }
+                        let cull_ref = cull.as_ref();
+                        let record = |k: usize, run: &[(usize, crate::objects::Draw)]| shrub_bundle(&device, pic_ref, &fog_group, |p| match (&sh.batch, cull_ref) {
+                            (Some(batch), Some(c)) => batch.draw_culled(p, c, &vertices, &batch_vertices, &bundle_lists[k]),
+                            (Some(batch), None) => batch.draw(p, &sh.materials, &vertices, &indices, &batch_vertices, run),
+                            (None, _) => objects.draw_shrubs(p, &sh.materials, &vertices, &indices, run),
+                        });
                         let bundles = pool.scope(|s2| -> Result<Vec<Static>, String> {
                             let record = &record;
-                            let others: Vec<_> = runs[1..].iter().map(|&run| s2.spawn(move || record(run))).collect();
-                            let mut out = vec![record(runs[0])?];
+                            let others: Vec<_> = runs[1..].iter().enumerate().map(|(k, &run)| s2.spawn(move || record(k + 1, run))).collect();
+                            let mut out = vec![record(0, runs[0])?];
                             for h in others {
                                 out.push(h.join().unwrap_or_else(|p| std::panic::resume_unwind(p))?);
                             }
@@ -1656,7 +1751,7 @@ impl Native {
                 let (drawn, runs_made, all) = (visible.len(), groups.len(), t.elapsed().as_secs_f64() * 1000.0);
                 draws.clear();
                 groups.clear();
-                Ok(Some(ShrubPart { drawn, draws: runs_made, stages, bundles, all, room: (draws, groups) }))
+                Ok(Some(ShrubPart { drawn, draws: runs_made, stages, bundles, all, room: (draws, groups), cull }))
             });
             self.render_frame(ram, jobs, level, read_back, cam, g, chunk, fog, &pic, set, (terrain_part, ties_part, shrubs_part), (walk, why))
         });
@@ -1750,11 +1845,14 @@ impl Native {
         }
         rec.end();
         let target = crate::replay::Target { tex: &pic.tex, depth: &pic.depth, tv: &pic.tv, dv: &pic.dv, size: self.size };
+        // UYA_GPU_PASSES: a screen frame's passes too (a menu's, the front end's).
+        let passes = self.gpu_passes.as_mut().filter(|_| !self.defer_world).and_then(|p| p.begin(d, &self.queue, jobs.field, true, 1.0, self.size));
         let mut clear = d.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("native screen clear") });
-        crate::replay::statics(&mut clear, &target, &[], &[], None);
+        let total = crate::gpu_profile::Span::begin(passes.as_ref(), &mut clear, "total");
+        crate::replay::statics(&self.device, &self.queue, &mut clear, &target, &[], &[], None, None)?;
         let mut enc = d.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("native screen frame") });
         let mut after = crate::replay::Chunks::default();
-        crate::replay::play(&rec.cmds, &mut enc, &target, &crate::replay::Ctx { device: d, view_bg: &pic.view_bg, shadows: &self.shadow_pipes, ao: &self.ao, light_shadows: &self.light_shadows, reflections: &self.reflections, shafts: &self.shafts, cam: &cam, fog: &fog, fresh: true, profile: None, upscale: None }, &mut after)?;
+        crate::replay::play(&rec.cmds, &mut enc, &target, &crate::replay::Ctx { device: d, view_bg: &pic.view_bg, shadows: &self.shadow_pipes, ao: &self.ao, light_shadows: &self.light_shadows, reflections: &self.reflections, shafts: &self.shafts, cam: &cam, fog: &fog, fresh: true, profile: passes.as_ref(), upscale: None }, &mut after)?;
         // The picture: the native picture, which the display buffer then takes (as the next frame's first job copies the frame into
         // it); a frame that draws onto the display buffer (a fade) shows that.
         let display = &tex.targets[&crate::eedraw::DISPLAY].tex;
@@ -1769,11 +1867,18 @@ impl Native {
             self.shadow_pipes.downsample(d, &mut enc, display, &tex.display_gs, crate::eedraw::display_gs_map((w, h)));
             pic.tex.clone()
         };
+        total.end(&mut enc);
+        if let Some(p) = &passes {
+            p.resolve(&mut enc);
+        }
         self.outbox.commands.push(clear.finish());
         self.outbox.commands.extend(after.finish()?);
         self.outbox.commands.push(enc.finish());
         if !self.defer_world {
             std::mem::take(&mut self.outbox).apply(&self.queue);
+        }
+        if let (Some(profiler), Some(recording)) = (self.gpu_passes.as_mut(), passes) {
+            profiler.submitted(recording);
         }
         self.last_stale = None;
         self.last_world = None;
@@ -1863,7 +1968,7 @@ impl Native {
     /// `render` after the level is loaded, with the terrain's, the ties' and the shrubs' passes coming from their threads.
     #[allow(clippy::too_many_arguments)]
     /// `fset` is the frame set the frame builds into (`SETS`).
-    fn render_frame(&mut self, ram: &[u8], jobs: &crate::jobs::FrameJobs, level: u32, read_back: &[u32], cam: &Camera, g: &Globals, chunk: u32, fog: &uyafmt::gameplay::Fog, pic: &Picture, fset: usize, (terrain_part, ties_part, shrubs_part): (PoolJob<Result<(Static, usize, f64), String>>, PoolJob<Result<Option<TiePart>, String>>, PoolJob<Result<Option<ShrubPart>, String>>), (mut walk, why): (crate::mobies::Walk, Option<String>)) -> Result<wgpu::Texture, String> {
+    fn render_frame(&mut self, ram: &[u8], jobs: &crate::jobs::FrameJobs, level: u32, read_back: &[u32], cam: &Camera, g: &Globals, chunk: u32, fog: &uyafmt::gameplay::Fog, pic: &Picture, fset: usize, (terrain_part, ties_part, shrubs_part): (PoolJob<Result<(Option<Static>, Option<Static>, Static, usize, f64), String>>, PoolJob<Result<Option<TiePart>, String>>, PoolJob<Result<Option<ShrubPart>, String>>), (mut walk, why): (crate::mobies::Walk, Option<String>)) -> Result<wgpu::Texture, String> {
         let mut tm = Times::new();
         // The mobies first: their pass makes the texture settings of the blends the chain asks for as it meets them.
         let (mut moby_objs, mut moby_draws) = (std::mem::take(&mut self.moby_spare), std::mem::take(&mut self.moby_draw_spare));
@@ -2472,19 +2577,19 @@ impl Native {
         // The static world's bundles from their threads, recorded meanwhile.
         // The terrain's, with the sky before it (the game draws it before the world; a frame without the world, a menu screen's,
         // draws neither), from its thread.
-        let (terrain_b, chunks) = match terrain_part.join().map_err(|p| joined("terrain's", p))? {
-            Ok((b, n, ms)) if terrain_ran => {
+        let (cover_b, sky_b, terrain_b, chunks) = match terrain_part.join().map_err(|p| joined("terrain's", p))? {
+            Ok((cover_b, sky_b, b, n, ms)) if terrain_ran => {
                 tm.note("terrain (its thread)", ms);
                 // The terrain's thread drew the sky (`terrain_pass` fails without it): the one made from RAM this frame.
                 let (sky_at, _, sky) = gpu.sky.as_ref().expect("the terrain's bundle draws the sky");
                 sky.update(&self.queue, ram, *sky_at, fset)?;
-                (Some(b), n)
+                (cover_b, sky_b, Some(b), n)
             }
             Err(e) if terrain_ran => return Err(e),
-            _ => (None, 0),
+            _ => (None, None, None, 0),
         };
         // The shrubs of this frame (the game's arrays in RAM), in world space, and their bundles, from their thread.
-        let (shrubs_drawn, shrubs_b) = match shrubs_part.join().map_err(|p| joined("shrubs'", p))? {
+        let (shrubs_drawn, shrubs_b, shrubs_cull) = match shrubs_part.join().map_err(|p| joined("shrubs'", p))? {
             Ok(Some(sp)) if shrubs_ran => {
                 self.shrub_spare = sp.room;
                 tm.note("shrubs (their thread)", sp.all);
@@ -2492,10 +2597,10 @@ impl Native {
                 tm.note("shrubs: upload", sp.stages[1]);
                 tm.note("shrubs: pass", sp.stages[2]);
                 tm.note("shrubs: material runs", sp.draws as f64);
-                (sp.drawn, sp.bundles)
+                (sp.drawn, sp.bundles, sp.cull.map(|c| (self.objects.veg_cull.clone(), std::sync::Arc::new(c))))
             }
             Err(e) if shrubs_ran => return Err(e),
-            _ => (0, Vec::new()),
+            _ => (0, Vec::new(), None),
         };
         tm.mark("shrubs (wait)");
         // Which tie triangles the game's tie programs draw this frame (`tievu`), the ties drawn and their bundles, from their thread.
@@ -2541,10 +2646,10 @@ impl Native {
         }
         let (mut bundles, mut surface_bundles) = (Vec::new(), Vec::new());
         let mut bundle_labels = Vec::new();
-        for ((bundle, surface), label) in terrain_b.into_iter().map(|b| (b, "colour_terrain"))
+        for ((bundle, surface, draws), label) in cover_b.into_iter().map(|b| (b, "cover")).chain(sky_b.into_iter().map(|b| (b, "colour_sky"))).chain(terrain_b.into_iter().map(|b| (b, "colour_terrain")))
             .chain(ties_b.into_iter().map(|b| (b, "colour_props")))
             .chain(shrubs_b.into_iter().map(|b| (b, "colour_vegetation"))) {
-            bundles.push(bundle); surface_bundles.extend(surface); bundle_labels.push(label);
+            bundles.push(bundle); surface_bundles.extend(surface); bundle_labels.push((label, draws));
         }
         // A snapshot is drawn by the presenter alone. A frame drawn as it is prepared (one that grabs the picture shown, or draws no
         // world) leaves its commands after its shared changes; the renderer submits them itself only when no presenter draws the
@@ -2554,7 +2659,7 @@ impl Native {
             let world_target = scene.as_ref().unwrap_or(&target);
             let total = crate::gpu_profile::Span::begin(passes.as_ref(), &mut clear, "total");
             let colour = crate::gpu_profile::Span::begin(passes.as_ref(), &mut clear, "colour_static");
-            crate::replay::statics(&mut clear, world_target, &bundles, &bundle_labels, passes.as_ref());
+            crate::replay::statics(d, &self.queue, &mut clear, world_target, &bundles, &bundle_labels, shrubs_cull.as_ref().map(|(c, f)| (&**c, &**f)), passes.as_ref())?;
             colour.end(&mut clear);
             let surfaces = crate::gpu_profile::Span::begin(passes.as_ref(), &mut clear, "surface_static");
             if let Some(raster) = &raster { raster.draw(&mut clear, world_target.dv, true, &surface_bundles, &[]); }
@@ -2617,7 +2722,7 @@ impl Native {
         if self.replays && world {
             let stale = std::sync::Arc::new(std::sync::Mutex::new(false));
             self.last_stale = (!deferred).then(|| stale.clone());
-            self.replay = Some(crate::replay::Replay { prepared: deferred, rendered: std::sync::atomic::AtomicBool::new(!deferred), output_depth: pic.depth.clone(), output_view: pic.tv.clone(), output_depth_view: pic.dv.clone(), display: if deferred { gpu.ee_textures.targets.get(&crate::eedraw::DISPLAY).map(|t| (t.tex.clone(), gpu.ee_textures.display_gs.clone())) } else { None }, field: jobs.field, from, cut, level, size: self.size, bundles, bundle_labels, surface_bundles, raster: raster.clone(), cmds: rec.cmds, view: pic.view.clone(), view_bg, cam: *cam, prev, fog: fog_copy(fog), shadows: self.shadow_pipes.clone(), ao: self.ao.clone(), light_shadows: self.light_shadows.clone(), reflections: self.reflections.clone(), shafts: self.shafts.clone(), stale, _set: self.sets[fset].busy.clone(), upscale: upscaler.clone(), motion_layout: self.objects.motion_layout.clone() });
+            self.replay = Some(crate::replay::Replay { prepared: deferred, rendered: std::sync::atomic::AtomicBool::new(!deferred), output_depth: pic.depth.clone(), output_view: pic.tv.clone(), output_depth_view: pic.dv.clone(), display: if deferred { gpu.ee_textures.targets.get(&crate::eedraw::DISPLAY).map(|t| (t.tex.clone(), gpu.ee_textures.display_gs.clone())) } else { None }, field: jobs.field, from, cut, level, size: self.size, bundles, bundle_labels, cull: shrubs_cull, surface_bundles, raster: raster.clone(), cmds: rec.cmds, view: pic.view.clone(), view_bg, cam: *cam, prev, fog: fog_copy(fog), shadows: self.shadow_pipes.clone(), ao: self.ao.clone(), light_shadows: self.light_shadows.clone(), reflections: self.reflections.clone(), shafts: self.shafts.clone(), stale, _set: self.sets[fset].busy.clone(), upscale: upscaler.clone(), motion_layout: self.objects.motion_layout.clone() });
         } else {
             self.last_stale = None;
             rec.cmds.clear();
@@ -2666,7 +2771,13 @@ fn ee_draw(device: &wgpu::Device, objects: &crate::objects::Pipelines, size: (u3
         device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("GS blend destination"), layout: &objects.dst_layout, entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }] })
     });
     if *target == MAIN {
-        rec.picture();
+        // With UYA_GPU_PASSES, timed by kind: in screen or world coordinates, reading the picture behind them or not.
+        rec.picture_as(match (*screen, dst.is_some()) {
+            (true, false) => "ee_screen",
+            (true, true) => "ee_screen_dst",
+            (false, false) => "ee_world",
+            (false, true) => "ee_world_dst",
+        });
         rec.set_vertex_buffer(0, vb);
         rec.set_scissor_rect([x0, y0, x1 - x0, y1 - y0])?;
         objects.draw_in(rec, &tx.by_aref[set], draws, *screen, *flat, dst.as_ref())?;
@@ -2712,11 +2823,14 @@ struct ShrubPart {
     all: f64,
     /// The draws' and groups' room, given back for the next frame (`Native::shrub_spare`).
     room: (Vec<(usize, crate::objects::Draw)>, Vec<usize>),
+    /// The vegetation's cull its bundles draw with (`veg_cull`).
+    cull: Option<crate::veg_cull::FrameCull>,
 }
 
 /// A layer of the static world as its thread records it: its bundle (kept for the frame's replay, `replay.rs`) and the frame's
 /// own pass of the picture executing it.
-type Static = (wgpu::RenderBundle, Option<wgpu::RenderBundle>);
+/// A static world bundle, its surface buffer's bundle (with a raster), and its draw calls (for UYA_GPU_COUNTS).
+type Static = (wgpu::RenderBundle, Option<wgpu::RenderBundle>, u32);
 
 /// The bundles the shrubs' draws are recorded in, each on a thread (`Native::render`).
 const SHRUB_THREADS: usize = 2;
@@ -2955,14 +3069,37 @@ struct TerrainScene {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     draws: std::sync::Arc<Vec<Draw>>,
-    keys: std::sync::Arc<Vec<(wgpu::BindGroup, bool)>>,
+    keys: std::sync::Arc<Vec<(wgpu::BindGroup, bool, bool)>>,
     visibility: std::sync::Arc<Vec<(u8, u8)>>,
     /// The sky the game's pointer names, or why it could not be made (`Native::render`): the terrain's layer, which fails with it.
     sky: Result<std::sync::Arc<crate::sky::SkyGpu>, String>,
     pass: wgpu::RenderPipeline,
     fail: wgpu::RenderPipeline,
+    /// The cover's pipelines (`Cover`), unless the terrain is lit per pixel (its pipelines place its vertices with another
+    /// program).
+    cover: Option<Cover>,
     /// With the lighting option: vertex buffer 1 and group 2 of `pass` and `fail` (`lighting.rs`).
     lit: Option<std::sync::Arc<crate::lighting::TerrainLit>>,
+}
+
+/// The terrain's cover. The sky is drawn first, over the whole picture (the GS's Z test ALWAYS), and the terrain after it hides
+/// most of it: at Veldin's start the sky's 11 draws shade 4.1 times the picture's pixels, over a third of every pixel the frame
+/// shades, and a weak GPU fills a picture's worth in over a millisecond. Where a terrain pixel drawn over the sky replaces the
+/// frame's colour and alpha whatever lay behind it, the sky's colour there is never seen, so it need not be drawn. Which pixels
+/// those are is the terrain's own draws in their order, in a pass of the depth and stencil alone before the sky
+/// (`replay::statics`): each pixel of a draw `fs_pass` keeps (its alpha test, the Z test GEQUAL, the depth written) and, of those,
+/// the ones with As 0x80 or more (a texture whose every texel the draw samples is 0x80 or more, `opaque`, needs no pixel program:
+/// all of its pixels are; for another `fs_cover_mark` tests each at the depth just written) count up the stencil. The sky is
+/// drawn where the stencil is 0; the depth and stencil are then cleared and the terrain and what follows draw as before. A pixel
+/// is marked only where such a pixel passed the Z test at its turn among the terrain's draws, as it does when they draw: there the
+/// terrain's colour stands, and later draws (blending onto it, or failing pixels, which write no depth) find what they found
+/// before. A draw's own nearer pixel at the same place makes `fs_cover_mark` miss its farther one: the sky is then drawn there,
+/// as before. Where the terrain is lit per pixel its pipelines place the vertices with another program, and there is no cover.
+#[derive(Clone)]
+struct Cover {
+    opaque: wgpu::RenderPipeline,
+    pass: wgpu::RenderPipeline,
+    mark: wgpu::RenderPipeline,
 }
 
 /// A native picture of `size` and its depth (`Native::picture`, and the pictures `play` draws between frames).
@@ -3015,12 +3152,13 @@ fn picture_bundle<'a>(device: &'a wgpu::Device, _label: &'a str, pic: &'a Pictur
     draw(&mut b)?;
     let surface = pic.raster.as_ref().map(|_| crate::surface_buffer::bundle(device, &crate::surface_buffer::capture(&b.cmds), true));
     let bundle = crate::surface_buffer::bundle(device, &b.cmds, false);
+    let draws = b.cmds.iter().filter(|c| matches!(c, crate::replay::Cmd::Draw(_) | crate::replay::Cmd::DrawIndexed(_) | crate::replay::Cmd::DrawInstanced(..) | crate::replay::Cmd::DrawIndexedIndirect(..))).count() as u32;
     b.cmds.clear();
     let mut rooms = ROOMS.lock().expect("the bundles' rooms");
     if rooms.len() < 16 {
         rooms.push(b.cmds);
     }
-    Ok((bundle, surface))
+    Ok((bundle, surface, draws))
 }
 
 /// A bundle of the shrubs: the level's built shrub vertices drawn by `draw` (which binds them), with the instances' fog values
@@ -3035,30 +3173,86 @@ fn shrub_bundle<'a>(device: &'a wgpu::Device, pic: &'a Picture, fog: &'a wgpu::B
 /// The terrain's bundle: the sky first (its frame set `set`'s rotations), as the game draws it before the world, then every
 /// draw of terrain `terrain` whose chunk passes the zone test (its mask against the zone's byte of `zones`, the record's 0x80);
 /// and the chunks drawn.
-fn terrain_pass(device: &wgpu::Device, pic: &Picture, scene: &TerrainScene, terrain: u32, zones: &[u8], set: usize) -> Result<(Static, usize), String> {
+/// With the cover (`Cover`, `scene.cover`) or UYA_GPU_COUNTS the sky is a bundle of its own before the terrain's (the same draws
+/// in the same order); with the cover its bundle comes first, the frame's visible terrain draws again in a pass of the depth and
+/// stencil alone (`replay::statics`).
+fn terrain_pass(device: &wgpu::Device, pic: &Picture, scene: &TerrainScene, terrain: u32, zones: &[u8], set: usize) -> Result<(Option<Static>, Option<Static>, Static, usize), String> {
     use crate::replay::Enc;
+    // The draws whose chunk passes the zone test, and the chunks they are of.
     let mut chunks = 0;
+    let mut last_chunk = u32::MAX;
+    let mut visible = Vec::new();
+    for dr in scene.draws.iter().filter(|d| d.terrain == terrain) {
+        let (mask, zone) = scene.visibility[dr.chunk as usize];
+        let byte = zones.get(zone as usize).ok_or_else(|| format!("native: terrain chunk {} names zone {zone} of the record's 0x80", dr.chunk))?;
+        if mask & byte == 0 {
+            continue;
+        }
+        if dr.chunk != last_chunk {
+            chunks += 1;
+            last_chunk = dr.chunk;
+        }
+        visible.push(dr);
+    }
+    // An opaque draw's pipeline runs no pixel program and reads no material: a run of them whose corners follow one another in
+    // the index buffer is one draw (the triangles in the same order), its group 1 the run's first's (the layout's, unread).
+    let cover = scene.cover.as_ref().map(|c| cover_bundle(device, pic, |p| {
+        Enc::set_vertex_buffer(p, 0, &scene.vertices);
+        Enc::set_index_buffer(p, &scene.indices);
+        let mut b = crate::objects::Bound::default();
+        let mut run: Option<std::ops::Range<u32>> = None;
+        for dr in &visible {
+            let (bg, _, opaque) = &scene.keys[dr.key as usize];
+            if *opaque {
+                match &mut run {
+                    Some(r) if r.end == dr.first => r.end += dr.count,
+                    _ => {
+                        if let Some(r) = run.take() {
+                            Enc::draw_indexed(p, r);
+                        }
+                        b.group(p, bg);
+                        b.pipeline(p, &c.opaque);
+                        run = Some(dr.first..dr.first + dr.count);
+                    }
+                }
+                continue;
+            }
+            if let Some(r) = run.take() {
+                Enc::draw_indexed(p, r);
+            }
+            b.group(p, bg);
+            b.pipeline(p, &c.pass);
+            Enc::draw_indexed(p, dr.first..dr.first + dr.count);
+            b.pipeline(p, &c.mark);
+            Enc::draw_indexed(p, dr.first..dr.first + dr.count);
+        }
+        if let Some(r) = run {
+            Enc::draw_indexed(p, r);
+        }
+        Ok(())
+    })).transpose()?;
+    let apart = cover.is_some() || crate::gpu_profile::counts_wanted();
+    let sky = if apart {
+        Some(picture_bundle(device, "native sky", pic, |p| {
+            scene.sky.as_ref().map_err(|e| e.clone())?.draw(p, set);
+            Ok(())
+        })?)
+    } else {
+        None
+    };
     let b = picture_bundle(device, "native terrain", pic, |p| {
-        scene.sky.as_ref().map_err(|e| e.clone())?.draw(p, set);
+        if !apart {
+            scene.sky.as_ref().map_err(|e| e.clone())?.draw(p, set);
+        }
         Enc::set_vertex_buffer(p, 0, &scene.vertices);
         if let Some(lit) = &scene.lit {
             Enc::set_vertex_buffer(p, 1, &lit.vertices);
             Enc::set_bind_group(p, 2, &lit.group);
         }
         Enc::set_index_buffer(p, &scene.indices);
-        let mut last_chunk = u32::MAX;
         let mut b = crate::objects::Bound::default();
-        for dr in scene.draws.iter().filter(|d| d.terrain == terrain) {
-            let (mask, zone) = scene.visibility[dr.chunk as usize];
-            let byte = zones.get(zone as usize).ok_or_else(|| format!("native: terrain chunk {} names zone {zone} of the record's 0x80", dr.chunk))?;
-            if mask & byte == 0 {
-                continue;
-            }
-            if dr.chunk != last_chunk {
-                chunks += 1;
-                last_chunk = dr.chunk;
-            }
-            let (bg, fails) = &scene.keys[dr.key as usize];
+        for dr in &visible {
+            let (bg, fails, _) = &scene.keys[dr.key as usize];
             b.group(p, bg);
             b.pipeline(p, &scene.pass);
             Enc::draw_indexed(p, dr.first..dr.first + dr.count);
@@ -3069,7 +3263,25 @@ fn terrain_pass(device: &wgpu::Device, pic: &Picture, scene: &TerrainScene, terr
         }
         Ok(())
     })?;
-    Ok((b, chunks))
+    Ok((cover, sky, b, chunks))
+}
+
+/// The cover's bundle (`Cover`): commands recorded by `draw` with the frame's view bound, for a pass of the depth and stencil alone.
+fn cover_bundle(device: &wgpu::Device, pic: &Picture, draw: impl FnOnce(&mut crate::replay::Rec) -> Result<(), String>) -> Result<Static, String> {
+    use crate::replay::Enc;
+    let mut b = crate::replay::Rec::default();
+    b.set_bind_group(0, &pic.view_bg);
+    draw(&mut b)?;
+    let mut p = device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
+        label: Some("terrain cover"),
+        color_formats: &[],
+        depth_stencil: Some(wgpu::RenderBundleDepthStencil { format: DEPTH, depth_read_only: false, stencil_read_only: false }),
+        sample_count: 1,
+        multiview: None,
+    });
+    crate::surface_buffer::commands(&mut p, &b.cmds);
+    let draws = b.cmds.iter().filter(|c| matches!(c, crate::replay::Cmd::DrawIndexed(_))).count() as u32;
+    Ok((p.finish(&wgpu::RenderBundleDescriptor { label: Some("terrain cover") }), None, draws))
 }
 
 /// The frame's fog, as func_L01_003FEBC8 leaves it in the view struct (the tangents' struct, tangents - 0xB0) for the world

@@ -996,7 +996,8 @@ pub(crate) struct WorldIn<'a> {
     pub vertices: &'a wgpu::Buffer,
     pub indices: &'a wgpu::Buffer,
     pub draws: Vec<(usize, u32, u32)>,
-    pub keys: &'a [(wgpu::BindGroup, bool)],
+    /// The terrain's texture settings: their bind group, whether a texel fails the alpha test, whether every texel is opaque.
+    pub keys: &'a [(wgpu::BindGroup, bool, bool)],
     pub views: &'a [(wgpu::TextureView, bool, bool, Option<crate::texnames::RiftMat>)],
     pub aref: u8,
     pub ties: Option<(&'a crate::objects::Ties, &'a crate::objects::TieGlobals)>,

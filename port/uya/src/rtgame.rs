@@ -656,6 +656,9 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
     let mut pmode_was = u64::MAX;
     // A RAM buffer kept back from a frame the renderer was not ready for (the field not drawn), and the fields drawn.
     let (mut spare, mut drawn): (Vec<uyart::RamCopy>, u64) = (Vec::new(), 0);
+    // The first field the renderer is offered on the plain path's pace (`play::PACE`): one field in that many after the last it
+    // took.
+    let mut offer_from = 0u64;
     // The image transfers into GS memory of the fields and frames the renderer did not get since the last it did, oldest first
     // (`Frame::uploads_before`): a level's load sends the GS what the space scene samples while the renderer takes few of its
     // fields (fast loading runs it unpaced).
@@ -1174,13 +1177,18 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
             spare.push(ram);
             reading_back -= 1;
         }
+        // Whether the renderer is offered this field: on the plain path's pace (`play::PACE`, one field in N where the PC cannot
+        // draw every one: a steady 30, 20 or 15 pictures a second), the fields between pass as fields the renderer was too busy
+        // for do; a field it could not take is followed by the next, not by the next on the pace. A control command's last field
+        // is always offered.
+        let offered = settle || f >= offer_from;
         // A free RAM buffer for the frame: only one at hand, paced or not (the renderer busy: the field is not drawn, and the game
         // does not wait for a renderer a frame late: it drops a picture, not game time). The game waits for a renderer held on one
-        // frame for more than two fields (a level's load, a long build: `play::renderer_held`), as on a loading screen, and a
-        // control command's last field waits: its answer comes once its frame is drawn.
+        // frame for more than two fields (a level's load, a long build: `play::renderer_held`) for a field it offers, as on a
+        // loading screen, and a control command's last field waits: its answer comes once its frame is drawn.
         let buffer = match spare.pop() {
             Some(b) => Some(b),
-            None if settle || crate::play::renderer_held() => match back.recv() {
+            None if settle || (offered && crate::play::renderer_held()) => match back.recv() {
                 Ok(b) => Some(b),
                 Err(_) => return Ok(GameEnd::RendererStopped),
             },
@@ -1213,14 +1221,22 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
                 let ram = std::mem::replace(&mut before, now);
                 let prompts = input.lock().expect("input lock").prompts();
                 let msg = Msg::Field(Frame { field: f, at, ram, jobs, read_back: std::mem::take(&mut read_back), uploads_before: std::mem::take(&mut pending), uploads: own, front_end: m.front_end(), prompts, menu, lines, pointer: pointer.at, bindings: menus.bindings });
+                let pace = u64::from(crate::play::PACE.load(Ordering::Relaxed));
                 if !settle {
-                    match tx.try_send(msg) {
-                        Ok(()) => drawn += 1,
-                        Err(std::sync::mpsc::TrySendError::Full(msg)) if crate::play::renderer_held() => {
+                    // A field off the pace goes the way of one the renderer was too busy for (its read-back walked on the read-back
+                    // thread, its uploads carried to the next frame drawn).
+                    let sent = if offered { tx.try_send(msg) } else { Err(std::sync::mpsc::TrySendError::Full(msg)) };
+                    match sent {
+                        Ok(()) => {
+                            drawn += 1;
+                            offer_from = f + pace;
+                        }
+                        Err(std::sync::mpsc::TrySendError::Full(msg)) if offered && crate::play::renderer_held() => {
                             if tx.send(msg).is_err() {
                                 return Ok(GameEnd::RendererStopped);
                             }
                             drawn += 1;
+                            offer_from = f + pace;
                         }
                         Err(std::sync::mpsc::TrySendError::Full(Msg::Field(fr))) => {
                             read_back = fr.read_back;
@@ -1233,6 +1249,8 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
                     }
                 } else if tx.send(msg).is_err() {
                     return Ok(GameEnd::RendererStopped);
+                } else {
+                    offer_from = f + pace;
                 }
                 // A control command's last field: answered once its frame is drawn.
                 if settle {

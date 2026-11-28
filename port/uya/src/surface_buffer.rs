@@ -47,6 +47,7 @@ pub(crate) fn capture(cmds: &[Cmd]) -> Vec<Cmd> {
             Cmd::Draw(r) if active => out.push(Cmd::Draw(r.clone())),
             Cmd::DrawIndexed(r) if active => out.push(Cmd::DrawIndexed(r.clone())),
             Cmd::DrawInstanced(r, n) if active => out.push(Cmd::DrawInstanced(r.clone(), n.clone())),
+            Cmd::DrawIndexedIndirect(b, o) if active => out.push(Cmd::DrawIndexedIndirect(b.clone(), *o)),
             _ => {}
         }
     }
@@ -60,6 +61,7 @@ pub(crate) fn commands<'a, E: Enc<'a>>(p: &mut E, cmds: &'a [Cmd]) {
             Cmd::Vertices(i, v) => p.set_vertex_buffer(*i, v), Cmd::Indices(v) => p.set_index_buffer(v),
             Cmd::Draw(r) => p.draw(r.clone()), Cmd::DrawIndexed(r) => p.draw_indexed(r.clone()),
             Cmd::DrawInstanced(r, n) => p.draw_instanced(r.clone(), n.clone()),
+            Cmd::DrawIndexedIndirect(b, o) => p.draw_indexed_indirect(b, *o),
             _ => panic!("surface bundle contains a non-draw command"),
         }
     }

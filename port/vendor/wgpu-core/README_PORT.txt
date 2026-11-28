@@ -1,4 +1,4 @@
-wgpu-core 30.0.1 as shipped on crates.io, with THREE changes for the port (MIT OR Apache-2.0, see LICENSE.MIT / LICENSE.APACHE).
+wgpu-core 30.0.1 as shipped on crates.io, with FOUR changes for the port (MIT OR Apache-2.0, see LICENSE.MIT / LICENSE.APACHE).
 The port's native renderer (port/uya) and its play window draw through wgpu 30; this copy is the one the port's workspace builds
 (port/Cargo.toml, [patch.crates-io]).
 
@@ -12,6 +12,12 @@ What changed (each place marked "PORT CHANGE")
      compute.rs begin a pass).
   3. src/command/bundle.rs, `set_bind_group`: a group already in the bundle's usage scope (`State::scoped_groups`) is not
      merged into it again (the merge of a group already there changes nothing).
+  4. src/command/render.rs, `execute_bundle`: the pass's stencil reference (`State::stencil_reference`, 0 unless the pass set
+     another) is set on the command encoder before a bundle's commands run. A pass sets it when one of its own pipelines that
+     reads it is set (`set_pipeline`); a bundle's `SetPipeline` never does, so a bundle's draws with a stencil test compared
+     against whatever reference the command buffer last held (WebGPU: a bundle's draws use the pass's). The port's sky, drawn
+     where the terrain's cover left the stencil 0 (port/uya/src/native.rs `Cover`), was right in a dump's first frame and gone in
+     the next (the shadow steps' reference left over).
   Nothing else differs from the published crate (compare with `diff -r` against the crate unpacked from crates.io; only the .cargo-ok
   marker file is missing here).
 

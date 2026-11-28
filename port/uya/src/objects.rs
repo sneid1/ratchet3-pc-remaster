@@ -832,6 +832,8 @@ pub(crate) struct Pipelines {
     motion_fx: wgpu::RenderPipeline,
     motion_fx_add: wgpu::RenderPipeline,
     pub motion_layout: wgpu::BindGroupLayout,
+    /// The vegetation's occlusion cull (`veg_cull`), for the batched shrubs.
+    pub veg_cull: std::sync::Arc<crate::veg_cull::Cull>,
 }
 
 impl Pipelines {
@@ -1000,6 +1002,7 @@ impl Pipelines {
             })
         };
         Pipelines {
+            veg_cull: std::sync::Arc::new(crate::veg_cull::Cull::new(device)),
             motion: motion("fs_motion"),
             motion_opaque: motion("fs_motion_opaque"),
             motion_fx: motion("fs_motion_fx"),
@@ -1886,6 +1889,24 @@ struct ShrubsBuilt {
     batch_vertices: Vec<Option<wgpu::Buffer>>,
 }
 
+/// The frame's drawn shrubs as the vegetation's cull takes them (`Shrubs::frame`, `veg_cull`): each drawn instance's sphere (by
+/// its place among them), each of its runs (its chunk, its setting and its corners), in the draws' order, and where each draw's
+/// runs begin among them.
+#[derive(Default)]
+pub(crate) struct ShrubPieces {
+    pub spheres: Vec<crate::veg_cull::Sphere>,
+    pub pieces: Vec<(usize, Key, crate::veg_cull::Piece)>,
+    pub draw_at: Vec<u32>,
+}
+
+impl ShrubPieces {
+    fn clear(&mut self) {
+        self.spheres.clear();
+        self.pieces.clear();
+        self.draw_at.clear();
+    }
+}
+
 /// A shadow caster (`shadows.rs`): its bounding sphere and its draws (with the test set each takes: `Ties::materials`).
 pub(crate) struct Caster {
     pub centre: [f32; 3],
@@ -2010,21 +2031,13 @@ impl Shrubs {
         let built = self.built.lock().map_err(|_| "native: the built shrubs' lock is poisoned")?;
         let Some(b) = built.as_ref() else { return Ok(()) };
         let (arr, mats) = (rd_u32(ram, g.instances as usize)? as usize, rd_u32(ram, g.matrices as usize)? as usize);
-        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
         for (i, (chunk, runs)) in b.runs.iter().enumerate() {
             if *ram.get(arr + 32 * i + 0x16).ok_or("native: a shrub instance past RAM")? & 1 != 0 || runs.is_empty() {
                 continue;
             }
             // A chunk's vertices and corners are made together (both or neither).
             let (Some(vb), Some(ib)) = (&b.vertices[*chunk], &b.indices[*chunk]) else { continue };
-            let m = mats + 64 * i;
-            let row = |r: usize| -> Result<[f32; 3], String> { Ok([rd_f32(ram, m + 16 * r)?, rd_f32(ram, m + 16 * r + 4)?, rd_f32(ram, m + 16 * r + 8)?]) };
-            let rows = [row(0)?, row(1)?, row(2)?, row(3)?];
-            let scale = rd_f32(ram, m + 0x3c)?;
-            let c = &self.classes[self.instance_class[i]].centre;
-            let mid = [0, 1, 2].map(|k| scale * (c[0] * rows[0][k] + c[1] * rows[1][k] + c[2] * rows[2][k]) + rows[3][k]);
-            let norm = (dot(rows[0], rows[0]) + dot(rows[1], rows[1]) + dot(rows[2], rows[2])).sqrt();
-            let reach = self.class_reach[self.instance_class[i]] * scale.abs() * norm * 1.001 + 0.01;
+            let (mid, reach) = self.sphere(ram, mats, i)?;
             for &(key, first, count) in runs {
                 f(vb, ib, key, first..first + count, mid, reach);
             }
@@ -2104,6 +2117,22 @@ impl Shrubs {
         Ok(())
     }
 
+    /// Instance `i`'s sphere around every vertex it draws (its centre in the world and its reach), from the game's matrix array
+    /// at `mats`: the class's centre carried through the rows as `build` carries a vertex, and the class's reach (its farthest
+    /// vertex from that centre) times the scale and the rows' norm, widened by a thousandth and 0.01 for the rounding of the
+    /// vertices' own sums. Not the game's (+0xC, the class's radius times the matrix's longest axis).
+    pub fn sphere(&self, ram: &[u8], mats: usize, i: usize) -> Result<([f32; 3], f32), String> {
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let m = mats + 64 * i;
+        let row = |r: usize| -> Result<[f32; 3], String> { Ok([rd_f32(ram, m + 16 * r)?, rd_f32(ram, m + 16 * r + 4)?, rd_f32(ram, m + 16 * r + 8)?]) };
+        let rows = [row(0)?, row(1)?, row(2)?, row(3)?];
+        let scale = rd_f32(ram, m + 0x3c)?;
+        let c = &self.classes[self.instance_class[i]].centre;
+        let mid = [0, 1, 2].map(|k| scale * (c[0] * rows[0][k] + c[1] * rows[1][k] + c[2] * rows[2][k]) + rows[3][k]);
+        let norm = (dot(rows[0], rows[0]) + dot(rows[1], rows[1]) + dot(rows[2], rows[2])).sqrt();
+        Ok((mid, self.class_reach[self.instance_class[i]] * scale.abs() * norm * 1.001 + 0.01))
+    }
+
     /// The instances the frame draws, in the game's array order: not hidden (+0x16 bit 0), nearer than their own distance (+0x10)
     /// and the level's limit, not wholly behind the eye, and not wholly
     /// outside one of the picture's side planes.
@@ -2139,18 +2168,9 @@ impl Shrubs {
             if depth >= limit || depth + radius <= 0.0 {
                 continue;
             }
-            // The side planes test the port's own sphere around the instance's vertices, not the game's (+0xC, the class's radius
-            // times the matrix's longest axis): the class's centre carried through the rows as `build` carries a vertex, and
-            // the class's reach (its farthest vertex from that centre) times the scale and the rows' norm, so every vertex the
-            // instance draws lies in it; widened by a thousandth and 0.01 for the rounding of the vertices' own sums.
-            let m = mats + 64 * i;
-            let row = |r: usize| -> Result<[f32; 3], String> { Ok([rd_f32(ram, m + 16 * r)?, rd_f32(ram, m + 16 * r + 4)?, rd_f32(ram, m + 16 * r + 8)?]) };
-            let rows = [row(0)?, row(1)?, row(2)?, row(3)?];
-            let scale = rd_f32(ram, m + 0x3c)?;
-            let c = &self.classes[self.instance_class[i]].centre;
-            let mid = [0, 1, 2].map(|k| scale * (c[0] * rows[0][k] + c[1] * rows[1][k] + c[2] * rows[2][k]) + rows[3][k] - cam.eye[k]);
-            let norm = (dot(rows[0], rows[0]) + dot(rows[1], rows[1]) + dot(rows[2], rows[2])).sqrt();
-            let reach = self.class_reach[self.instance_class[i]] * scale.abs() * norm * 1.001 + 0.01;
+            // The side planes test the port's own sphere around the instance's vertices (`sphere`), not the game's (+0xC).
+            let (mid, reach) = self.sphere(ram, mats, i)?;
+            let mid = [0, 1, 2].map(|k| mid[k] - cam.eye[k]);
             if planes.iter().any(|&(p, len)| dot(p, mid) < -reach * len) {
                 continue;
             }
@@ -2173,7 +2193,10 @@ impl Shrubs {
     ///
     /// `groups` gets where each run of one chunk and setting begins in `draws` (the draws the frame's indices gave before: the
     /// shrubs' threads split their bundles between them as they split those draws).
-    pub fn frame(&self, device: &wgpu::Device, queue: &wgpu::Queue, fog_layout: &wgpu::BindGroupLayout, ram: &[u8], g: &ShrubGlobals, cam: &Camera, fog: &uyafmt::gameplay::Fog, instances: &[usize], set: usize, draws: &mut Vec<(usize, Draw)>, groups: &mut Vec<usize>) -> Result<Option<(Vec<Option<wgpu::Buffer>>, Vec<Option<wgpu::Buffer>>, Vec<Option<wgpu::Buffer>>, wgpu::BindGroup)>, String> {
+    ///
+    /// `pieces` (with the batch, for the vegetation's cull: `veg_cull`) gets each drawn instance's sphere by its place in
+    /// `instances`, each of its runs as a piece, and where each draw's pieces begin.
+    pub fn frame(&self, device: &wgpu::Device, queue: &wgpu::Queue, fog_layout: &wgpu::BindGroupLayout, ram: &[u8], g: &ShrubGlobals, cam: &Camera, fog: &uyafmt::gameplay::Fog, instances: &[usize], set: usize, draws: &mut Vec<(usize, Draw)>, groups: &mut Vec<usize>, mut pieces: Option<&mut ShrubPieces>) -> Result<Option<(Vec<Option<wgpu::Buffer>>, Vec<Option<wgpu::Buffer>>, Vec<Option<wgpu::Buffer>>, wgpu::BindGroup)>, String> {
         let n = self.instance_class.len();
         let (arr, mats, cols) = (rd_u32(ram, g.instances as usize)? as usize, rd_u32(ram, g.matrices as usize)? as usize, rd_u32(ram, g.colours as usize)? as usize);
         let mut built = self.built.lock().map_err(|_| "native: the built shrubs' lock is poisoned")?;
@@ -2206,20 +2229,40 @@ impl Shrubs {
                 }
             }
         }
-        for &i in instances {
+        if let Some(p) = pieces.as_mut() {
+            p.clear();
+        }
+        for (slot, &i) in instances.iter().enumerate() {
             // The fog value F of the instance's origin (row 3 of its matrix), as the terrain's.
             let m = mats + 64 * i;
             let origin = [rd_f32(ram, m + 48)?, rd_f32(ram, m + 52)?, rd_f32(ram, m + 56)?];
             b.fog[i] = fog_f(dot([origin[0] - cam.eye[0], origin[1] - cam.eye[1], origin[2] - cam.eye[2]], cam.forward)).to_bits();
+            if let Some(p) = pieces.as_mut() {
+                let (mid, reach) = self.sphere(ram, mats, i)?;
+                p.spheres.push([mid[0], mid[1], mid[2], reach]);
+            }
             let (chunk, runs) = &b.runs[i];
             for &(key, first, count) in runs {
-                match draws.last_mut() {
-                    Some((c, d)) if c == chunk && d.key == key && d.first + d.count == first => d.count += count,
-                    Some((c, d)) if c == chunk && d.key == key => draws.push((*chunk, Draw { key, first, count })),
+                let merged = match draws.last_mut() {
+                    Some((c, d)) if c == chunk && d.key == key && d.first + d.count == first => {
+                        d.count += count;
+                        true
+                    }
+                    Some((c, d)) if c == chunk && d.key == key => {
+                        draws.push((*chunk, Draw { key, first, count }));
+                        false
+                    }
                     _ => {
                         groups.push(draws.len());
                         draws.push((*chunk, Draw { key, first, count }));
+                        false
                     }
+                };
+                if let Some(p) = pieces.as_mut() {
+                    if !merged {
+                        p.draw_at.push(p.pieces.len() as u32);
+                    }
+                    p.pieces.push((*chunk, key, crate::veg_cull::Piece { slot: slot as u32, first, count }));
                 }
             }
         }
@@ -2346,7 +2389,8 @@ impl Shrubs {
                 return Err(format!("native: shrub chunk {c}: {} corners made where its runs count {total}", idx.len()));
             }
             let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("shrubs"), contents: bytemuck::cast_slice(&out), usage: wgpu::BufferUsages::VERTEX });
-            let corners = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("shrub corners"), contents: bytemuck::cast_slice(&idx), usage: wgpu::BufferUsages::INDEX });
+            // Read as storage by the vegetation's cull (`veg_cull`), which packs the corners of the instances it keeps.
+            let corners = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("shrub corners"), contents: bytemuck::cast_slice(&idx), usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE });
             Ok((runs, Some((vertices, corners, vmat))))
         };
         // `SHRUB_BUILDERS` chunks at a time, each on a thread; each batch's vertices copied to the GPU and their staging freed
