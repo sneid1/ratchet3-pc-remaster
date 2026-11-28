@@ -524,9 +524,12 @@ impl App {
         // The game's movies in the window (`cinema.rs`); with --fast and no --movies none is attached and the game's player skips
         // each movie as it starts.
         let field = Arc::new(AtomicU64::new(0));
-        // A field that does not end: every thread's stack into the log (`sampler::watch`).
+        // A field that does not end: every thread's stack into the log (`sampler::watch`); a slow field: the threads' time in it
+        // (`sampler::busy_watch`).
         #[cfg(windows)]
         crate::sampler::watch(field.clone());
+        #[cfg(windows)]
+        crate::sampler::busy_watch();
         if !(self.o.fast || self.o.control) || self.o.movies {
             crate::cinema::attach(&iso, tx.clone(), input.clone(), quit.clone(), &presses, field.clone());
         }
@@ -1333,8 +1336,10 @@ const PLAIN_MOST: u32 = 4;
 ///   picture's world goes on it as soon as its frame comes) and the latency below takes up the slower pictures: held to 9
 ///   pictures in 10 (the user, of 20 a second where 40 had been shown unevenly: "30 would be fine, but dropping to 20 is not
 ///   fine"), a GPU of 20 to 34 ms a picture, 26 on average, fell to 20 though it keeps 30; held to 3 in 4, one of 14.5 ms on
-///   average, that had drawn every field, fell to 30. A slower pace is taken once the pace has failed that for a second, a
-///   faster one once it has passed within 90 % for three; the first is chosen at once from the first 30 pictures.
+///   average, that had drawn every field, fell to 30. The means are the last second's pictures' (`Recent`). A slower pace is
+///   taken once the pace has failed that for three seconds (`SLOWER_AFTER`: a stall at a level's start does not lower the
+///   rate), a faster one once it has passed within 90 % for three or within half for half a second (`Holds`); the first is
+///   chosen at once from the first 30 pictures.
 ///   Halving the pictures halves the frame builder's and the GPU's work as well.
 /// - Each picture is presented `latency` after its field began (the game's fields begin at its even rate): the presenter submits
 ///   each frame's world (`Native::defer_world`), and once it is done makes its window copy, which is presented at its time by a
@@ -1354,14 +1359,16 @@ struct Plain {
     arrivals: std::collections::VecDeque<f64>,
     build: std::collections::VecDeque<f64>,
     gpu: std::collections::VecDeque<f64>,
+    /// The last second's pictures' times (`Recent`, what the pace is chosen from): the renderer's to hand each over and the
+    /// GPU's on each (ms).
+    recent: [Recent; 2],
     /// The presenter's recent time a picture (ms: the window's copy and the present).
     present_ms: f64,
     /// When the last picture was presented, and when its field began.
     last: Option<Instant>,
     last_at: Option<Instant>,
-    /// When the pace began to fail, and when a faster one began to pass; whether the first pace was chosen.
-    failing: Option<Instant>,
-    passing: Option<Instant>,
+    /// When the pace's criteria began to hold (`Holds`); whether the first pace was chosen.
+    holds: Holds,
     settled: bool,
     /// Since the last line: the pictures and of them those late (their world done after their time); when it began.
     counts: (u64, u64),
@@ -1388,9 +1395,87 @@ fn ring_share(ring: &std::collections::VecDeque<f64>, q: f64) -> f64 {
     v.get(((v.len() as f64 * q) as usize).min(v.len().saturating_sub(1))).copied().unwrap_or(0.0)
 }
 
+/// The span over which the paces judge the recent pictures (`Recent`): the last second's pictures, by time. When they were kept
+/// by count (the last 120), a stall's slow pictures stayed in for as long as 120 more pictures took. At one refresh in 8 that
+/// was 2.7 s, and with the three seconds a faster pace had to pass, the player's PC kept 45 a second for 4.3 s after a stall at
+/// a mission's start, although it keeps up (360 Hz, 180 to 320 pictures a second otherwise; level 26, the first battle
+/// mission, 28 November 2026).
+const RECENT: Duration = Duration::from_secs(1);
+
+/// How long a pace must fail before a slower one is taken: three times `RECENT`. Slow pictures over less than two seconds
+/// (a stall at a level's or a mission's start: the player's above were slow for some 1.7 s) then never lower the rate,
+/// while a GPU that cannot keep the pace fails all along. With one second, that stall took the player to one refresh in 8.
+const SLOWER_AFTER: Duration = Duration::from_secs(3);
+
+/// The times (ms) of the pictures of the last `RECENT`, each with when it was taken.
+#[derive(Default)]
+struct Recent(std::collections::VecDeque<(Instant, f64)>);
+
+impl Recent {
+    fn push(&mut self, at: Instant, ms: f64) {
+        self.0.push_back((at, ms));
+        while self.0.front().is_some_and(|&(t, _)| at.saturating_duration_since(t) > RECENT) {
+            self.0.pop_front();
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// The mean (the window not empty: `len`).
+    fn mean(&self) -> f64 {
+        self.0.iter().map(|p| p.1).sum::<f64>() / self.0.len() as f64
+    }
+
+    /// The value a share `q` of the times are at most (the window not empty: `len`).
+    fn share(&self, q: f64) -> f64 {
+        let mut v: Vec<f64> = self.0.iter().map(|p| p.1).collect();
+        v.sort_by(f64::total_cmp);
+        v[((v.len() as f64 * q) as usize).min(v.len() - 1)]
+    }
+}
+
+/// When the pace began to fail, when a faster one began to pass with the usual margin and when one began to pass with half to
+/// spare (`Holds::next`): a pace changes only once its criterion has held.
+#[derive(Default)]
+struct Holds {
+    failing: Option<Instant>,
+    passing: Option<Instant>,
+    clear: Option<Instant>,
+}
+
+impl Holds {
+    /// The pace after this picture: `slow` is what the recent times admit with the usual margin, `fast` with the margin a faster
+    /// pace needs (no back and forth at the edge), `clear` with half the interval to spare. A slower pace is taken once `slow`
+    /// has been slower for `SLOWER_AFTER`. A faster one is taken once `fast` has been faster for three seconds, or once `clear`
+    /// has been faster for half a second: a PC far from the edge (one a stall slowed) comes back at once.
+    fn next(&mut self, now: Instant, pace: u32, slow: u32, fast: u32, clear: u32) -> u32 {
+        let held = |t: &mut Option<Instant>, on: bool, d: Duration| match on {
+            true => now.duration_since(*t.get_or_insert(now)) >= d,
+            false => {
+                *t = None;
+                false
+            }
+        };
+        let slower = held(&mut self.failing, slow > pace, SLOWER_AFTER);
+        let cleared = held(&mut self.clear, clear < pace, Duration::from_millis(500));
+        let faster = held(&mut self.passing, fast < pace, Duration::from_secs(3));
+        if slower {
+            slow
+        } else if cleared {
+            clear
+        } else if faster {
+            fast
+        } else {
+            pace
+        }
+    }
+}
+
 impl Plain {
     fn new() -> Plain {
-        Plain { pace: 1, latency: 0.0, arrivals: Default::default(), build: Default::default(), gpu: Default::default(), present_ms: 1.0, last: None, last_at: None, failing: None, passing: None, settled: false, counts: (0, 0), since: Instant::now() }
+        Plain { pace: 1, latency: 0.0, arrivals: Default::default(), build: Default::default(), gpu: Default::default(), recent: Default::default(), present_ms: 1.0, last: None, last_at: None, holds: Holds::default(), settled: false, counts: (0, 0), since: Instant::now() }
     }
 
     /// Picture `field`'s time (its field began at `at`, the renderer's time on it `build_ms`), once its world is done on the GPU:
@@ -1424,6 +1509,8 @@ impl Plain {
         ring_push(&mut self.arrivals, done.saturating_duration_since(at).as_secs_f64());
         ring_push(&mut self.build, build_ms);
         ring_push(&mut self.gpu, gpu_ms);
+        self.recent[0].push(done, build_ms);
+        self.recent[1].push(done, gpu_ms);
         let interval = self.pace as f64 * FIELD_S;
         let need = (ring_share(&self.arrivals, 0.98) + (self.present_ms + 1.0) / 1e3).min(2.0 * interval);
         match self.last_at {
@@ -1458,40 +1545,25 @@ impl Plain {
         }
     }
 
-    /// The pace for the recent times (`PACE`).
+    /// The pace for the last second's times (`PACE`, `Recent`, `Holds`).
     fn cadence(&mut self, field: u64) {
-        if self.gpu.len() < 30 {
+        if self.gpu.len() < 30 || self.recent[1].len() < 8 {
             return;
         }
-        let mean = |r: &std::collections::VecDeque<f64>| r.iter().sum::<f64>() / r.len().max(1) as f64;
-        let most = mean(&self.build).max(mean(&self.gpu) + self.present_ms) / 1e3;
+        let (build, gpu) = (self.recent[0].mean(), self.recent[1].mean());
+        let most = build.max(gpu + self.present_ms) / 1e3;
         let pick = |share: f64| (1..=PLAIN_MOST).find(|&k| most <= share * k as f64 * FIELD_S).unwrap_or(PLAIN_MOST);
         let was = self.pace;
-        let now = Instant::now();
         if !self.settled {
             self.settled = true;
             self.pace = pick(0.95);
         } else {
-            let (slow, fast) = (pick(0.95), pick(0.90));
-            if slow > self.pace {
-                if now.duration_since(*self.failing.get_or_insert(now)) >= Duration::from_secs(1) {
-                    self.pace = slow;
-                }
-            } else {
-                self.failing = None;
-            }
-            if fast < self.pace {
-                if now.duration_since(*self.passing.get_or_insert(now)) >= Duration::from_secs(3) {
-                    self.pace = fast;
-                }
-            } else {
-                self.passing = None;
-            }
+            self.pace = self.holds.next(Instant::now(), self.pace, pick(0.95), pick(0.90), pick(0.5));
         }
         if self.pace != was {
-            (self.failing, self.passing) = (None, None);
+            self.holds = Holds::default();
             PACE.store(self.pace, Ordering::Relaxed);
-            println!("play: field {field}: pictures of one field in {} ({:.0} a second): the frame builder {:.1} ms and the GPU {:.1} ms a picture (their means)", self.pace, 1.0 / (self.pace as f64 * FIELD_S), mean(&self.build), mean(&self.gpu));
+            println!("play: field {field}: pictures of one field in {} ({:.0} a second): the frame builder {build:.1} ms and the GPU {gpu:.1} ms a picture (the last second's means)", self.pace, 1.0 / (self.pace as f64 * FIELD_S));
         }
     }
 }
@@ -1745,9 +1817,11 @@ impl Drop for Refreshes {
 ///   frame's first picture traces the frame's lighting; the pictures after it reuse that; the GPU waits through each window's
 ///   copy) stays under 93 % of the interval and whose recording fits, down to 15 a second: a GPU that cannot keep the game's
 ///   60 shows a steady lower rate between its frames (the user, 28 November 2026: "Steady pacing full stop across all FPS
-///   ranges, as well as below 60"), not each frame once as the GPU finishes it, at its uneven intervals. A slower pace is taken
-///   once it has failed for a second, a faster one once it has passed with a quarter to spare for three. UNCAPPED has no pace
-///   but the least step while a frame's first picture fits the game's own rate, and the steps below it beyond that.
+///   ranges, as well as below 60"), not each frame once as the GPU finishes it, at its uneven intervals. The times are the last
+///   second's pictures' (`Recent`). A slower pace is taken once it has failed for three seconds (`SLOWER_AFTER`), a faster one
+///   once it has passed with a quarter to spare for three or with half to spare for half a second (`Holds`): a few slow
+///   pictures at a level's or a mission's start do not lower the rate of a PC that keeps up. UNCAPPED has no pace but the
+///   least step while a frame's first picture fits the game's own rate, and the steps below it beyond that.
 /// - A picture is drawn for the refresh it can reach (its GPU's 90th percentile time and a margin from when the GPU can take it,
 ///   after the picture on it is shown, on the display's grid of refreshes: `Refreshes`) and no sooner than the pace's next
 ///   (`plan`). It is recorded in time for its world to go on the GPU the moment the picture before is shown, and no sooner than
@@ -1773,11 +1847,12 @@ struct Timeline {
     refreshes: Option<Refreshes>,
     /// The pace (`cadence`): a picture every `step` refreshes.
     step: u32,
-    /// When the current pace began to fail, and when a faster one began to pass (`cadence`): a pace changes only after the
-    /// criterion has held for a while (a second to go slower, three to go faster), and whether the first pace was chosen yet.
-    failing: Option<Instant>,
-    passing: Option<Instant>,
+    /// When the pace's criteria began to hold (`cadence`, `Holds`): a pace changes only after its criterion has held for a while;
+    /// and whether the first pace was chosen yet.
+    holds: Holds,
     settled: bool,
+    /// The last second's GPU times a picture (ms), a frame's first picture's and all (`Recent`): what the pace is chosen from.
+    recent: [Recent; 2],
     /// The game's fields on the wall clock: the recent frames' (time since `t0`, field), their least-squares line (its seconds a
     /// field, `rate`, and the mean point it passes through), from which the game's time is placed at a refresh (`time_at`).
     fit: std::collections::VecDeque<(f64, f64)>,
@@ -1959,7 +2034,7 @@ impl Timeline {
         });
         // Until pictures are timed: about what a combat picture takes on this PC.
         let refreshes = vblank.map(Refreshes::start).transpose()?;
-        Ok(Timeline { profile: crate::gpu_profile::Profiler::new(), period: 1.0 / hz, refreshes, step: 1, failing: None, passing: None, settled: false, fit: Default::default(), rate: FIELD_S, fit_mean: (0.0, 0.0), gpu_ring: Default::default(), gpu_p90: [12.0, 10.0, 12.0], t0: Instant::now(), work: (0.0, 0.0), late: 0, behind: (0.0, 0.0), frames: Default::default(), shown: None, latency: FIELD_S, arrivals: Default::default(), extra: None, counts: [0; 4], since: Instant::now(), capture, gpu: None, staged: None, next: None, presented: None, encode_ms: 5.0, gpu_ms: [12.0, 10.0], display_ms: 1.0, gpu_sum: [0.0; 2], gpu_n: [0; 2], unapplied: Default::default(), recorder: Recorder::start(device.clone(), queue.clone())?, recording: None })
+        Ok(Timeline { profile: crate::gpu_profile::Profiler::new(), period: 1.0 / hz, refreshes, step: 1, holds: Holds::default(), settled: false, recent: Default::default(), fit: Default::default(), rate: FIELD_S, fit_mean: (0.0, 0.0), gpu_ring: Default::default(), gpu_p90: [12.0, 10.0, 12.0], t0: Instant::now(), work: (0.0, 0.0), late: 0, behind: (0.0, 0.0), frames: Default::default(), shown: None, latency: FIELD_S, arrivals: Default::default(), extra: None, counts: [0; 4], since: Instant::now(), capture, gpu: None, staged: None, next: None, presented: None, encode_ms: 5.0, gpu_ms: [12.0, 10.0], display_ms: 1.0, gpu_sum: [0.0; 2], gpu_n: [0; 2], unapplied: Default::default(), recorder: Recorder::start(device.clone(), queue.clone())?, recording: None })
     }
 
     /// Whether frames wait to be shown on the timeline.
@@ -2177,54 +2252,42 @@ impl Timeline {
     /// had shown 29 a second unevenly fell to 18 (the user: "evenness shouldnt come at the cost of that many frames"); at 9 in 10
     /// a picture in some thirty is a refresh late. UNCAPPED has no step but the least
     /// while a frame's first picture fits the game's own rate (a picture at every refresh the GPU keeps up with), and the steps
-    /// below it beyond that. A slower pace is taken once the criterion has failed for a second, a faster one once it has passed
-    /// with a quarter to spare for three (no back and forth at the edge); the first is chosen at once from the first 30 pictures.
+    /// below it beyond that. The times are the last second's pictures' (`Recent`): none is judged while the last second had no
+    /// frame's first picture (the game sent no frame). A slower pace is taken once the criterion has failed for three seconds
+    /// (`SLOWER_AFTER`), a faster one once it has passed with a quarter to spare for three or with half to spare for half a
+    /// second (`Holds`); the first is chosen at once from the first 30 pictures.
     fn cadence(&mut self, field: u64) {
         let (hz, fps) = (1.0 / self.period, 1.0 / FIELD_S);
-        if self.gpu_ring[2].len() < 30 {
+        if self.gpu_ring[2].len() < 30 || self.recent[0].len() == 0 || self.recent[1].len() < 8 {
             return;
         }
+        let (first, all) = (self.recent[0].share(0.9), self.recent[1].share(0.9));
         let least = least_step();
         let slowest = ((hz / 15.0).floor() as u32).max(least);
         let copy = |s: f64| (self.encode_ms + self.display_ms + 0.5) / 1e3 <= s;
         // The step a share `most` of its interval admits (the slowest when none does).
         let pick = |most: f64| -> u32 {
-            if crate::enhance::uncapped() && (self.gpu_p90[0] + self.display_ms) / 1e3 * fps <= most && copy(1.0 / fps) {
+            if crate::enhance::uncapped() && (first + self.display_ms) / 1e3 * fps <= most && copy(1.0 / fps) {
                 return least;
             }
             (least..=slowest)
                 .find(|&s| {
                     let interval = s as f64 * self.period;
-                    let gpu = if interval >= FIELD_S { self.gpu_p90[0] } else { self.gpu_p90[2] };
+                    let gpu = if interval >= FIELD_S { first } else { all };
                     (gpu + self.display_ms) / 1e3 <= most * interval && copy(interval)
                 })
                 .unwrap_or(slowest)
         };
         let was = self.step;
-        let now = Instant::now();
         if !self.settled {
             self.settled = true;
             self.step = pick(0.93);
         } else {
-            let (slow, fast) = (pick(0.93), pick(0.75));
-            if slow > self.step {
-                if now.duration_since(*self.failing.get_or_insert(now)) >= Duration::from_secs(1) {
-                    self.step = slow;
-                }
-            } else {
-                self.failing = None;
-            }
-            if fast < self.step {
-                if now.duration_since(*self.passing.get_or_insert(now)) >= Duration::from_secs(3) {
-                    self.step = fast;
-                }
-            } else {
-                self.passing = None;
-            }
+            self.step = self.holds.next(Instant::now(), self.step, pick(0.93), pick(0.75), pick(0.5));
         }
         self.step = self.step.max(least);
         if self.step != was {
-            (self.failing, self.passing, self.next) = (None, None, None);
+            (self.holds, self.next) = (Holds::default(), None);
             let uncapped = crate::enhance::uncapped() && self.step == least;
             println!("play: field {field}: pictures {}", if uncapped && self.step > 1 { format!("uncapped at one refresh in {} at most, DLSS frame generation making {} between", self.step, self.step - 1) } else if uncapped { "uncapped: a picture at every refresh the GPU keeps up with".to_string() } else if self.step == 1 { format!("at every refresh ({:.0} a second)", 1.0 / self.period) } else { format!("at one refresh in {} ({:.0} a second)", self.step, 1.0 / (self.period * self.step as f64)) });
         }
@@ -2421,6 +2484,10 @@ impl Timeline {
                     self.gpu_p90[i] = v[((v.len() as f64 * 0.9) as usize).min(v.len() - 1)];
                 }
             }
+            if p.first {
+                self.recent[0].push(presented, gpu_ms);
+            }
+            self.recent[1].push(presented, gpu_ms);
             fold(&mut self.gpu_ms[k], gpu_ms);
             self.gpu_sum[k] += gpu_ms;
             self.gpu_n[k] += 1;

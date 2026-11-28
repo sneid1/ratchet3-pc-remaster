@@ -24,10 +24,17 @@ static TURN_CV: Condvar = Condvar::new();
 static TURNS: AtomicU64 = AtomicU64::new(0);
 static TURN_TICKS: AtomicU64 = AtomicU64::new(0);
 static GIVEN: AtomicU64 = AtomicU64::new(0);
+/// The same for the field running now (`Machine::field`, `FieldWaits`): its turns, their ticks from given to running and the
+/// longest, and the nanoseconds the host waited past the field's deadline for a running thread to reach a loop.
+static FIELD_TURNS: AtomicU64 = AtomicU64::new(0);
+static FIELD_TURN_TICKS: AtomicU64 = AtomicU64::new(0);
+static FIELD_TURN_MAX: AtomicU64 = AtomicU64::new(0);
+static FIELD_PAST_NS: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn give(to: u32) {
     GIVEN.store(tsc(), Ordering::Relaxed);
     TURNS.fetch_add(1, Ordering::Relaxed);
+    FIELD_TURNS.fetch_add(1, Ordering::Relaxed);
     *TURN.lock().expect("turn lock") = to;
     TURN_CV.notify_all();
 }
@@ -40,7 +47,10 @@ pub(crate) fn turns() -> u64 {
 
 /// The turn given (`give`) has reached its thread.
 fn turn_taken() {
-    TURN_TICKS.fetch_add(tsc().saturating_sub(GIVEN.load(Ordering::Relaxed)), Ordering::Relaxed);
+    let d = tsc().saturating_sub(GIVEN.load(Ordering::Relaxed));
+    TURN_TICKS.fetch_add(d, Ordering::Relaxed);
+    FIELD_TURN_TICKS.fetch_add(d, Ordering::Relaxed);
+    FIELD_TURN_MAX.fetch_max(d, Ordering::Relaxed);
 }
 
 /// What a loop's back edge (`Cpu::back`) acts on, set by the host while it waits for a field's end: `PREEMPT`, the field's
@@ -75,6 +85,7 @@ pub(crate) fn wait_field_end(field: u64, deadline: Instant, thread: impl Fn() ->
     let mut t = TURN.lock().expect("turn lock");
     let (g, r) = TURN_CV.wait_timeout_while(t, deadline.saturating_duration_since(Instant::now()), |t| *t != 0).expect("turn lock");
     t = g;
+    let past = Instant::now();
     if r.timed_out() {
         SAFE.fetch_or(PREEMPT, Ordering::Relaxed);
         // A host service (a movie) runs as long as it runs: the stall clock starts again while one does.
@@ -96,6 +107,9 @@ pub(crate) fn wait_field_end(field: u64, deadline: Instant, thread: impl Fn() ->
         }
     }
     drop(t);
+    if r.timed_out() {
+        FIELD_PAST_NS.fetch_add(past.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    }
     turn_taken();
     SAFE.store(0, Ordering::Relaxed);
 }
@@ -138,6 +152,27 @@ pub struct FieldOut {
     /// The thread the field's end found running, the loop's back edge it stopped at and its return address (`Cpu::preempt`);
     /// None when every thread waited.
     pub preempted: Option<(u32, u32, u32)>,
+    /// Where the field's time went (`FieldWaits`).
+    pub waits: FieldWaits,
+}
+
+/// Where a field's time went (ms), for the host's line on a slow field (`rtgame`).
+#[derive(Clone, Copy, Default)]
+pub struct FieldWaits {
+    /// The field in all: its vertical blank, the game's threads until all of them wait or the field's time is up, and the GS
+    /// events' walk joined at its end.
+    pub ms: f64,
+    /// Waited past the field's deadline for a thread still running to reach a loop.
+    pub past_deadline: f64,
+    /// The turns passed between the game's threads and the host, the time from a turn given to its thread running in all, and
+    /// the longest.
+    pub turns: u64,
+    pub turn_wait: f64,
+    pub turn_wait_max: f64,
+    /// The RAM copied for the field's frames at their first kicks, and the kicks' and the field end's waits for the GS
+    /// events' walk on its worker (`gsstate::GsState::join`).
+    pub ram_copy: f64,
+    pub walk_wait: f64,
 }
 
 pub struct Machine {
@@ -370,6 +405,10 @@ impl Machine {
         let t0 = tsc();
         self.field += 1;
         self.field_start = Instant::now();
+        for s in [&FIELD_TURNS, &FIELD_TURN_TICKS, &FIELD_TURN_MAX, &FIELD_PAST_NS] {
+            s.store(0, Ordering::Relaxed);
+        }
+        let (copied0, walked0) = (self.prof[3], self.hw.walk.waited);
         self.hw.field_start();
         self.iop.pad.set(pad);
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -380,7 +419,20 @@ impl Machine {
             unsafe { &mut *mp }.hw.walk.join();
         }));
         crate::fpu::set_mode(old);
-        self.prof[0] += tsc() - t0;
+        let ticks = tsc() - t0;
+        self.prof[0] += ticks;
+        let ms = self.field_start.elapsed().as_secs_f64() * 1e3;
+        let tick_ms = ms / ticks as f64;
+        let ticks_ms = |t: u64| t as f64 * tick_ms;
+        let waits = FieldWaits {
+            ms,
+            past_deadline: FIELD_PAST_NS.load(Ordering::Relaxed) as f64 / 1e6,
+            turns: FIELD_TURNS.load(Ordering::Relaxed),
+            turn_wait: ticks_ms(FIELD_TURN_TICKS.load(Ordering::Relaxed)),
+            turn_wait_max: ticks_ms(FIELD_TURN_MAX.load(Ordering::Relaxed)),
+            ram_copy: ticks_ms(self.prof[3] - copied0),
+            walk_wait: ticks_ms(self.hw.walk.waited - walked0),
+        };
         if let Err(p) = r {
             let e = panic_text(&p);
             self.error = Some(format!("field {}: {e}", self.field));
@@ -393,7 +445,7 @@ impl Machine {
         let earlier_jobs: Vec<Job> = jobs.drain(..earlier).collect();
         let uploads = self.hw.walk.take_uploads();
         let skin = self.hw.skin.take_field(self.preempted.is_some());
-        Ok(FieldOut { jobs, skin, earlier, earlier_jobs, uploads, kicked: self.hw.kicked, preempted: self.preempted.take() })
+        Ok(FieldOut { jobs, skin, earlier, earlier_jobs, uploads, kicked: self.hw.kicked, preempted: self.preempted.take(), waits })
     }
 }
 

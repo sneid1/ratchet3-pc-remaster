@@ -183,6 +183,99 @@ fn source_line(process: HANDLE, a: u64) -> Option<String> {
     }
 }
 
+/// The busy watch's requests (`busy`): a slow field's number, start and end.
+static BUSY: OnceLock<std::sync::Mutex<std::sync::mpsc::Sender<(u64, Instant, Instant)>>> = OnceLock::new();
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn QueryThreadCycleTime(thread: HANDLE, cycles: *mut u64) -> i32;
+}
+
+/// The busy watch: every 50 ms the cycles each of the process's threads has run (QueryThreadCycleTime, which counts at the
+/// time stamp counter's rate), the last three seconds of readings kept. For a field the game's loop found slow (`busy`), once
+/// a reading after it is in: the threads that ran between the readings around it, the busiest first, with their names. A
+/// stall then says whether the game's own threads ran through it (their code ran long) or did not (they waited), and which
+/// of the other threads ran meanwhile.
+pub fn busy_watch() {
+    let (tx, rx) = std::sync::mpsc::channel::<(u64, Instant, Instant)>();
+    if BUSY.set(std::sync::Mutex::new(tx)).is_err() {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("uya busy watch".into())
+        .spawn(move || {
+            let mut known = Vec::new();
+            // Each reading: when, the time stamp counter then, and each known thread's cycles.
+            let mut readings: std::collections::VecDeque<(Instant, u64, Vec<(u32, u64)>)> = std::collections::VecDeque::new();
+            let mut asked: Vec<(u64, Instant, Instant)> = Vec::new();
+            let mut listed: Option<Instant> = None;
+            loop {
+                if listed.is_none_or(|l| l.elapsed() >= Duration::from_secs(1)) {
+                    threads(&mut known);
+                    listed = Some(Instant::now());
+                }
+                let (now, tsc) = (Instant::now(), unsafe { core::arch::x86_64::_rdtsc() });
+                let cycles = known
+                    .iter()
+                    .map(|t| {
+                        let mut c = 0u64;
+                        // SAFETY: a handle opened with THREAD_QUERY_LIMITED_INFORMATION (`threads`), kept open.
+                        unsafe { QueryThreadCycleTime(t.handle, &mut c) };
+                        (t.id, c)
+                    })
+                    .collect();
+                readings.push_back((now, tsc, cycles));
+                while readings.front().is_some_and(|r| now.duration_since(r.0) > Duration::from_secs(3)) {
+                    readings.pop_front();
+                }
+                while let Ok(a) = rx.try_recv() {
+                    asked.push(a);
+                }
+                asked.retain(|&(f, from, to)| {
+                    if now <= to {
+                        return true;
+                    }
+                    match (readings.iter().rev().find(|r| r.0 <= from), readings.iter().find(|r| r.0 >= to)) {
+                        (Some(a), Some(b)) => busy_line(f, a, b, &known),
+                        _ => println!("play: field {f}: the busy watch has no readings around it"),
+                    }
+                    false
+                });
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        })
+        .expect("the busy watch's thread");
+}
+
+/// Field `f`, slow (`rtgame`), from `from` to `to`: its threads' time is said once the busy watch has read them after it.
+pub fn busy(f: u64, from: Instant, to: Instant) {
+    if let Some(tx) = BUSY.get() {
+        let _ = tx.lock().expect("busy watch lock").send((f, from, to));
+    }
+}
+
+/// The threads' time between readings `a` and `b` (ms at the time stamp counter's rate between them), every thread that ran
+/// 1 ms or more, the busiest first.
+fn busy_line(f: u64, a: &(Instant, u64, Vec<(u32, u64)>), b: &(Instant, u64, Vec<(u32, u64)>), known: &[Thread]) {
+    let span = b.0.duration_since(a.0).as_secs_f64() * 1e3;
+    let per_ms = (b.1 - a.1) as f64 / span;
+    let mut ran: Vec<(f64, &str)> = b
+        .2
+        .iter()
+        .map(|&(id, c)| {
+            // A thread not yet listed at reading `a` (the list is made again once a second) is counted from its start, at most
+            // a second before `a`.
+            let c0 = a.2.iter().find(|x| x.0 == id).map_or(0, |x| x.1);
+            let name = known.iter().find(|t| t.id == id).map_or("?", |t| t.name.as_str());
+            ((c - c0) as f64 / per_ms, name)
+        })
+        .filter(|r| r.0 >= 1.0)
+        .collect();
+    ran.sort_by(|x, y| y.0.total_cmp(&x.0));
+    let list: Vec<String> = ran.iter().map(|(ms, name)| format!("{name} {ms:.1}")).collect();
+    println!("play: field {f}: the threads' time in the {span:.0} ms around it: {}", if list.is_empty() { "none ran 1 ms".to_string() } else { list.join(", ") });
+}
+
 /// How long a field may go unended before the stall watch writes the threads' stacks: past a level's load (6 s on level 19 at
 /// 1440 lines) and its textures' preload.
 const STALL: Duration = Duration::from_secs(15);

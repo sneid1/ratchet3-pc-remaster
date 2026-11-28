@@ -1061,8 +1061,11 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
             println!("play: field {f}: a new game's camera NORMAL (UP/DOWN and LEFT/RIGHT MOVEMENT not inverted)");
         }
         let t = Instant::now();
+        let mut parts = FieldParts { before: t.duration_since(at).as_secs_f64() * 1e3, ..FieldParts::default() };
         let out = m.field(pad.report()).map_err(|e| format!("play: field {f}: {e}"))?;
+        let s = Instant::now();
         audio.field()?;
+        parts.sound = ms_since(s);
         if let Some(p) = out.preempted {
             *preempted.entry(p).or_default() += 1;
         }
@@ -1071,7 +1074,9 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
         if out.kicked {
             std::mem::swap(&mut before, &mut m.frame_ram);
         } else if !before_set {
+            let s = Instant::now();
             m.ram.copy_to(&mut before)?;
+            parts.copy = ms_since(s);
         }
         if out.earlier > 0 {
             println!("play: field {f}: {} jobs of an earlier frame in the field, its last frame drawn", out.earlier);
@@ -1079,7 +1084,9 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
         // A main-frame read-back in the frames before the field's last (the game saving the picture shown: a pause's first
         // frame), which the renderer does not get: given with the next frame it draws (`read_back`).
         if out.earlier > 0 {
+            let s = Instant::now();
             read_back.extend(main_read_back(&crate::jobs::Kicked::new(f, out.earlier_jobs, Vec::new()).into_frame(&before)?, &boot));
+            parts.earlier = ms_since(s);
         }
         // The transfers of the frames before the field's last, and the last's own.
         let mut uploads = out.uploads;
@@ -1188,10 +1195,16 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
         // loading screen, and a control command's last field waits: its answer comes once its frame is drawn.
         let buffer = match spare.pop() {
             Some(b) => Some(b),
-            None if settle || (offered && crate::play::renderer_held()) => match back.recv() {
-                Ok(b) => Some(b),
-                Err(_) => return Ok(GameEnd::RendererStopped),
-            },
+            None if settle || (offered && crate::play::renderer_held()) => {
+                parts.held = true;
+                let s = Instant::now();
+                let b = match back.recv() {
+                    Ok(b) => Some(b),
+                    Err(_) => return Ok(GameEnd::RendererStopped),
+                };
+                parts.buffer = ms_since(s);
+                b
+            }
             None => match back.try_recv() {
                 Ok(b) => Some(b),
                 Err(std::sync::mpsc::TryRecvError::Empty) => None,
@@ -1200,19 +1213,23 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
         };
         match buffer {
             None => {
+                let s = Instant::now();
                 pending.extend(own);
                 read_back.extend(main_read_back(&jobs.into_frame(&before)?, &boot));
                 m.ram.copy_to(&mut before)?;
                 before_set = true;
+                parts.dropped = ms_since(s);
             }
             Some(mut now) => {
                 // The pages of the frames the read-back thread still holds go with this one.
+                let s = Instant::now();
                 while reading_back > 0 {
                     let (pages, ram) = read_backs.recv().map_err(|_| "play: the read-back thread stopped")?;
                     read_back.extend(pages?);
                     spare.push(ram);
                     reading_back -= 1;
                 }
+                parts.read_back = ms_since(s);
                 // The next field's start, needed only if it kicks no frame (`before_set`).
                 before_set = !out.kicked;
                 if before_set {
@@ -1232,9 +1249,12 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
                             offer_from = f + pace;
                         }
                         Err(std::sync::mpsc::TrySendError::Full(msg)) if offered && crate::play::renderer_held() => {
+                            parts.held = true;
+                            let s = Instant::now();
                             if tx.send(msg).is_err() {
                                 return Ok(GameEnd::RendererStopped);
                             }
+                            parts.send = ms_since(s);
                             drawn += 1;
                             offer_from = f + pace;
                         }
@@ -1263,6 +1283,15 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
         }
         if crate::play::frame_times() { println!("frame stages: game {f} EE {ee_ms:.3} handover {:.3}{}", t.elapsed().as_secs_f64() * 1e3, if settle { " settle" } else { "" }); }
         ns[2] += t.elapsed().as_nanos() as u64;
+        parts.hand_over = ms_since(t);
+        // A field the loop took more than `SLOW_FIELD_MS` over, as the sound counts its "fields over 25 ms": where its time went,
+        // and which of the process's threads ran meanwhile (`sampler::busy`).
+        let took = ms_since(at);
+        if took > SLOW_FIELD_MS && !unpaced {
+            slow_field(f, took, &parts, &out.waits, out.preempted);
+            #[cfg(windows)]
+            crate::sampler::busy(f, at, Instant::now());
+        }
         if f % 300 == 0 {
             let ms = |n: u64| n as f64 / 1e6 / 300.0;
             let busy: u64 = preempted.values().sum();
@@ -1304,6 +1333,48 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
         }
     }
     unreachable!("the field loop returns")
+}
+
+/// A field the loop took longer than this over (ms), as the sound counts its "fields over 25 ms" (`audio::SLOW_MS`), gets a line
+/// saying where its time went (`slow_field`).
+const SLOW_FIELD_MS: f64 = 25.0;
+
+/// The ms since `s`.
+fn ms_since(s: Instant) -> f64 {
+    s.elapsed().as_secs_f64() * 1e3
+}
+
+/// Where one of the loop's fields went (ms) besides the game's own field (`uyart::machine::FieldWaits`), for `slow_field`.
+#[derive(Default)]
+struct FieldParts {
+    /// From the field's start to the game's field: the input, a control command, the field's settings.
+    before: f64,
+    /// The sound engine's field, the RAM copied for a field that kicked no frame, the read-back walk of the frames before the
+    /// field's last.
+    sound: f64,
+    copy: f64,
+    earlier: f64,
+    /// The hand-over in all; of it the wait for a RAM buffer from a renderer held on a frame, the wait for the read-back thread's
+    /// walks, the wait to hand the frame to a held renderer, and the read-back walk and RAM copy of a field the renderer was too
+    /// busy for (no buffer); whether the renderer was held.
+    hand_over: f64,
+    buffer: f64,
+    read_back: f64,
+    send: f64,
+    dropped: f64,
+    held: bool,
+}
+
+/// The line for field `f`, which the loop took `took` ms over: the game's field (`w`: its time past its deadline, with the
+/// thread it found running, the turns' waits from given to running, the RAM copies and the waits for the GS events' walk),
+/// then the loop's other parts (`p`). A stall then says whether the game's code ran long, its threads waited to run, or the
+/// loop waited for the renderer.
+fn slow_field(f: u64, took: f64, p: &FieldParts, w: &uyart::machine::FieldWaits, running: Option<(u32, u32, u32)>) {
+    let running = running.map_or(String::new(), |(t, pc, ra)| format!(", thread {t} running at {pc:08x} (ra {ra:08x})"));
+    println!(
+        "play: field {f}: {took:.1} ms: before the game's field {:.1}; the game's field {:.1} ({:.1} past its deadline{running}; {} turns waited {:.2} ms from given to running, at most {:.2}; RAM copies {:.2}; the GS events' walk waited for {:.2}); the sound {:.1}; the RAM copy {:.1}; the earlier frames' read-back {:.1}; the hand-over {:.1} (a RAM buffer waited for {:.1}, the read-back thread {:.1}, the held renderer {:.1}, a field not drawn walked and copied {:.1}; the renderer {})",
+        p.before, w.ms, w.past_deadline, w.turns, w.turn_wait, w.turn_wait_max, w.ram_copy, w.walk_wait, p.sound, p.copy, p.earlier, p.hand_over, p.buffer, p.read_back, p.send, p.dropped, if p.held { "held" } else { "not held" }
+    );
 }
 
 /// The main frame's pages that `jobs` read back before their first primitive (`mobies::Transfer`, TRXDIR 1 at index 0: the game

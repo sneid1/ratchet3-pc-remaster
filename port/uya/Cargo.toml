@@ -1,6 +1,6 @@
 [package]
 name = "uya"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2024"
 
 # The game: the port's own code alone, no rac-rs crate (PLAN item 0.6; `cargo tree -p uya` shows it). The library (src/lib.rs) is

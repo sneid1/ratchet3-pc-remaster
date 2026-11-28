@@ -1168,6 +1168,9 @@ mod gsstate {
         worker: Option<(JoinHandle<()>, Thread)>,
         /// Tasks given since the last join.
         pending: bool,
+        /// Time stamp counter ticks the joins waited for the worker, for the host's line on a slow field
+        /// (`machine::FieldWaits::walk_wait`).
+        pub(crate) waited: u64,
         /// UYA_KICK_CHECK: the same walks done inline on the RAM as it lies, from the walk's state at the first of the tasks
         /// pending, and the walk after each.
         shadow: Walk,
@@ -1192,6 +1195,7 @@ mod gsstate {
                 }),
                 worker: None,
                 pending: false,
+                waited: 0,
                 shadow: Walk::default(),
                 shadow_snaps: Vec::new(),
             }
@@ -1285,6 +1289,7 @@ mod gsstate {
             let s = &self.shared;
             let target = s.submitted.load(Ordering::SeqCst);
             let mut spins = 0u32;
+            let t = crate::machine::tsc();
             while s.done.load(Ordering::Acquire) < target {
                 spins += 1;
                 if spins < 4000 {
@@ -1295,6 +1300,7 @@ mod gsstate {
                     std::thread::yield_now();
                 }
             }
+            self.waited += crate::machine::tsc() - t;
             if let Some(p) = lock(&s.panic).take() {
                 std::panic::resume_unwind(p);
             }
