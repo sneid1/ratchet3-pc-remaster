@@ -1285,9 +1285,10 @@ pub(super) fn game(iso: &str, (presses, clicks, warps, mice): (&[(u64, u16, u64)
         ns[2] += t.elapsed().as_nanos() as u64;
         parts.hand_over = ms_since(t);
         // A field the loop took more than `SLOW_FIELD_MS` over, as the sound counts its "fields over 25 ms": where its time went,
-        // and which of the process's threads ran meanwhile (`sampler::busy`).
+        // and which of the process's threads ran meanwhile (`sampler::busy`). Not a field in which a movie played: the game's
+        // movie player holds its field for the movie's length (the intro's after a quit to the front end).
         let took = ms_since(at);
-        if took > SLOW_FIELD_MS && !unpaced {
+        if took > SLOW_FIELD_MS && !unpaced && !out.waits.service {
             slow_field(f, took, &parts, &out.waits, out.preempted);
             #[cfg(windows)]
             crate::sampler::busy(f, at, Instant::now());

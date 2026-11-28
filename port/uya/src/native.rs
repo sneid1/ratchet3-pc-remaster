@@ -666,6 +666,9 @@ pub struct Native {
     /// matrices still zero): the world's programs run but every vertex they project collapses to a point on the PS2, so no
     /// world is drawn, only the EE's screen primitives.
     no_view: bool,
+    /// The last level frame drew the world (its terrain, ties, shrubs or mobies, with the view set): `texnames::FIRST` ends
+    /// after the first such frame of a level, not after its fade in's frames, which draw only the EE's screen primitives.
+    drew_world: bool,
     /// GS memory across fields (`take_uploads`).
     gsm: crate::gsmem::GsMemory,
     /// Why the level the game is in could not be loaded (a pack file that cannot be read or decoded, `texnames`), which `play`
@@ -1052,7 +1055,7 @@ impl Native {
         println!("native: ray tracing: {}", if rays { "hardware ray queries (EXPERIMENTAL_RAY_QUERY)" } else { "none on this GPU" });
         println!("native: pipelines made in {:.0} ms", made.elapsed().as_secs_f64() * 1000.0);
         let lighting = std::sync::Arc::new(crate::lighting::Lighting::new(&device, &terrain, &view_layout, &mat_layout, blend, DEPTH));
-        Ok(Native { no_view: false, gsm: crate::gsmem::GsMemory::new(), broken: None, instance, adapter, quiet: false, prompts: None, device, queue, pass, fail, cover, objects, shadow_pipes, view_layout, mat_layout, size: (width, height), k: 1.0, iso: iso.to_string(), globals, pool: std::sync::Arc::new(Pool::new(POOL_THREADS)?), fx_micro, boot, level: None, reload_level: false, walker: Some(walker), ao, lighting, sky_pipes, reflections, shafts, light_shadows, rt, ee_spare: Vec::new(), moby_spare: Vec::new(), moby_prev_spare: Vec::new(), moby_lit_spare: Vec::new(), fx_spare: Vec::new(), fx_prev_spare: Vec::new(), fx_lit_spare: Vec::new(), fx_draw_spare: Vec::new(), light_spare: Vec::new(), moby_draw_spare: Vec::new(), run_spare: Vec::new(), rec_spare: Vec::new(), rec_cap: 0, shrub_spare: (Vec::new(), Vec::new()), sets: (0..SETS).map(|_| FrameSet::default()).collect(), ee_vert_spare: Vec::new(), water_spare: Vec::new(), replays: false, defer_world: false, outbox: Outbox::default(), raster: None, dlss_skipped: false, replay: None, set_held: None, depth: None, last_stale: None, last_world: None, dlss_offered: dlss_support.super_resolution_supported, dlss_sdk: None, dlss_pipes, upscaler: None, screen_tex: None, said: Default::default(), gpu_passes: crate::gpu_profile::Profiler::new() })
+        Ok(Native { no_view: false, drew_world: false, gsm: crate::gsmem::GsMemory::new(), broken: None, instance, adapter, quiet: false, prompts: None, device, queue, pass, fail, cover, objects, shadow_pipes, view_layout, mat_layout, size: (width, height), k: 1.0, iso: iso.to_string(), globals, pool: std::sync::Arc::new(Pool::new(POOL_THREADS)?), fx_micro, boot, level: None, reload_level: false, walker: Some(walker), ao, lighting, sky_pipes, reflections, shafts, light_shadows, rt, ee_spare: Vec::new(), moby_spare: Vec::new(), moby_prev_spare: Vec::new(), moby_lit_spare: Vec::new(), fx_spare: Vec::new(), fx_prev_spare: Vec::new(), fx_lit_spare: Vec::new(), fx_draw_spare: Vec::new(), light_spare: Vec::new(), moby_draw_spare: Vec::new(), run_spare: Vec::new(), rec_spare: Vec::new(), rec_cap: 0, shrub_spare: (Vec::new(), Vec::new()), sets: (0..SETS).map(|_| FrameSet::default()).collect(), ee_vert_spare: Vec::new(), water_spare: Vec::new(), replays: false, defer_world: false, outbox: Outbox::default(), raster: None, dlss_skipped: false, replay: None, set_held: None, depth: None, last_stale: None, last_world: None, dlss_offered: dlss_support.super_resolution_supported, dlss_sdk: None, dlss_pipes, upscaler: None, screen_tex: None, said: Default::default(), gpu_passes: crate::gpu_profile::Profiler::new() })
     }
 
     /// Level `level`'s scene on the GPU: its vertices and indices, each terrain texture with its mip levels, and per GS register
@@ -1362,6 +1365,11 @@ impl Native {
         self.reload_level = true;
     }
 
+    /// Whether the last level frame drew the world (`drew_world`).
+    pub(crate) fn drew_world(&self) -> bool {
+        self.drew_world
+    }
+
     /// Draws the world of the level being played with the game's camera and zone record in `ram` and returns the picture.
     pub fn draw(&mut self, ram: &[u8], jobs: &crate::jobs::FrameJobs, level: u32) -> Result<Image, String> {
         if let Ok(p) = std::env::var("UYA_GSM_LOAD") {
@@ -1467,7 +1475,7 @@ impl Native {
         crate::mobies::dump_field(jobs.field);
         // A level's frames before its code sets the camera (the fade in after its load): the view at rest (`camera_at_rest`),
         // and no world drawn (`no_view`).
-        self.no_view = false;
+        (self.no_view, self.drew_world) = (false, false);
         let cam = match self.camera(ram, level) {
             Ok(c) => c,
             Err(_) => {
@@ -2029,6 +2037,7 @@ impl Native {
         // The world layers whose programs ran this frame (terrain 1 and 7, ties 2 and 3, shrubs 4 and 5, effects 6).
         let ran = walk.ran;
         let (terrain_ran, ties_ran, shrubs_ran) = (!self.no_view && (ran[1] || ran[7]), !self.no_view && (ran[2] || ran[3]), !self.no_view && (ran[4] || ran[5]));
+        self.drew_world = terrain_ran || ties_ran || shrubs_ran || (has_runs && !self.no_view);
         // A frame that draws mobies and no terrain, ties or shrubs (a trip's space scene: the level's code drawing the ship on its
         // stars and the planet, the cockpit's shots; the weapon upgrade's gun) is drawn here as every frame is: no other layer
         // draws a frame (the player, 19 November 2026: "Remove all the old 2D layer/ps2 stuff"; the trip to Aquatos's Clank was

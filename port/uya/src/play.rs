@@ -964,11 +964,18 @@ fn render(iso: &str, height: u32, settings: crate::settings::Settings, atlas: &s
         // named: drawn in the load screen's place and shape they zoomed in (the player: "The load game zoom in issue also shows
         // up on new game", "the load screen zoom happens too early").
         let arrival = !matches!(level, 0 | u32::MAX) && crate::load_step(&fr.ram) >= 2;
+        // A front end's frame decodes what it draws first where it is asked for (`texnames::FRONT`).
+        crate::texnames::front_end(fr.front_end);
         let picture = match walked {
             Ok((fj, w)) if fr.front_end => native.render_screen_walked(&fr.ram, &fj, arrival, w),
             Ok((fj, w)) => native.render_walked(&fr.ram, &fj, level, &fr.read_back, w),
             Err(e) => Err(e),
         };
+        // A level's first frame since its load that drew the world is drawn, every replacement it and the fade in's frames before
+        // it draw decoded for them (`texnames::FIRST`): from the next frame on, textures first drawn go to the background worker.
+        if !fr.front_end && picture.is_ok() && native.drew_world() {
+            crate::texnames::first_drawn(level);
+        }
         spare_tx.send(native.take_ee_spare()).map_err(|_| "play: the walk thread stopped")?;
         let shown = match picture {
             Ok(t) => {

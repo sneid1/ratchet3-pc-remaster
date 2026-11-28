@@ -183,6 +183,9 @@ fn source_line(process: HANDLE, a: u64) -> Option<String> {
     }
 }
 
+/// How long the busy watch keeps its readings: longer than a level's load (4 to 7 s), whose field is the longest the loop waits.
+const BUSY_KEPT: Duration = Duration::from_secs(12);
+
 /// The busy watch's requests (`busy`): a slow field's number, start and end.
 static BUSY: OnceLock<std::sync::Mutex<std::sync::mpsc::Sender<(u64, Instant, Instant)>>> = OnceLock::new();
 
@@ -192,7 +195,7 @@ unsafe extern "system" {
 }
 
 /// The busy watch: every 50 ms the cycles each of the process's threads has run (QueryThreadCycleTime, which counts at the
-/// time stamp counter's rate), the last three seconds of readings kept. For a field the game's loop found slow (`busy`), once
+/// time stamp counter's rate), the last `BUSY_KEPT` of readings kept. For a field the game's loop found slow (`busy`), once
 /// a reading after it is in: the threads that ran between the readings around it, the busiest first, with their names. A
 /// stall then says whether the game's own threads ran through it (their code ran long) or did not (they waited), and which
 /// of the other threads ran meanwhile.
@@ -225,7 +228,7 @@ pub fn busy_watch() {
                     })
                     .collect();
                 readings.push_back((now, tsc, cycles));
-                while readings.front().is_some_and(|r| now.duration_since(r.0) > Duration::from_secs(3)) {
+                while readings.front().is_some_and(|r| now.duration_since(r.0) > BUSY_KEPT) {
                     readings.pop_front();
                 }
                 while let Ok(a) = rx.try_recv() {

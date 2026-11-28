@@ -338,6 +338,67 @@ static LANDED: std::sync::Mutex<Vec<Landed>> = std::sync::Mutex::new(Vec::new())
 /// Set when a decode failed (`Hd::failed`).
 static FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Set by a level's scene preload (`preload`) until the level's first frame that draws the world is drawn (`first_drawn`; the fade
+/// in's frames before it draw only the EE's screen primitives). Meanwhile textures first drawn are decoded where they are asked
+/// for, as `uya native` does, not by the background worker. That covers what the load draws after the scene's preload (the hero's armor, the wrench and the held gadget, Clank's and the ship's skins: the ship's
+/// colours are skin numbers past 15, which the preload's skins leave out) and everything the level's first frame draws (the
+/// level's EE draws, the HUD, effects). The game waits for the renderer meanwhile, as it does through the load. Decoded by the
+/// worker, they came in after the level's first picture: the player's Tyhrranosis load (v0.2.6) decoded 87 so, 2.8 s of
+/// decoding, the textures changing on screen as each landed (the user: "texture pop in on load is still bad and didnt used to
+/// happen"; before v0.1.9 a frame stopped to decode what it drew first).
+static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// While `FIRST`: the pack replacements and Rift Apart maps decoded where they were asked for, and the time spent (ns).
+static FIRST_PACKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static FIRST_MAPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static FIRST_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Set while the renderer draws a front end's frame (`front_end`, `play.rs`): textures first drawn are decoded where they are
+/// asked for, as at a level's start (`FIRST`). The front end has no load to put them in, and no play to hold up: decoded by the
+/// worker, its menus and save screens showed the game's own textures until each landed (the player's v0.2.6 log: 9 on the way
+/// from the boot to their save, one of them 157 ms).
+static FRONT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The renderer is drawing a front end's frame (`on`) or a level's (`FRONT`).
+pub(crate) fn front_end(on: bool) {
+    FRONT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether what is first drawn now is decoded where it is asked for (`FIRST`, `FRONT`).
+fn decode_now() -> bool {
+    FIRST.load(std::sync::atomic::Ordering::Relaxed) || FRONT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The worker's decodes since the last level's first frame (`first_drawn`), counted in its lines: what still came in after a
+/// level's first picture.
+static AFTER_FIRST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A decode done where it was asked for: `what` (a pack replacement or a Rift Apart map) of `file`, which took `t0`'s time. Said
+/// and counted as the level's first picture's while `FIRST`, else as a texture first drawn after its level's load (`uya native`).
+fn decoded_now(file: &Path, map: bool, t0: std::time::Instant) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let ms = t0.elapsed().as_secs_f64() * 1e3;
+    if FIRST.load(Relaxed) {
+        (if map { &FIRST_MAPS } else { &FIRST_PACKS }).fetch_add(1, Relaxed);
+        FIRST_NS.fetch_add((ms * 1e6) as u64, Relaxed);
+        println!("textures: {} decoded for its level's first picture: {ms:.1} ms", file.display());
+    } else if FRONT.load(Relaxed) {
+        println!("textures: {} decoded for the front end's picture: {ms:.1} ms", file.display());
+    } else {
+        println!("textures: {} decoded when first drawn, not with its level's load: {ms:.1} ms", file.display());
+    }
+}
+
+/// The renderer has drawn level `level`'s first frame since its load that drew the world (`play.rs`, `Native::drew_world`): from
+/// now on textures first drawn are decoded by the background worker (`FIRST`). Says what the first picture needed beyond the scene's preload, once a level.
+pub(crate) fn first_drawn(level: u32) {
+    use std::sync::atomic::Ordering::Relaxed;
+    if !FIRST.swap(false, Relaxed) {
+        return;
+    }
+    AFTER_FIRST.store(0, Relaxed);
+    let (packs, maps, ns) = (FIRST_PACKS.swap(0, Relaxed), FIRST_MAPS.swap(0, Relaxed), FIRST_NS.swap(0, Relaxed));
+    println!("textures: level {level}'s first picture: {packs} replacements and {maps} Rift Apart maps beyond the scene's preload decoded before it was shown, {:.2} s; textures first drawn from now on are decoded in the background, each counted", ns as f64 / 1e9);
+}
+
 /// The result of a lookup by name that may be waiting for the worker.
 enum Got<T> {
     /// The replacement, or none for the texture.
@@ -814,14 +875,14 @@ fn hd_get(device: &wgpu::Device, queue: &wgpu::Queue, t: &uyafmt::core::Texture,
     if let Some(v) = hd.views.get(&name) {
         return Ok((Some(v.clone()), false));
     }
+    hd.gpu.get_or_insert_with(|| (device.clone(), queue.clone()));
     if background {
-        hd.gpu.get_or_insert_with(|| (device.clone(), queue.clone()));
         hd.request(Want::Pack(name), file)?;
         return Ok((None, true));
     }
     let t0 = std::time::Instant::now();
     let v = to_gpu(device, queue, &decode(&file)?, usize::MAX)?;
-    println!("textures: {} decoded when first drawn, not with its level's load: {:.1} ms", file.display(), t0.elapsed().as_secs_f64() * 1e3);
+    decoded_now(&file, false, t0);
     hd.views.insert(name, v.clone());
     Ok((Some(v), false))
 }
@@ -849,7 +910,7 @@ pub(crate) fn rift(device: &wgpu::Device, queue: &wgpu::Queue, t: &uyafmt::core:
         let t0 = std::time::Instant::now();
         let mf = material_path(&hd.rift_dir, &key);
         let v = upload_levels(device, queue, "Rift Apart material", &decode_map(&mf)?)?;
-        println!("textures: {} decoded when first drawn, not with its level's load: {:.1} ms", mf.display(), t0.elapsed().as_secs_f64() * 1e3);
+        decoded_now(&mf, true, t0);
         hd.materials.insert(key, v);
     }
     Ok(Some(hd.rift_mat(surface, relief)))
@@ -890,6 +951,38 @@ impl Hd {
         self.worker.as_ref().expect("started above").send(job).map_err(|_| "texnames: the decode thread ended".to_string())
     }
 
+    /// The replacement and the Rift Apart material of `name`, what is not there yet decoded and uploaded now (`FIRST`).
+    fn now_by_name(&mut self, name: &TexName) -> Result<(Option<HdView>, Option<RiftMat>), String> {
+        let (device, queue) = self.gpu.clone().ok_or("texnames: a texture waits for its replacement with no GPU noted")?;
+        let pack = match (self.views.get(name), self.file(name).cloned()) {
+            (Some(v), _) => Some(v.clone()),
+            (None, Some(file)) => {
+                let t0 = std::time::Instant::now();
+                let v = to_gpu(&device, &queue, &decode(&file)?, usize::MAX)?;
+                decoded_now(&file, false, t0);
+                self.views.insert(*name, v.clone());
+                Some(v)
+            }
+            (None, None) => None,
+        };
+        let surface = self.surface(name)?.cloned();
+        let relief = self.relief(name);
+        if surface.is_none() && relief.is_none() {
+            return Ok((pack, None));
+        }
+        for key in rift_maps(surface.as_ref(), relief.as_ref()) {
+            if self.materials.contains_key(&key) {
+                continue;
+            }
+            let t0 = std::time::Instant::now();
+            let mf = material_path(&self.rift_dir, &key);
+            let v = upload_levels(&device, &queue, "Rift Apart material", &decode_map(&mf)?)?;
+            decoded_now(&mf, true, t0);
+            self.materials.insert(key, v);
+        }
+        Ok((pack, Some(self.rift_mat(surface, relief))))
+    }
+
     /// The replacement of `name`: its view when it is there, else asked of the worker.
     fn pack_by_name(&mut self, name: &TexName) -> Result<Got<HdView>, String> {
         let Some(file) = self.file(name).cloned() else { return Ok(Got::Now(None)) };
@@ -926,7 +1019,8 @@ pub(crate) type Replacements = (Option<HdView>, Option<RiftMat>, bool);
 /// at below normal priority, off the render thread) and left out, the game's own texture drawn until it has landed. With no
 /// worker (`uya native`) the same as `hd` and `rift`.
 pub(crate) fn replacements(device: &wgpu::Device, queue: &wgpu::Queue, t: &uyafmt::core::Texture) -> Result<Replacements, String> {
-    if !BACKGROUND.load(std::sync::atomic::Ordering::Relaxed) || crate::surfaces::on() {
+    // A level's load and its first frame (`FIRST`), a front end's frame (`FRONT`): decoded now, so that the picture has them.
+    if !BACKGROUND.load(std::sync::atomic::Ordering::Relaxed) || crate::surfaces::on() || decode_now() {
         return Ok((hd(device, queue, t)?, rift(device, queue, t)?, false));
     }
     poll()?;
@@ -946,6 +1040,11 @@ pub(crate) fn replacements_named(name: &TexName) -> Result<Replacements, String>
     poll()?;
     let mut g = HD.lock().map_err(|_| "texnames: the pack folder's lock is poisoned")?;
     let Some(hd) = g.as_mut() else { return Ok((None, None, false)) };
+    // A level's load and its first frame (`FIRST`), a front end's frame (`FRONT`): what is not there yet decoded now.
+    if decode_now() {
+        let (pack, material) = hd.now_by_name(name)?;
+        return Ok((pack, material, false));
+    }
     let (pack, pack_later) = match hd.pack_by_name(name)? {
         Got::Now(v) => (v, false),
         Got::Later => (None, true),
@@ -1019,7 +1118,8 @@ fn decode_worker(rx: std::sync::mpsc::Receiver<Job>, device: wgpu::Device, queue
             Want::Map(_) => decode_map(&job.file).and_then(|l| upload(&device, &queue, "Rift Apart material", &l.iter().map(|l| (l.w, l.h, &l.rgba[..])).collect::<Vec<_>>(), UPLOAD_BAND)).map(Done::Map),
         };
         if result.is_ok() {
-            println!("textures: {} decoded in the background, not with its level's load: {:.1} ms", job.file.display(), t0.elapsed().as_secs_f64() * 1e3);
+            let n = AFTER_FIRST.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            println!("textures: {} decoded in the background, not with its level's load, number {n} after the last level's first picture: {:.1} ms", job.file.display(), t0.elapsed().as_secs_f64() * 1e3);
         }
         LANDED.lock().expect("texnames: the landing lock is poisoned").push(Landed { level_no: job.level_no, want: job.want, result });
         LANDED_FLAG.store(true, std::sync::atomic::Ordering::Release);
@@ -1175,6 +1275,12 @@ fn preload_names(device: &wgpu::Device, queue: &wgpu::Queue, names: &[TexName], 
             // What the worker still holds for the level that went is dropped (`decode_worker`, `poll`).
             GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             hd.inflight.clear();
+            // Until the level's first frame is drawn, what is first drawn is decoded where it is asked for (`FIRST`; `uya native`
+            // decodes so always).
+            FIRST.store(BACKGROUND.load(std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
+            for c in [&FIRST_PACKS, &FIRST_MAPS, &FIRST_NS] {
+                c.store(0, std::sync::atomic::Ordering::Relaxed);
+            }
         }
         let mut seen = HashSet::new();
         let (mut jobs, mut maps) = (Vec::new(), Vec::new());

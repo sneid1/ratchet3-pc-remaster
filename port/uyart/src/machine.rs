@@ -30,6 +30,8 @@ static FIELD_TURNS: AtomicU64 = AtomicU64::new(0);
 static FIELD_TURN_TICKS: AtomicU64 = AtomicU64::new(0);
 static FIELD_TURN_MAX: AtomicU64 = AtomicU64::new(0);
 static FIELD_PAST_NS: AtomicU64 = AtomicU64::new(0);
+/// Whether a host service (a movie, `SERVICE`) ran in the field running now (`FieldWaits::service`).
+static FIELD_SERVICE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub(crate) fn give(to: u32) {
     GIVEN.store(tsc(), Ordering::Relaxed);
@@ -173,6 +175,8 @@ pub struct FieldWaits {
     /// events' walk on its worker (`gsstate::GsState::join`).
     pub ram_copy: f64,
     pub walk_wait: f64,
+    /// A host service (a movie) ran in the field: the field is as long as the movie.
+    pub service: bool,
 }
 
 pub struct Machine {
@@ -408,6 +412,7 @@ impl Machine {
         for s in [&FIELD_TURNS, &FIELD_TURN_TICKS, &FIELD_TURN_MAX, &FIELD_PAST_NS] {
             s.store(0, Ordering::Relaxed);
         }
+        FIELD_SERVICE.store(false, Ordering::Relaxed);
         let (copied0, walked0) = (self.prof[3], self.hw.walk.waited);
         self.hw.field_start();
         self.iop.pad.set(pad);
@@ -432,6 +437,7 @@ impl Machine {
             turn_wait_max: ticks_ms(FIELD_TURN_MAX.load(Ordering::Relaxed)),
             ram_copy: ticks_ms(self.prof[3] - copied0),
             walk_wait: ticks_ms(self.hw.walk.waited - walked0),
+            service: FIELD_SERVICE.load(Ordering::Relaxed),
         };
         if let Err(p) = r {
             let e = panic_text(&p);
@@ -584,6 +590,7 @@ pub fn movie_player(c: &mut Cpu) {
     let skipped = match service {
         Some(f) => {
             SERVICE.store(true, Ordering::Relaxed);
+            FIELD_SERVICE.store(true, Ordering::Relaxed);
             let skipped = f(c, args);
             SERVICE.store(false, Ordering::Relaxed);
             skipped
