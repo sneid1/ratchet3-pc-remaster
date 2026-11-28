@@ -129,7 +129,16 @@ fn surface_data(uv: vec2<f32>, depth: f32, pos: vec3<f32>, normal: vec3<f32>, ve
     var shine = select(0.0, coverage, chrome);
     var metal = 1.0;
     var f0 = -1.0;
-    if (mat.rift.w > 0.5) {
+    if (mat.rift.w > 2.5) {
+        // A fitted atlas (`pbr.tsv`): its gloss is 1 - the ORM map's roughness (green), its metalness the ORM's blue, as
+        // `lighting::MATERIAL` lights it and `raytrace`'s hits take it. Read as the other surfaces' map blue, its first map is the
+        // normal map (blue a flat normal's z, 0.985 to 1.0) and its region weights the flat stand-in's, so every one of the 575
+        // was at least 0.5 glossy whatever its roughness: dirt and grass mirrored the scene.
+        let orm = textureSampleLevel(mtl1, msmp, uv * mat.tiles.xy, surface_lod(textureDimensions(mtl1), mat.tiles.xy, dx, dy));
+        shine = max(shine, 1.0 - orm.g);
+        metal = clamp(orm.b, 0.0, 1.0);
+        f0 = mix(0.04, 0.6, metal);
+    } else if (mat.rift.w > 0.5) {
         var weights = vec4<f32>(1.0, 0.0, 0.0, 0.0);
         if (mat.rift.w > 1.5) { weights = textureSampleGrad(rgn, msmp, uv, dx, dy); }
         var gloss = 0.0;

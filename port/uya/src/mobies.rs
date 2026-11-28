@@ -975,6 +975,48 @@ pub(crate) const PROGRAMS: [(u8, &[u32]); 8] = [
     (7, &[0x10_7138, 0x10_7940, 0x10_8148, 0x10_8950]),
 ];
 
+/// Each program piece's first bytes in the main program (`PROGRAMS`' packets and the microcode after their tags), for
+/// `program_of` (`note_programs`, made once from the main program).
+static PROGRAM_CODE: std::sync::OnceLock<Vec<(u8, Vec<u8>)>> = std::sync::OnceLock::new();
+
+/// The bytes `program_of` looks for each piece's microcode in: its packet's first 96 bytes (the tag, then the code).
+const PROGRAM_WINDOW: usize = 96;
+
+/// Notes each program piece's first bytes from the main program `boot` (`program_of`), once.
+pub(crate) fn note_programs(boot: &uyafmt::boot::Boot) {
+    if PROGRAM_CODE.get().is_some() {
+        return;
+    }
+    let mut v = Vec::new();
+    for &(p, pieces) in &PROGRAMS {
+        for &a in pieces {
+            // A piece outside the main program's records (none is known to be) is matched by its address alone.
+            if let Ok(b) = boot.bytes(a, PROGRAM_WINDOW) {
+                v.push((p, b.to_vec()));
+            }
+        }
+    }
+    let _ = PROGRAM_CODE.set(v);
+}
+
+/// The program an MPG uploads: by its packet's address in the main program (`PROGRAMS`), else by its microcode (`code`, the
+/// words after the MPG) found in a piece's first bytes. The game sends a program's upload from the main program's packet, but
+/// a chain the DMA read through a copy (a kick neither a thread's nor its end handler's, as the first frames after the pause
+/// menu closes can be) names the copy's addresses: by address alone the upload was no program, the runs after it were credited
+/// to none, and the level's ties and effects pass were not drawn until an upload came from the main program again (the player
+/// on Daxx, 28 November 2026: "When I click menu and then close it objects dissapear", "Half the world objects are gone"; the
+/// frame builder had 0 ties for those frames, the effects target nothing, both back together seconds later).
+pub(crate) fn program_of(packet: Option<u32>, code: &[u32]) -> Option<u8> {
+    if let Some(p) = packet.and_then(|a| PROGRAMS.iter().find(|(_, c)| c.contains(&a)).map(|&(p, _)| p)) {
+        return Some(p);
+    }
+    let need: Vec<u8> = code.iter().take(8).flat_map(|w| w.to_le_bytes()).collect();
+    if need.len() < 32 {
+        return None;
+    }
+    PROGRAM_CODE.get()?.iter().find(|(_, w)| w.windows(32).step_by(4).any(|x| x == &need[..])).map(|&(p, _)| p)
+}
+
 /// `EePrim::after` of a primitive before the frame's first program upload: the frame's clear, the copy of the frame before to
 /// the display buffer and the sky, which the native frame draws itself.
 const BEFORE_WORLD: usize = usize::MAX - 2;
@@ -1365,7 +1407,7 @@ pub(crate) fn walk_into(jobs: &crate::jobs::FrameJobs, boot: &uyafmt::boot::Boot
                         // `effects.rs` draws); any other's starts a pass.
                         0x4a => {
                             let microcode = (data_at + 4 * (i - 2)) as u32;
-                            let program = PROGRAMS.iter().find(|(_, c)| c.contains(&microcode)).map(|&(p, _)| p);
+                            let program = program_of(Some(microcode), words.get(i..).unwrap_or(&[]));
                             resident = program;
                             this_frame = program;
                             match program {

@@ -118,7 +118,11 @@ pub(crate) fn tie_draws(jobs: &crate::jobs::FrameJobs) -> Result<TieDraws, Strin
                 0x4a => {
                     if imm == 0 {
                         let at = source(i);
-                        resident = crate::mobies::PROGRAMS.iter().find(|(_, pieces)| Some(pieces[0]) == at).map(|&(p, _)| p);
+                        // By the packet's address, else by its microcode (`mobies::program_of`: a chain read through a copy).
+                        resident = match crate::mobies::PROGRAMS.iter().find(|(_, pieces)| Some(pieces[0]) == at).map(|&(p, _)| p) {
+                            Some(p) => Some(p),
+                            None => crate::mobies::program_of(None, words.get(i..).unwrap_or(&[])),
+                        };
                     }
                     i += 2 * if num == 0 { 256 } else { num };
                 }

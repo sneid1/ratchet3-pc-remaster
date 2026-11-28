@@ -21,10 +21,30 @@ pub(crate) fn features() -> wgpu::Features {
     crate::raytrace::times_features() | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES | if counts_wanted() { wgpu::Features::PIPELINE_STATISTICS_QUERY } else { wgpu::Features::empty() }
 }
 
-pub(crate) fn wanted() -> bool { std::env::var_os("UYA_GPU_PASSES").is_some() }
+/// UYA_GPU_PASSES: every picture's passes timed and printed.
+pub(crate) fn wanted() -> bool { printing() }
 
 /// UYA_GPU_COUNTS (with UYA_GPU_PASSES): the passes' counts as well as their times.
-pub(crate) fn counts_wanted() -> bool { wanted() && std::env::var_os("UYA_GPU_COUNTS").is_some() }
+pub(crate) fn counts_wanted() -> bool { printing() && std::env::var_os("UYA_GPU_COUNTS").is_some() }
+
+/// UYA_GPU_PASSES: every picture's line printed as it comes.
+fn printing() -> bool { std::env::var_os("UYA_GPU_PASSES").is_some() }
+
+/// The world drawn again after a menu or a pause (`gap_ended`), counted; each profiler prints around each.
+static GAP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static GAP_FIELD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Pictures kept before a gap ends, printed in full after it, then one in `AFTER_EVERY` until `AFTER_FOR`.
+const KEPT: usize = 30;
+const AFTER_FULL: u32 = 60;
+const AFTER_EVERY: u32 = 30;
+const AFTER_FOR: u32 = 2400;
+
+/// The world is drawn again at field `field` after a menu or a pause (`native::world_back`): each profiler prints the pictures
+/// it kept before it and those after.
+pub(crate) fn gap_ended(field: u64) {
+    GAP_FIELD.store(field, std::sync::atomic::Ordering::Relaxed);
+    GAP.fetch_add(1, std::sync::atomic::Ordering::Release);
+}
 
 struct Slot {
     queries: wgpu::QuerySet,
@@ -134,11 +154,52 @@ pub(crate) struct Profiler {
     made: usize,
     sequence: u64,
     period: f64,
+    /// Without UYA_GPU_PASSES: the last `KEPT` pictures' lines, the gap last printed around (`GAP`), and the pictures since.
+    kept: VecDeque<Vec<String>>,
+    gap: u64,
+    after: Option<u32>,
+    /// Which profiler this is, in its lines.
+    name: &'static str,
 }
 
 impl Profiler {
-    pub fn new() -> Option<Self> {
-        wanted().then(|| Self { free: Vec::new(), pending: VecDeque::new(), made: 0, sequence: 0, period: 0.0 })
+    pub fn new(name: &'static str) -> Option<Self> {
+        wanted().then(|| Self { free: Vec::new(), pending: VecDeque::new(), made: 0, sequence: 0, period: 0.0, kept: VecDeque::new(), gap: GAP.load(std::sync::atomic::Ordering::Acquire), after: None, name })
+    }
+
+    /// A picture's lines: printed (UYA_GPU_PASSES), or kept, and printed around a menu's close (`gap_ended`).
+    fn emit(&mut self, lines: Vec<String>) {
+        if printing() {
+            for l in lines {
+                println!("{l}");
+            }
+            return;
+        }
+        let gap = GAP.load(std::sync::atomic::Ordering::Acquire);
+        if gap != self.gap {
+            self.gap = gap;
+            println!("GPU around a menu's close ({}): the world again at field {}; the {} pictures before it:", self.name, GAP_FIELD.load(std::sync::atomic::Ordering::Relaxed), self.kept.len());
+            for l in self.kept.drain(..).flatten() {
+                println!("  before: {l}");
+            }
+            self.after = Some(0);
+        }
+        if let Some(k) = self.after {
+            if k < AFTER_FULL || k % AFTER_EVERY == 0 {
+                for l in &lines {
+                    println!("  after {k}: {l}");
+                }
+            }
+            self.after = (k + 1 < AFTER_FOR).then_some(k + 1);
+            if self.after.is_none() {
+                println!("GPU around a menu's close ({}): {AFTER_FOR} pictures after it printed", self.name);
+            }
+        }
+        // Kept while printing too: a menu opened again soon after has the pictures before it.
+        self.kept.push_back(lines);
+        while self.kept.len() > KEPT {
+            self.kept.pop_front();
+        }
     }
     pub fn begin(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, field: u64, first: bool, alpha: f32, size: (u32, u32)) -> Option<Recording> {
         if !device.features().contains(features()) { return None; }
@@ -183,10 +244,12 @@ impl Profiler {
             };
             let p = self.pending.pop_front().expect("front checked");
             let r = p.recording;
+            let mut picture = None;
             if let Err(e) = result {
                 eprintln!("GPU passes: field {} readback: {e}", r.field);
             } else {
-                match r.slot.read.slice(..).get_mapped_range() {
+                let mapped = r.slot.read.slice(..).get_mapped_range();
+                match mapped {
                     Ok(bytes) => {
                         let stamps: &[u64] = bytemuck::cast_slice(&bytes);
                         let mut totals = BTreeMap::<&str, f64>::new();
@@ -194,7 +257,7 @@ impl Profiler {
                             *totals.entry(name).or_default() += stamps[i as usize + 1].wrapping_sub(stamps[i as usize]) as f64 * self.period / 1e6;
                         }
                         let times = totals.iter().map(|(n, t)| format!(" {n}={t:.4}")).collect::<String>();
-                        println!("GPU passes: field {} {} alpha {:.6} size {}x{} ms{}", r.field, if r.first { "first" } else { "repeat" }, r.alpha, r.size.0, r.size.1, times);
+                        let mut lines = vec![format!("GPU passes: field {} {} alpha {:.6} size {}x{} ms{}", r.field, if r.first { "first" } else { "repeat" }, r.alpha, r.size.0, r.size.1, times)];
                         if r.slot.stats.is_some() {
                             // Per name: draw calls, vertex shader invocations, primitives out of the clipper, fragment shader
                             // invocations, and those over the picture's pixels.
@@ -212,14 +275,18 @@ impl Profiler {
                             let pixels = r.size.0 as f64 * r.size.1 as f64;
                             let all = counts.values().fold([0u64; 4], |a, c| [a[0] + c[0], a[1] + c[1], a[2] + c[2], a[3] + c[3]]);
                             let line = counts.iter().chain(std::iter::once((&"all", &all))).map(|(n, c)| format!(" {n}={}/{}/{}/{} ({:.2}/px)", c[0], c[1], c[2], c[3], c[3] as f64 / pixels)).collect::<String>();
-                            println!("GPU counts: field {} {} size {}x{} draws/vertices/primitives/fragments{line}", r.field, if r.first { "first" } else { "repeat" }, r.size.0, r.size.1);
+                            lines.push(format!("GPU counts: field {} {} size {}x{} draws/vertices/primitives/fragments{line}", r.field, if r.first { "first" } else { "repeat" }, r.size.0, r.size.1));
                         }
+                        picture = Some(lines);
                     }
                     Err(e) => eprintln!("GPU passes: field {} mapped range: {e}", r.field),
                 }
             }
             r.slot.read.unmap();
             self.free.push(r.slot);
+            if let Some(lines) = picture {
+                self.emit(lines);
+            }
         }
     }
 }

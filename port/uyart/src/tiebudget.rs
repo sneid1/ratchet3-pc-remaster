@@ -140,10 +140,19 @@ impl Costs {
 
     /// A frame's own chain words ran from `lo` to `hi` (`hw`): what was built after its tie pass, and the finest LOD's reach for
     /// the frames after it.
+    ///
+    /// Only a tie pass that ran in the frame (its start and its end inside the frame's words) measures it, once. A frame with
+    /// none of its own (a pause's: its menus run no tie cull) was measured by the last pass before the pause whose start its
+    /// words spanned: "after the tie pass" was the pause frame's whole packets, or with the pass's end past the frame's, a
+    /// wrapped 4 GB. That stayed the most of `after` for its 120 frames, every tie cull's room was below nothing, no tie was
+    /// listed, and the game drew no ties for two seconds after the pause menu closed (the player on Daxx, 28 November 2026:
+    /// "When I click menu and then close it objects dissapear", "Half the world objects are gone"; the frame builder had 0 ties
+    /// after the close, and they came back by themselves 1 to 4 s later).
     pub(crate) fn frame(&mut self, lo: u32, hi: u32) {
-        let Some(p) = self.passes.iter().rev().find(|p| p.before >= lo && p.before <= hi).copied() else { return };
+        let Some(k) = self.passes.iter().rposition(|p| p.before >= lo && p.before <= hi && p.end.is_none_or(|e| e >= p.before && e <= hi)) else { return };
+        let p = self.passes.remove(k).expect("found above");
         if let Some(end) = p.end {
-            self.after.push(i64::from(hi.wrapping_sub(end)));
+            self.after.push(i64::from(hi - end));
         }
         let used = hi.wrapping_sub(lo);
         self.hold = self.hold.saturating_sub(1);

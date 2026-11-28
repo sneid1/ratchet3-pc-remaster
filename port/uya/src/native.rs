@@ -329,11 +329,11 @@ impl Outbox {
 
     /// The writes made on `queue` (they land before anything submitted after them) and the commands handed back, to be
     /// submitted next.
-    pub fn write_out(self, queue: &wgpu::Queue) -> Vec<wgpu::CommandBuffer> {
-        for (buffer, offset, bytes) in &self.writes {
-            queue.write_buffer(buffer, *offset, bytes);
+    pub fn write_out(mut self, queue: &wgpu::Queue) -> Vec<wgpu::CommandBuffer> {
+        for (buffer, offset, bytes) in std::mem::take(&mut self.writes) {
+            queue.write_buffer(&buffer, offset, &bytes);
         }
-        self.commands
+        std::mem::take(&mut self.commands)
     }
 
     /// The writes, then the commands submitted.
@@ -342,6 +342,21 @@ impl Outbox {
         if !commands.is_empty() {
             queue.submit(commands);
         }
+    }
+}
+
+/// A frame's changes to the shared GPU state let go unapplied (not `apply`, not `write_out`): what they would have written stays
+/// as it was on the GPU (a tie's corners laid out anew: the instance is drawn from corners it was never given, until its LOD
+/// changes). Said always, each time, with what was lost (the player on Daxx, 28 November 2026: "When I click menu and then
+/// close it objects dissapear", "Half the world objects are gone").
+impl Drop for Outbox {
+    fn drop(&mut self) {
+        if self.is_empty() {
+            return;
+        }
+        let bytes: usize = self.writes.iter().map(|w| w.2.len()).sum();
+        let buffers: std::collections::BTreeSet<String> = self.writes.iter().map(|w| format!("{:?}", w.0.size())).collect();
+        println!("native: a frame's changes to the shared GPU state were let go unapplied: {} writes ({bytes} bytes; into buffers of sizes {}), {} command buffers", self.writes.len(), buffers.into_iter().collect::<Vec<_>>().join(", "), self.commands.len());
     }
 }
 
@@ -661,6 +676,34 @@ fn blended(p: vec4<f32>) -> FOut {
 }
 "#;
 
+/// A level frame's counts (`counts`, after `drew_world` is known): when the world is drawn again after `WORLD_GAP` level frames
+/// or more without it (a pause, a menu), the last world frame's counts before the gap and this frame's, and this frame's again
+/// 60 and 300 world frames on.
+fn world_back(gap: &mut u32, last: &mut String, since: &mut Option<u32>, drew_world: bool, field: u64, level: u32, counts: String) {
+    // A pause's menu is some 23 world-less frames when opened and closed at once (the player's Daxx run: 23 to 25).
+    const WORLD_GAP: u32 = 5;
+    if !drew_world {
+        *gap += 1;
+        return;
+    }
+    if *gap >= WORLD_GAP && !last.is_empty() {
+        crate::gpu_profile::gap_ended(field);
+        println!("native: field {field}: level {level}: the world again after {} frames without it (a pause, a menu); before them {}; now {counts}", *gap, *last);
+        *since = Some(0);
+    } else if let Some(k) = since.as_mut() {
+        *k += 1;
+        if *k == 60 || *k == 300 {
+            println!("native: field {field}: level {level}: {k} world frames after the gap: {counts}");
+        }
+        if *k >= 300 {
+            *since = None;
+        }
+    }
+    *gap = 0;
+    *last = counts;
+}
+
+
 pub struct Native {
     /// The frame being drawn has no view set (`camera_at_rest`: a level's first frames, the game's camera, rotation and clip
     /// matrices still zero): the world's programs run but every vertex they project collapses to a point on the PS2, so no
@@ -669,6 +712,11 @@ pub struct Native {
     /// The last level frame drew the world (its terrain, ties, shrubs or mobies, with the view set): `texnames::FIRST` ends
     /// after the first such frame of a level, not after its fade in's frames, which draw only the EE's screen primitives.
     drew_world: bool,
+    /// The level frames in a row that drew no world (a pause's, a menu's), the last world frame's counts, and the world frames
+    /// since it came back after such a gap (`world_back`).
+    world_gap: u32,
+    world_last: String,
+    world_since: Option<u32>,
     /// GS memory across fields (`take_uploads`).
     gsm: crate::gsmem::GsMemory,
     /// Why the level the game is in could not be loaded (a pack file that cannot be read or decoded, `texnames`), which `play`
@@ -894,6 +942,7 @@ impl Native {
         // Every level's globals and the main program from the disc.
         let globals = all_globals(iso)?;
         let boot = crate::boot_image(iso)?;
+        crate::mobies::note_programs(&boot);
         let walker = Walker { boot: boot.clone(), gs_carry: None, screen_vu: crate::mobies::ScreenVu::new(), level_vu: crate::mobies::LevelVu::kept(), glyphs: crate::prompts::Glyphs::new(&boot)? };
         let fx_micro = uyafmt::prog6::microcode(&boot)?.to_vec();
         crate::pipelines::make(&device, &adapter)?;
@@ -1055,7 +1104,7 @@ impl Native {
         println!("native: ray tracing: {}", if rays { "hardware ray queries (EXPERIMENTAL_RAY_QUERY)" } else { "none on this GPU" });
         println!("native: pipelines made in {:.0} ms", made.elapsed().as_secs_f64() * 1000.0);
         let lighting = std::sync::Arc::new(crate::lighting::Lighting::new(&device, &terrain, &view_layout, &mat_layout, blend, DEPTH));
-        Ok(Native { no_view: false, drew_world: false, gsm: crate::gsmem::GsMemory::new(), broken: None, instance, adapter, quiet: false, prompts: None, device, queue, pass, fail, cover, objects, shadow_pipes, view_layout, mat_layout, size: (width, height), k: 1.0, iso: iso.to_string(), globals, pool: std::sync::Arc::new(Pool::new(POOL_THREADS)?), fx_micro, boot, level: None, reload_level: false, walker: Some(walker), ao, lighting, sky_pipes, reflections, shafts, light_shadows, rt, ee_spare: Vec::new(), moby_spare: Vec::new(), moby_prev_spare: Vec::new(), moby_lit_spare: Vec::new(), fx_spare: Vec::new(), fx_prev_spare: Vec::new(), fx_lit_spare: Vec::new(), fx_draw_spare: Vec::new(), light_spare: Vec::new(), moby_draw_spare: Vec::new(), run_spare: Vec::new(), rec_spare: Vec::new(), rec_cap: 0, shrub_spare: (Vec::new(), Vec::new()), sets: (0..SETS).map(|_| FrameSet::default()).collect(), ee_vert_spare: Vec::new(), water_spare: Vec::new(), replays: false, defer_world: false, outbox: Outbox::default(), raster: None, dlss_skipped: false, replay: None, set_held: None, depth: None, last_stale: None, last_world: None, dlss_offered: dlss_support.super_resolution_supported, dlss_sdk: None, dlss_pipes, upscaler: None, screen_tex: None, said: Default::default(), gpu_passes: crate::gpu_profile::Profiler::new() })
+        Ok(Native { no_view: false, drew_world: false, world_gap: 0, world_last: String::new(), world_since: None, gsm: crate::gsmem::GsMemory::new(), broken: None, instance, adapter, quiet: false, prompts: None, device, queue, pass, fail, cover, objects, shadow_pipes, view_layout, mat_layout, size: (width, height), k: 1.0, iso: iso.to_string(), globals, pool: std::sync::Arc::new(Pool::new(POOL_THREADS)?), fx_micro, boot, level: None, reload_level: false, walker: Some(walker), ao, lighting, sky_pipes, reflections, shafts, light_shadows, rt, ee_spare: Vec::new(), moby_spare: Vec::new(), moby_prev_spare: Vec::new(), moby_lit_spare: Vec::new(), fx_spare: Vec::new(), fx_prev_spare: Vec::new(), fx_lit_spare: Vec::new(), fx_draw_spare: Vec::new(), light_spare: Vec::new(), moby_draw_spare: Vec::new(), run_spare: Vec::new(), rec_spare: Vec::new(), rec_cap: 0, shrub_spare: (Vec::new(), Vec::new()), sets: (0..SETS).map(|_| FrameSet::default()).collect(), ee_vert_spare: Vec::new(), water_spare: Vec::new(), replays: false, defer_world: false, outbox: Outbox::default(), raster: None, dlss_skipped: false, replay: None, set_held: None, depth: None, last_stale: None, last_world: None, dlss_offered: dlss_support.super_resolution_supported, dlss_sdk: None, dlss_pipes, upscaler: None, screen_tex: None, said: Default::default(), gpu_passes: crate::gpu_profile::Profiler::new("frames") })
     }
 
     /// Level `level`'s scene on the GPU: its vertices and indices, each terrain texture with its mip levels, and per GS register
@@ -2717,6 +2766,10 @@ impl Native {
         if !self.quiet {
             println!("native: level {level}: level chunk {chunk}: {chunks} terrain chunks pass the zone test, {ties_drawn} ties drawn{}, {shrubs_drawn} shrubs drawn, {mobies_drawn} moby runs drawn{}, {fx_drawn} effects drawn{}, {} EE steps ({} shadow faces, {} triangles){}", [(ties_unsent, "not in the game's tie chain"), (ties_unmatched, "not matching the game's tie runs")].iter().filter(|(n, _)| *n > 0).map(|(n, why)| format!(", {n} {why}")).collect::<String>(), mobies_skipped.iter().map(|(why, n)| format!(", {n} not drawn: {why}")).collect::<String>(), fx_skipped.iter().map(|(why, n)| format!(", {n} not drawn: {why}")).collect::<String>(), shadows.steps.len(), shadows.faces, shadows.triangles, shadows.skipped.iter().map(|(why, n)| format!(", {n} not drawn: {why}")).collect::<String>());
         }
+        // The world back after a pause or a menu (the player on Daxx: "When I click menu and then close it objects dissapear"):
+        // what the frames before and after the gap drew, always (`world_back`).
+        let counts = format!("{ties_drawn} ties, {shrubs_drawn} shrubs before the GPU's cull, {mobies_drawn} moby runs, {fx_drawn} effects drawn{}{}", mobies_skipped.iter().map(|(why, n)| format!(", {n} moby runs not drawn: {why}")).collect::<String>(), fx_skipped.iter().map(|(why, n)| format!(", {n} effects not drawn: {why}")).collect::<String>());
+        world_back(&mut self.world_gap, &mut self.world_last, &mut self.world_since, self.drew_world, jobs.field, level, counts);
         // What a level's frame cannot draw is named in the log, each reason the first time (the play window's renderer is quiet).
         for why in mobies_skipped.iter().chain(&fx_skipped).chain(&shadows.skipped).map(|(w, _)| w) {
             if self.said.len() < 400 && self.said.insert(format!("{level}: {why}")) {

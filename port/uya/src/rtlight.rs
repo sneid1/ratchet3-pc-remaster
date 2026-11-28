@@ -721,6 +721,17 @@ fn sky(r: vec3<f32>) -> vec4<f32> {
     return vec4<f32>(textureLoad(picture, t, 0).rgb, 1.0);
 }
 
+// The share of light a GGX surface of reflectance `f0` and perceptual roughness `rough` reflects toward the eye at `nv` (the
+// split-sum's directional albedo, Karis's analytic fit). The trace's one mirror ray stood for the whole lobe at gloss x
+// Schlick: a rough stone or dirt (gloss 0.1 to 0.5) took 20 to 80 % of a sharp image of the scene at grazing angles, where the
+// ground is seen. A rough dielectric reflects some 4 % at every angle; a smooth one keeps Schlick's rise.
+fn env_brdf(f0: f32, rough: f32, nv: f32) -> f32 {
+    let r = rough * vec4<f32>(-1.0, -0.0275, -0.572, 0.022) + vec4<f32>(1.0, 0.0425, 1.04, -0.04);
+    let a004 = min(r.x * r.x, exp2(-9.28 * nv)) * r.x + r.y;
+    let ab = vec2<f32>(-1.04, 1.04) * a004 + r.zw;
+    return clamp(f0 * ab.x + ab.y, 0.0, 1.0);
+}
+
 @compute @workgroup_size(8, 8) fn gloss(@builtin(global_invocation_id) id: vec3<u32>) {
     if (f32(id.x) >= u.size.x || f32(id.y) >= u.size.y) {
         return;
@@ -771,7 +782,9 @@ fn sky(r: vec3<f32>) -> vec4<f32> {
     let f = f0 + (1.0 - f0) * pow(1.0 - cosv, 5.0);
     // A metal's reflection takes its hue, a paint's or a stone's does not.
     let hue = mix(vec3<f32>(1.0), s.texel / max(max(s.texel.r, max(s.texel.g, s.texel.b)), 1e-3), s.metal);
-    let weight = s.shine * f * u.opt.x;
+    // A Rift Apart surface reflects what a GGX surface of its roughness (1 - its gloss) does (`env_brdf`); the game's chrome, a
+    // mirror, by its shine and Schlick's Fresnel.
+    let weight = select(s.shine * f, env_brdf(s.f0, 1.0 - s.shine, cosv), s.f0 >= 0.0) * u.opt.x;
     textureStore(out, id.xy, finite(vec4<f32>(colour * hue * weight, c.a * weight)));
     textureStore(geo, id.xy, finite(vec4<f32>(s.n, dot(s.p - u.eye.xyz, u.f.xyz))));
 }
